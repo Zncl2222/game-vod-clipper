@@ -16,6 +16,7 @@ The project uses a standard `src/` Python package managed by `uv`.
 - `game_vod_clipper.media` wraps `yt-dlp` and `ffmpeg` commands.
 - `game_vod_clipper.timecode` parses and formats timestamps.
 - `game_vod_clipper.process` centralizes subprocess execution and tool checks.
+- `skills/game-vod-boss-clipper/SKILL.md` contains the agent-facing workflow and trigger guidance.
 
 `yt-dlp` is a project dependency. FFmpeg is not bundled through a Python package; the CLI requires a trusted `ffmpeg` binary on `PATH`. Recommended sources are official distro packages, Homebrew, Windows Package Manager, FFmpeg source releases with PGP verification, or binary providers linked from the official FFmpeg download page with checksum verification. `ffprobe` is not required in this version.
 
@@ -32,7 +33,7 @@ This keeps each unit small and testable. Media commands are isolated from CLI pa
 
 ## Agent Workflow
 
-`AGENTS.md` gives agents a concrete operating procedure:
+`AGENTS.md` delegates to `skills/game-vod-boss-clipper/SKILL.md`, which gives agents a concrete operating procedure:
 
 1. Run `uv sync`, then `check` before media work.
 2. Download the VOD or use a local video path.

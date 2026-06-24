@@ -42,9 +42,13 @@ uv run game-vod-clipper sheet runs/boss -o runs/boss.jpg
 uv run game-vod-clipper clip "downloads/video.mp4" --start 01:23:42 --end 01:31:18 --postroll 8 -o clips/boss-win.mp4
 ```
 
-## Agent Usage
+## Skill Usage
 
-Read `AGENTS.md` before clipping. The important rule is that the final clip must start after the latest failed attempt or death sequence and keep 5-10 seconds after the boss victory moment.
+The agent workflow lives in `skills/game-vod-boss-clipper/SKILL.md`. Claude Code, Codex, OpenCode, and similar tools should load or follow that skill when a user asks to clip a successful boss fight from a YouTube or local game VOD.
+
+`AGENTS.md` is intentionally short and delegates to the skill. If a tool does not support repository skills directly, read the skill file and follow it as procedural instructions.
+
+The important rule is that the final clip must start after the latest failed attempt or death sequence and keep 5-10 seconds after the boss victory moment.
 
 ## Commands
 
