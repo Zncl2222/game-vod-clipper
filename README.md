@@ -48,6 +48,8 @@ The agent workflow lives in `skills/game-vod-boss-clipper/SKILL.md`. Claude Code
 
 `AGENTS.md` is intentionally short and delegates to the skill. If a tool does not support repository skills directly, read the skill file and follow it as procedural instructions.
 
+For Claude Code user-level installation, copy `skills/game-vod-boss-clipper/` to `~/.claude/skills/game-vod-boss-clipper/` and install the CLI with `uv tool install /path/to/game-vod-clipper`.
+
 The important rule is that the final clip must start after the latest failed attempt or death sequence and keep 5-10 seconds after the boss victory moment.
 
 ## Commands

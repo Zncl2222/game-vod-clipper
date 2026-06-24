@@ -21,7 +21,7 @@ class SkillMetadataTest(unittest.TestCase):
             "Do not include earlier failed attempts",
             "5-10 seconds after",
             "trusted source",
-            "uv run game-vod-clipper clip",
+            "game-vod-clipper clip",
             "Validate The Result",
         ]
         for phrase in required_phrases:
