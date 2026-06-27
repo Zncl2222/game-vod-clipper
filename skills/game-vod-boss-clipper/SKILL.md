@@ -12,6 +12,11 @@ Use this skill to turn a long game livestream VOD into a precise clip of the use
 
 - Clip only the successful boss attempt.
 - Do not include earlier failed attempts, `YOU DIED` screens, death fades, post-death loading screens, respawns, or runback footage.
+- A clip is invalid if any point after the chosen start shows player death, a red death/failure overlay, a death fade, a black loading/transition caused by failure, retry UI, respawn context, or combat from an attempt that fails before the victory.
+- Treat the combination of the player character collapsing or lying prone, the whole screen shifting red or heavily tinted, and any loading-like fade/cut as a high-confidence death or failure signal even when there is no explicit `YOU DIED` text. Do not dismiss it as a generic combat effect unless dense inspection clearly proves the attempt continues without reset. Fast deaths can be followed by a very short black/loading screen and immediate arena reset; sparse thumbnails can easily miss this.
+- After choosing a candidate range, inspect it at frame-level or near-frame-level density before cutting. Do not rely only on 2-5 second thumbnails for the final decision; dense inspection must rule out single-frame or short death/failure records hidden between sampled thumbnails.
+- If a dense inspection finds any death/failure frame inside the candidate, discard everything before and during that failure. Restart from the first clean frame after the failure, retry UI, respawn, runback, or reset context has fully ended.
+- Treat a boss HP bar that disappears and later returns with higher health as a retry/death warning until inspection proves otherwise.
 - Include the boss victory moment and 5-10 seconds after it.
 - Keep generated media under `downloads/`, `runs/`, or `clips/`.
 - Do not upload, redistribute, or expose the source video.
@@ -73,6 +78,12 @@ game-vod-clipper sheet runs/coarse -o runs/coarse.jpg
 
 Look for fog gates, boss title cards, arena transitions, large boss HP bars, phase changes, reward text, achievements, rune/soul gains, and celebration behavior.
 
+Do not conclude from the first coarse sheet too quickly. Build a short candidate list across the whole VOD before narrowing down:
+
+- Mark every timestamp that shows a boss-like HUD, large centered enemy HP bar/name, arena combat, victory/reward UI, death/loading screen, or retry context.
+- Keep earlier candidates until you have inspected them at fine resolution. A later, louder-looking fight may be a different encounter or a later retry, not necessarily the successful boss attempt.
+- If the user described a visual cue such as a centered boss name/extra HP bar, prioritize candidates that match that cue even if a later combat segment looks more dramatic.
+
 ### 3. Fine Search
 
 For each candidate boss range, sample at 5-15 second intervals:
@@ -82,7 +93,17 @@ game-vod-clipper sample "downloads/video.mp4" --start 01:20:00 --end 01:35:00 --
 game-vod-clipper sheet runs/boss-candidate -o runs/boss-candidate.jpg --columns 6 --rows 5
 ```
 
-If a candidate contains a death screen before the victory, keep moving forward until you find the winning attempt's real start.
+For each fine sheet, track the boss HP bar over time instead of only looking for the final victory frame:
+
+- Do not rely on only the candidate's first and last frames. For any candidate longer than 60 seconds, sample the whole candidate at 2-5 second intervals before cutting.
+- If any sampled frame shows the player dying, lying collapsed/prone while the screen is red-tinted, a red failure overlay, a fade to black, loading, retry/respawn UI, or a sudden return to an earlier arena state, the candidate contains a failed attempt. Move the start to after that failure context and inspect again.
+- If a boss HP bar disappears and later reappears with more health, full health, or a clearly higher amount than the previous fine samples, treat it as a likely death/retry, phase reset, or cut to a different attempt.
+- When HP increases unexpectedly, sample the gap at 1-3 second intervals and inspect for death text, player collapse, fade to black, loading, respawn, menuing, runback, or a new arena entry.
+- Do not include frames before an HP reset in the final clip unless the reset is clearly an intentional phase transition within the same successful attempt.
+- If multiple attempts are present, keep moving forward attempt by attempt and choose the start of the last attempt that leads continuously to the victory.
+- If a candidate contains a death screen before the victory, keep moving forward until you find the winning attempt's real start.
+- Before accepting a candidate range, inspect the whole proposed range at frame-level or near-frame-level density. For 60 FPS footage, use about `--every 0.0167` when feasible, or split the range into smaller chunks and inspect high-density sheets. If full frame-level extraction is too large, use the densest practical interval plus targeted frame-level inspection around every red flash, HP depletion, black frame, cut, knockdown, UI change, or boss HP disappearance.
+- Any red failure overlay, player collapse, prone player body combined with red tint, death/failure subtitle, loading transition, retry UI, or respawn context found during dense inspection invalidates the current start timestamp even if sparse thumbnails missed it.
 
 ### 4. Pick Clip Boundaries
 
@@ -90,6 +111,8 @@ Choose the start after the latest prior failure context:
 
 - Good starts: just before entering the arena, crossing fog, boss title card, or first meaningful action in the winning attempt.
 - Bad starts: death screen, respawn, loading after death, elevator/runback, menuing before retry, or previous failed attempt combat.
+- Also bad starts: any combat before a boss HP reset that indicates a failed attempt. If the boss HP later jumps upward, move the start to after the reset and after any respawn/runback context.
+- If death or failure appears anywhere inside a draft clip, the start is wrong even if the clip eventually reaches victory. Regenerate from the first clean frame of the attempt after that failure.
 
 Choose the end at the victory moment:
 
@@ -115,6 +138,16 @@ game-vod-clipper probe clips/boss-win.mp4
 
 Also inspect the final seconds by sampling near the clip duration. If the beginning includes failure context, move `--start` later and regenerate. If the ending cuts off reward or reaction context, increase `--postroll` up to 10 seconds or move `--end` later.
 
+Before reporting success, validate continuity inside the clip:
+
+- Sample the full clip densely, not just the opening and ending. Use frame-level or near-frame-level inspection when feasible; otherwise use the densest practical interval and targeted frame-level checks around every suspicious transition, red flash, HP depletion, boss HP disappearance, black frame, UI change, player collapse/prone frame, or knockdown.
+- A 2-5 second continuity sheet is only a coarse validation aid. It is not sufficient by itself when the clip contains fast deaths, red overlays, rapid failures, or multiple attempts.
+- If a red/death-looking segment is followed by black/loading frames and then gameplay resumes in the same arena, assume it may be a death and retry, not a victory transition. Inspect the exact sequence at 1 second or denser intervals, then move the start to the first clean gameplay frame after the loading/retry context.
+- If the user points out that a segment is death or loading context, trust that correction and mark the current clip invalid. Regenerate from after the corrected failure context instead of defending the previous interpretation.
+- If the boss HP suddenly increases inside the clip, regenerate from after that reset unless visual inspection proves it is a same-attempt phase transition.
+- If any sampled frame inside the clip shows player death or failure context, the clip is invalid. Move the start after the failure and regenerate.
+- Confirm the clip contains one continuous successful attempt from start to victory, not several retries stitched together by a broad timestamp range.
+
 ## Output Report
 
 When done, report:
@@ -122,7 +155,7 @@ When done, report:
 - Final clip path.
 - Source video path.
 - Start timestamp, victory timestamp, and postroll used.
-- Brief validation result: no prior death/runback included, victory and postroll included.
+- Brief validation result: no prior death/runback included, no death/failure context inside the clip, no unexplained boss HP reset inside the clip, victory and postroll included.
 - Any blockers, especially missing trusted FFmpeg installation.
 
 ## Time Format
