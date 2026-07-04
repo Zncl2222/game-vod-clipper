@@ -1,6 +1,6 @@
 ---
 name: game-vod-boss-clipper
-description: Use this skill whenever the user provides a YouTube or local game livestream VOD and wants a boss fight, boss win, successful attempt, victory clip, Elden Ring/Dark Souls boss kill, or similar gameplay moment clipped. This skill guides Claude Code, Codex, OpenCode, and similar coding agents through using the repository CLI to download, sample, visually inspect, and cut only the successful boss attempt, excluding failed attempts, death screens, loading screens, and runback footage while keeping 5-10 seconds after victory.
+description: Use this skill whenever the user provides a YouTube or local game livestream VOD and wants a boss fight, boss win, successful attempt, victory clip, Elden Ring/Dark Souls boss kill, or similar gameplay moment clipped. This skill guides Claude Code, Codex, OpenCode, and similar coding agents through using the repository CLI to download, sample, visually inspect, and cut only the successful boss attempt with a small clean lead-in when available, excluding failed attempts, death screens, loading screens, respawns, and runback footage while keeping 5-10 seconds after victory.
 compatibility: Requires the game-vod-clipper CLI, yt-dlp through the project or uv tool install, and a trusted ffmpeg binary on PATH.
 ---
 
@@ -12,6 +12,7 @@ Use this skill to turn a long game livestream VOD into a precise clip of the use
 
 - Clip only the successful boss attempt.
 - Do not include earlier failed attempts, `YOU DIED` screens, death fades, post-death loading screens, respawns, or runback footage.
+- When a clean lead-in exists, preserve a little context before combat: entering the boss arena, crossing the fog gate, stepping into the boss room, the boss title/name reveal, the approach inside the arena, or a brief readying moment before the first exchange. This lead-in is valuable, but it must still be part of the same successful attempt and must not include death, loading after death, respawn, retry UI, menuing, or runback context.
 - A clip is invalid if any point after the chosen start shows player death, a red death/failure overlay, a death fade, a black loading/transition caused by failure, retry UI, respawn context, or combat from an attempt that fails before the victory.
 - Treat the combination of the player character collapsing or lying prone, the whole screen shifting red or heavily tinted, and any loading-like fade/cut as a high-confidence death or failure signal even when there is no explicit `YOU DIED` text. Do not dismiss it as a generic combat effect unless dense inspection clearly proves the attempt continues without reset. Fast deaths can be followed by a very short black/loading screen and immediate arena reset; sparse thumbnails can easily miss this.
 - After choosing a candidate range, inspect it at frame-level or near-frame-level density before cutting. Do not rely only on 2-5 second thumbnails for the final decision; dense inspection must rule out single-frame or short death/failure records hidden between sampled thumbnails.
@@ -107,12 +108,15 @@ For each fine sheet, track the boss HP bar over time instead of only looking for
 
 ### 4. Pick Clip Boundaries
 
-Choose the start after the latest prior failure context:
+Choose the start after the latest prior failure context, with a small clean lead-in when possible:
 
-- Good starts: just before entering the arena, crossing fog, boss title card, or first meaningful action in the winning attempt.
+- Best starts: a few seconds before the winning attempt's first meaningful combat action, while the player is cleanly entering the boss arena, crossing fog, stepping into the boss room, approaching the boss inside the arena, or seeing the boss title/name reveal.
+- Good fallback starts: the first clean frame after death/loading/respawn/runback context has fully ended, even if that means starting close to the first exchange.
 - Bad starts: death screen, respawn, loading after death, elevator/runback, menuing before retry, or previous failed attempt combat.
+- Also bad starts: travel back to the arena after a death, objective markers/distance prompts that clearly indicate runback, post-death tutorial or retry UI, or any clip lead-in that begins before the failed attempt has fully cleared.
 - Also bad starts: any combat before a boss HP reset that indicates a failed attempt. If the boss HP later jumps upward, move the start to after the reset and after any respawn/runback context.
 - If death or failure appears anywhere inside a draft clip, the start is wrong even if the clip eventually reaches victory. Regenerate from the first clean frame of the attempt after that failure.
+- Do not over-trim to the final phase or last hits if a safe same-attempt lead-in is available. The goal is a complete successful boss fight clip, not just the kill shot.
 
 Choose the end at the victory moment:
 
@@ -140,6 +144,7 @@ Also inspect the final seconds by sampling near the clip duration. If the beginn
 
 Before reporting success, validate continuity inside the clip:
 
+- The opening should show a clean lead-in or clean first combat moment from the successful attempt. It must not show death, loading after death, respawn, retry UI, menuing, or runback context.
 - Sample the full clip densely, not just the opening and ending. Use frame-level or near-frame-level inspection when feasible; otherwise use the densest practical interval and targeted frame-level checks around every suspicious transition, red flash, HP depletion, boss HP disappearance, black frame, UI change, player collapse/prone frame, or knockdown.
 - A 2-5 second continuity sheet is only a coarse validation aid. It is not sufficient by itself when the clip contains fast deaths, red overlays, rapid failures, or multiple attempts.
 - If a red/death-looking segment is followed by black/loading frames and then gameplay resumes in the same arena, assume it may be a death and retry, not a victory transition. Inspect the exact sequence at 1 second or denser intervals, then move the start to the first clean gameplay frame after the loading/retry context.
@@ -155,7 +160,7 @@ When done, report:
 - Final clip path.
 - Source video path.
 - Start timestamp, victory timestamp, and postroll used.
-- Brief validation result: no prior death/runback included, no death/failure context inside the clip, no unexplained boss HP reset inside the clip, victory and postroll included.
+- Brief validation result: clean lead-in included when available, no prior death/loading/respawn/runback included, no death/failure context inside the clip, no unexplained boss HP reset inside the clip, victory and postroll included.
 - Any blockers, especially missing trusted FFmpeg installation.
 
 ## Time Format
