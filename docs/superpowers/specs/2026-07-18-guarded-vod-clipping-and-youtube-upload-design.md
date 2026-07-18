@@ -2,7 +2,7 @@
 
 Date: 2026-07-18
 
-Status: Awaiting written-spec review
+Status: Approved
 
 ## Summary
 
@@ -14,6 +14,7 @@ The system remains local and single-user per installation. Any user may install 
 
 - Preserve Skill-only operation as a first-class supported mode.
 - Make every review stage explicit, bounded, resumable, and machine-readable.
+- Enforce a persisted whole-run review budget, not only per-packet limits.
 - Prevent contact-sheet truncation, stale-frame mixing, and unbounded frame extraction.
 - Let agents and optional model adapters submit the same observation schema.
 - Keep final correctness decisions in deterministic code rather than model prose.
@@ -144,10 +145,11 @@ The high-level workflow writes the current task to disk and prints it through a 
 
 Suggested high-level interface:
 
-    game-vod-clipper workflow start SOURCE [--profile PROFILE]
+    game-vod-clipper workflow start SOURCE [--profile PROFILE] [--review-budget BUDGET.toml]
     game-vod-clipper workflow status RUN
     game-vod-clipper workflow next RUN
     game-vod-clipper workflow observe RUN --input OBSERVATIONS.json
+    game-vod-clipper workflow choose RUN --candidate CANDIDATE_ID
     game-vod-clipper workflow cut RUN
     game-vod-clipper workflow validate RUN
 
@@ -160,6 +162,8 @@ Every workflow receives a unique run ID. Reusing another run's review directory 
     runs/<run-id>/
       run.json
       source.json
+      review-budget-policy.json
+      review-budget-usage.json
       proxy/
         review.mp4
       discover/
@@ -172,8 +176,13 @@ Every workflow receives a unique run ID. Reusing another run's review directory 
       observations/
       validation/
       clip.json
-      youtube-draft.json
-      upload-receipt.json
+      youtube/
+        drafts/
+          <revision-id>.json
+        current-draft.json
+        receipts/
+          <attempt-id>.json
+        current-attempt.json
 
 Final media remains under clips/. Downloaded source media remains under downloads/. Review media remains under runs/.
 
@@ -181,7 +190,7 @@ Manifests, rather than directory globs, are the source of truth for frame orderi
 
 ## Workflow States
 
-The primary state path is:
+The primary clipping state path is:
 
     INGESTED
       -> DISCOVERING
@@ -191,8 +200,15 @@ The primary state path is:
       -> CUT
       -> FINAL_VALIDATED
       -> METADATA_DRAFTED
+
+Publishing attempts have an independent state path so an explicitly approved re-upload does not regress or duplicate the clip workflow:
+
+    PREPARED
+      -> SESSION_STARTED
       -> UPLOADING
       -> UPLOADED
+      -> PROCESSING
+      -> COMPLETED | BLOCKED | FAILED
 
 Every stage has one operational status:
 
@@ -204,7 +220,7 @@ blocked_review is used when more semantic evidence or user input could resolve t
 
 For a local source, the workflow probes media with structured ffprobe JSON and creates a review proxy no larger than 480p. The check command treats ffprobe as a required trusted companion to FFmpeg for guarded workflows.
 
-For a YouTube source, the workflow first retrieves a whitelisted metadata subset, then downloads a review representation no larger than 480p. Once boundaries are verified, it obtains only the required high-quality section with sufficient lead-in and postroll margin, or cuts from an already available high-quality local source.
+For a YouTube source, the workflow first retrieves a whitelisted metadata subset, then downloads a review representation no larger than 480p. Once boundaries are verified, it uses yt-dlp section downloading to obtain only the high-quality interval from max(0, selected_start minus 15 seconds) through min(source_duration, final_end plus 15 seconds). The extra margin protects precise re-encoding across keyframes; it is not added to the final clip. The section manifest records requested_source_start, requested_source_end, actual_source_origin, local media start time, and local duration. Absolute VOD boundaries are translated and range-checked as local_seconds = source_seconds minus actual_source_origin plus local_media_start; the cutter never applies absolute VOD seconds directly to a rebased section file. Review proxies and high-quality source sections carry distinct media-role fields, and the final cutter refuses to use a review proxy. A local source is cut directly after the same media-role and boundary checks.
 
 Source descriptions, comments, and other uncontrolled metadata are not inserted into model prompts. Only explicitly whitelisted fields such as source ID, source title, upload date, channel name, and duration may enter a manifest. Whitelisted strings are still treated as untrusted data and passed in structured fields, never concatenated into model instructions.
 
@@ -212,12 +228,32 @@ A remote adapter receives review packets only. It never receives the complete so
 
 ## Sampling Budget
 
+### Whole-run economy budget
+
+The built-in default is an economy budget designed for small and medium vision models. It is snapshotted into review-budget-policy.json, referenced by run.json, and applies to discover, refine, suspicious-window, ROI, schema-retry, and final-validation work together:
+
+- At most 24 one-page tasks are issued. An automated adapter may make at most 28 model invocations, including retry capacity reserved for final validation.
+- At most 384 reviewed cells across those pages.
+- At most 32 MiB of encoded images sent to a remote adapter.
+- One page with at most 16 cells per model-facing task.
+- Each remote-bound page is at most 1600 by 1600 pixels and 1 MiB; if it cannot be encoded legibly within those bounds, stop for review instead of silently degrading it.
+- One immutable stage instruction plus the current page manifest; task instructions are capped at 4 KiB and never include prior conversation history.
+- At most two candidate windows may enter automatic refinement. If more candidates remain indistinguishable, stop at blocked_review and request a user cue instead of spending unbounded review traffic.
+
+Discover may use at most eight pages and refinement plus suspicious/ROI work may use at most twelve. Final validation has a protected reservation of four pages, 64 cells, eight adapter invocations, and 8 MiB; no earlier page or retry may consume it. The non-final stages therefore share no more than 20 pages, 320 cells, 20 adapter invocations, and 24 MiB. Unused earlier-stage capacity may be carried forward without entering the protected final reservation. Invalid adapter-output retries consume an invocation and retransmitted bytes, so they reduce remaining non-final work rather than weakening final validation.
+
+ReviewBudgetPolicy is immutable and identified by policy_hash. ReviewBudgetUsage is mutable, revisioned, and append-audited; usage counters never participate in policy_hash. Before rendering, the run store atomically reserves one page, its cells, one invocation when applicable, and the 1 MiB encoded-byte ceiling. The page is encoded to a temporary file, then the same locked transaction reconciles the reservation to the actual byte count before the page can be exposed or dispatched. Adapter retries reserve another invocation and the already-known page bytes before transmission. Budget exhaustion sets blocked_review and reports used, protected, and remaining capacity. It never weakens validation or permits a guessed boundary.
+
+RunStore serializes budget and state changes with a per-run cross-process lock and an expected-revision compare-and-swap. os.replace protects file integrity but is not treated as a concurrency lock. Reservations have journaled IDs and states; resume either reconciles a valid temporary artifact or releases an abandoned reservation with an audit event. Competing workflow next processes cannot both issue or charge the same task.
+
+An explicit review-budget TOML supplied only when starting a run may lower or raise these values. The validated ReviewBudgetPolicy and its hash are frozen into the run; dotenv and later commands cannot silently change it.
+
 ### Discover
 
 - Cover the complete source timeline.
 - Extract at most 120 full-frame review images.
 - Compute the interval as max(30 seconds, duration divided by 119).
-- Include both the first and final timeline positions, de-duplicate coincident positions, and still enforce the 120-frame maximum.
+- Include the first and last decodable video frames, not the undecodable container-duration boundary. Record both planned target seconds and actual decoded PTS, de-duplicate coincident frames, and still enforce the 120-frame maximum.
 - Extract frames in a bounded batch operation rather than one FFmpeg process per image.
 - Produce sheets with at most 16 cells each.
 - Render frame ID and precise timestamp inside every cell.
@@ -229,16 +265,24 @@ A remote adapter receives review packets only. It never receives the complete so
 - Sample candidate ranges every two to five seconds.
 - Cap a refinement packet at 160 frames.
 - Split longer ranges into adjacent bounded packets rather than exceeding the cap.
+- Refine at most two automatically selected candidate windows; if deterministic evidence cannot select them without discarding another plausible win, set blocked_review for a user cue.
 - Use overview frames for scene context and separate targeted ROI crops when a profile defines a boss HUD or victory-text region.
+
+When candidate ambiguity blocks the run, workflow status lists immutable candidate IDs with timestamps and evidence references. workflow choose RUN --candidate ID accepts only one currently listed ID, appends a USER_CANDIDATE_SELECTION audit event, clears that specific block, and resumes within the unchanged review budget. It cannot mark boundaries or validation as passed by itself.
 
 ### Suspicious windows
 
 - Cheap continuous signals may flag black frames, scene changes, red-dominant flashes, boss-HP disappearance, and profile-specific OCR matches.
 - These signals increase recall only; none can prove success.
 - Inspect approximately four seconds before and after a suspicious event at 0.25 to 0.5 second intervals.
-- Native frame-level extraction is allowed only in a target window no longer than two seconds.
+- Merge overlapping suspicious windows before sampling so the same source time is not charged repeatedly.
+- Native frame-level extraction is allowed only when the target window is no longer than two seconds and contains no more than 160 decoded frames. Higher-frame-rate sources use a shorter window or capped temporal sampling.
 - Permit at most two semantic refinement rounds for the same unresolved question.
 - If continuity is still uncertain, set blocked_review.
+
+### Model-facing work units
+
+workflow next exposes exactly one current sheet page and its structured cell manifest. Each issuance has an immutable task_id derived from the run revision, packet, page, manifest hash, and policy hash. The agent or adapter returns that task_id and observations only for that page. The first accepted response consumes the task; an identical replay is idempotent, while stale, altered, or already-consumed task content is rejected. Accepted observations are persisted before the next page is issued, so a small model never has to carry earlier pages or candidate history in context. The deterministic reducer, not the model, joins observations across pages and stages.
 
 ## Game Profiles
 
@@ -264,19 +308,27 @@ The selected profile ID and version are recorded in run.json and clip.json.
 
 ## Observation Contract
 
-Agent and adapter output uses a versioned schema. A representative record is:
+Agent and adapter output uses a versioned page-response schema. Every cell on the issued page appears exactly once, in manifest order; empty signal and evidence arrays mean the frame was reviewed and no listed cue was visible. Missing, duplicate, future-page, or extra frame IDs are rejected. A representative response is:
 
     {
       "schema_version": 1,
       "run_id": "run-...",
       "stage": "REFINE",
       "packet_id": "refine-02",
-      "frame_id": "f0042",
-      "signals": ["BOSS_ACTIVE", "BOSS_HP_LOW"],
-      "game_candidate": "Elden Ring",
-      "boss_candidate": "Malenia",
-      "evidence": ["VISIBLE_BOSS_BAR"],
-      "uncertain": false
+      "page_id": "page-0003",
+      "task_id": "task-...",
+      "observations": [
+        {
+          "frame_id": "f0042",
+          "event_window_id": "phase-window-01",
+          "signals": ["BOSS_ACTIVE", "BOSS_HP_LOW"],
+          "game_candidate": "Elden Ring",
+          "boss_candidate": "Malenia",
+          "evidence": ["BOSS_BAR_VISUAL", "BOSS_NAME_TEXT"],
+          "profile_cue_ids": [],
+          "uncertainty_scopes": []
+        }
+      ]
     }
 
 Allowed signal values include:
@@ -291,14 +343,36 @@ Allowed signal values include:
 - RESPAWN
 - RUNBACK
 - HP_RESET
+- PHASE_TRANSITION
 - VICTORY
 - REWARD
-- UNCERTAIN
-- OTHER
 
-Unknown fields may be retained for forward compatibility, but unknown enum values do not affect state and trigger schema feedback.
+Allowed observation evidence values are:
 
-Model-reported confidence may route another review pass. It cannot satisfy a hard validation rule.
+- ARENA_VISUAL
+- BOSS_BAR_VISUAL
+- BOSS_NAME_TEXT
+- PLAYER_DEATH_VISUAL
+- LOADING_SCREEN_VISUAL
+- RESPAWN_VISUAL
+- RUNBACK_VISUAL
+- HP_RESET_VISUAL
+- PHASE_TRANSITION_VISUAL
+- VICTORY_TEXT
+- REWARD_VISUAL
+- GAME_IDENTITY_TEXT
+
+Allowed uncertainty_scopes values are:
+
+- CONTINUITY
+- ATTEMPT_START
+- VICTORY
+- GAME_IDENTITY
+- BOSS_IDENTITY
+
+task_id, page_id, frame_id, and event_window_id are copied from the issued manifest and cannot be invented by the model. game_candidate and boss_candidate are either visible strings or null; an unresolved identity must also appear in uncertainty_scopes. profile_cue_ids may contain only IDs defined by the selected, versioned game profile. Unknown fields may be retained for forward compatibility, but unknown enum or cue IDs do not affect state and trigger schema feedback. A model cannot invent a new evidence type or phase-transition exception.
+
+Free-form model confidence is ignored. Only the closed uncertainty_scopes vocabulary may route another review pass, and it cannot satisfy a hard validation rule.
 
 ## Deterministic Validation
 
@@ -311,11 +385,11 @@ The reducer accepts only a continuous successful-attempt path:
 From selected start through victory, the following invalidate the candidate:
 
 - PLAYER_DEATH
-- Failure-caused loading
+- LOADING, unless observations in the same manifest-defined event_window_id contain profile-supported PHASE_TRANSITION evidence within that profile rule's time gap, capped globally at 15 seconds, and contain no PLAYER_DEATH, RESPAWN, or RUNBACK
 - RESPAWN
 - RUNBACK
-- An unexplained HP_RESET
-- Unresolved UNCERTAIN evidence
+- An HP_RESET that is not accompanied by the same event-window and time-gap-bound profile-supported PHASE_TRANSITION evidence
+- CONTINUITY, ATTEMPT_START, or VICTORY uncertainty
 - Combat from an earlier attempt that later fails
 
 The chosen start must follow the latest resolved failure context and should retain a clean same-attempt arena entry when available.
@@ -328,10 +402,10 @@ The final re-encoded clip is sampled and checked again. It is not FINAL_VALIDATE
 
 Clip uncertainty and metadata uncertainty are different:
 
-- If death, retry, continuity, winning-attempt start, or victory remains uncertain, stop before cutting or uploading.
-- If the clip is FINAL_VALIDATED but only game or boss identity is uncertain, create generic metadata, set needs_metadata_review to true, and allow a private upload.
+- If uncertainty_scopes contains CONTINUITY, ATTEMPT_START, or VICTORY, stop before cutting or uploading.
+- If the clip is FINAL_VALIDATED and uncertainty_scopes contains only GAME_IDENTITY or BOSS_IDENTITY, create generic metadata, set needs_metadata_review to true, and allow a private upload.
 
-This distinction is enforced in schema and state transitions rather than left to prompt interpretation.
+uncertainty_scopes is required even when empty. This distinction is enforced in schema and state transitions rather than inferred from a generic uncertain boolean or left to prompt interpretation.
 
 ## Clip Manifest
 
@@ -388,7 +462,8 @@ Title, description, and tags are validated against current YouTube API constrain
 Precedence is:
 
     command-line flags
-      > process environment or dotenv
+      > process environment
+      > dotenv
       > user config TOML
       > built-in defaults
 
@@ -398,6 +473,8 @@ Example non-sensitive values:
 
     GVC_YOUTUBE_CLIENT_SECRETS=/secure/path/client_secret.json
     GVC_CHANNEL_PROFILE=/secure/path/channel-profile.toml
+
+Dotenv is parsed by a deliberately small local parser that supports only literal KEY=VALUE entries required by this application. Variable expansion, command substitution, multiline values, and upload-trigger fields are rejected; no dotenv package is required by the base clipper.
 
 The channel profile contains:
 
@@ -421,7 +498,7 @@ Commands:
     game-vod-clipper youtube-auth status
     game-vod-clipper youtube-auth logout
 
-Login uses installed-app browser authorization with PKCE and the minimum youtube.upload scope for V1.
+Login uses installed-app browser authorization with PKCE. V1 requests the narrowest scope set that satisfies both required operations: youtube.upload for upload and youtube.readonly for a pre-upload channels.list(mine=true) identity check. Installed apps do not support incremental authorization, so both scopes are requested together and shown before consent.
 
 The refresh token is stored in the operating-system keyring. Access tokens remain in memory. Client configuration stays outside the repository.
 
@@ -435,9 +512,10 @@ V1 does not change privacy after upload. Updating an existing video's privacy re
 
 ## YouTube Draft
 
-youtube-draft.json includes:
+Each youtube/drafts/<revision-id>.json includes:
 
 - Schema version.
+- revision_id and optional parent_revision_id.
 - clip.json path and clip SHA-256.
 - Target channel ID and title.
 - Title, description, tags, category, and language.
@@ -448,17 +526,19 @@ youtube-draft.json includes:
 - needs_metadata_review.
 - Canonical metadata hash.
 - Approval mode and approval timestamp when applicable.
+- allow_reupload, defaulting to false, and prior_video_id when an explicit Mode A re-upload revision is prepared.
 
-Changing clip bytes, channel, privacy, audience, or any metadata invalidates an existing approval hash.
+youtube/current-draft.json is an atomic pointer containing only the active revision ID and its hash. Changing clip bytes, channel, privacy, audience, re-upload intent, prior video, or any metadata creates a new immutable revision and invalidates an existing approval hash.
 
 ## Private-default Upload Modes
 
 ### Mode A: interactive confirmation
 
     game-vod-clipper youtube prepare RUN
+    game-vod-clipper youtube revise DRAFT --input EDITS.toml
     game-vod-clipper youtube upload DRAFT --confirm METADATA_HASH
 
-Prepare displays the channel, file hash, title, description, tags, selected visibility, audience, disclosure, rights acknowledgement, and subscriber-notification choice. The user may edit supported fields, regenerate the hash, and then confirm the exact revision. Upload remains blocked until audience, synthetic-media declaration, category, and rights acknowledgement are explicit.
+Prepare displays the channel, file hash, title, description, tags, selected visibility, audience, disclosure, rights acknowledgement, and subscriber-notification choice. revise accepts a validated TOML patch for supported fields, writes a new immutable draft revision, prints its new hash, and leaves the prior revision unchanged. Upload remains blocked until audience, synthetic-media declaration, category, and rights acknowledgement are explicit.
 
 Mode A exposes private, unlisted, and public as explicit visibility choices to meet YouTube's required upload controls. Private is always preselected. Choosing unlisted or public changes the metadata hash and requires confirmation of that exact revision. If needs_metadata_review is true, visibility is locked to private. An unverified API project may still force the uploaded video to private; the receipt records the actual value returned by YouTube.
 
@@ -474,6 +554,12 @@ Metadata uncertainty alone permits the generic private title and sets needs_meta
 
 Both modes default to privacyStatus private and record the actual privacy returned by YouTube. Mode B is always private; only Mode A can explicitly choose another initial visibility.
 
+Processing can be checked or resumed without starting another upload:
+
+    game-vod-clipper youtube status RUN
+
+This command may query an existing resumable session or video processing state. It never calls videos.insert for a new upload.
+
 ## Upload State and Idempotency
 
 A user-local SQLite state store tracks upload jobs. It lives in the operating system's per-user application-state directory with owner-only permissions, not inside the repository or a portable run directory. Its unique artifact key is:
@@ -488,14 +574,15 @@ Behavior:
 - If an upload is in progress, query and resume its existing session.
 - Do not call videos.insert again after an ambiguous interruption.
 - If an upload session expires and completion cannot be determined, stop for review rather than risk duplication.
-- Re-uploading identical bytes requires allow-reupload and a new explicit approval.
+- Re-uploading identical bytes is Mode A only. game-vod-clipper youtube prepare RUN --allow-reupload creates a new draft that identifies the prior video, includes the re-upload intent in its metadata hash, and therefore requires a fresh exact approval. Mode B never re-uploads identical bytes.
 - Concurrent attempts are serialized with a database uniqueness constraint and lock.
 
 The secure upload state may hold a resumable session URI while required. Logs and portable receipts never contain it.
 
-upload-receipt.json includes:
+Each youtube/receipts/<attempt-id>.json includes:
 
 - Schema version, run ID, and clip hash.
+- attempt_id, draft revision ID, and optional prior attempt/video linkage.
 - YouTube video ID and watch URL.
 - Target channel.
 - Actual privacy.
@@ -503,6 +590,8 @@ upload-receipt.json includes:
 - Upload and processing status.
 - needs_metadata_review.
 - Failure or rejection reason when applicable.
+
+youtube/current-attempt.json is an atomic pointer to the attempt used by youtube status RUN. Portable receipts never contain a resumable-session URI. Repeated or re-upload attempts create new receipts; they never overwrite an earlier terminal receipt.
 
 ## Error Handling
 
@@ -520,7 +609,8 @@ upload-receipt.json includes:
 ### Observations
 
 - Reject mismatched run, stage, packet, or frame IDs.
-- Reject invalid schema or unknown required enum values.
+- Reject invalid schema, unknown required enum values, unknown evidence values, and unknown profile cue IDs.
+- Treat LOADING as failure context by default; only a versioned profile cue with visible phase-transition evidence may exempt it.
 - Permit one adapter schema retry.
 - Persist all accepted observations and reducer decisions.
 - Move unresolved semantic questions to blocked_review after two refinement rounds.
@@ -558,6 +648,7 @@ upload-receipt.json includes:
 ### Unit tests
 
 - Finite timecode parsing and formatting.
+- Whole-run review-budget accounting, final-stage reservation, and blocked-review exhaustion.
 - Source-duration and start/victory/postroll boundaries.
 - Versioned schema validation.
 - State transitions and blocked-review behavior.
@@ -578,6 +669,8 @@ Use tiny synthetic audio/video fixtures generated with FFmpeg:
 - Sheet coverage equals manifest coverage.
 - Reusing a populated output directory cannot mix old frames.
 - Batch extraction respects frame budgets.
+- One-FPS, variable-frame-rate, and audio-longer-than-video fixtures resolve the last decodable video PTS without an EOF miss.
+- A mocked remote source is clipped from its bounded high-quality section and never from its review proxy.
 - Missing-audio input remains supported.
 - EOF, invalid ranges, postroll, and output duration are validated.
 - Failed writes do not leave a completed-looking clip.
@@ -588,6 +681,7 @@ Use tiny synthetic audio/video fixtures generated with FFmpeg:
 - Death, loading, runback, HP reset, and unresolved uncertainty block it.
 - Metadata-only uncertainty permits a generic private draft.
 - No model SDK or provider key is required for a Skill-only run.
+- workflow next exposes one page at a time and reducer state survives between pages.
 - Skill commands and schema examples remain synchronized with CLI help and schema versions.
 
 ### Adapter contract tests
@@ -605,22 +699,27 @@ Use a fake HTTP transport; unit and integration tests never upload real media:
 - OAuth redaction and credential refresh.
 - Authorized-channel mismatch.
 - Mode A approval hash.
+- Immutable Mode A metadata revision and re-upload approval hashes.
 - Mode B explicit private gate.
 - Duplicate and concurrent upload prevention.
 - Resume after 308 and retryable 5xx.
 - 401, 403, permanent 400, and expired-session behavior.
 - API-forced private response.
 - Processing failure and rejection receipt.
+- youtube status continues only an existing upload or processing poll and never starts a new insert.
 - Refusal to upload downloads/ or a non-validated artifact.
 
 ## Acceptance Criteria
 
 - A long VOD produces complete, paginated, timestamped review coverage without silent truncation.
 - The default discover stage never exceeds 120 frames.
+- The default full run never exceeds 24 model-facing pages, 384 cells, 28 adapter calls, or 32 MiB of remote review images, and early work cannot consume the protected final reservation.
+- No model-facing task contains more than one 16-cell page or depends on conversation memory.
 - Whole-fight frame-level extraction is impossible through the guarded workflow.
 - Reused run directories cannot contaminate a new review packet.
 - An agent can complete the workflow by reading only the repository Skill and using the CLI.
 - An optional adapter can replace only the observation step through the same JSON schema.
+- A remote-source final clip is re-encoded from a bounded high-quality section, never the 480p review proxy.
 - No failed or uncertain attempt can become a validated clip.
 - Metadata-only uncertainty can produce a clearly flagged generic private upload.
 - Both upload modes default to private, and Mode B cannot override private.
@@ -642,7 +741,9 @@ Use a fake HTTP transport; unit and integration tests never upload real media:
   https://developers.google.com/youtube/v3/docs/videos/update
 - Resumable upload status and retry behavior:
   https://developers.google.com/youtube/v3/guides/using_resumable_upload_protocol
-- Installed-app OAuth guidance:
+- channels.list identifies the currently authorized YouTube channel for the pre-upload channel-match gate:
+  https://developers.google.com/youtube/v3/docs/channels/list
+- Installed-app OAuth guidance, including the lack of incremental authorization:
   https://developers.google.com/youtube/v3/guides/auth/installed-apps
 
 These external rules are time-sensitive and must be rechecked against official documentation during implementation and release.
