@@ -9,6 +9,42 @@ This project combines a Python CLI with an agent skill:
 
 The CLI handles deterministic media work. The agent handles visual judgment.
 
+## Web POC — React + FastAPI
+
+A local, single-user editing workspace is now available. It supports importing local
+videos or a YouTube URL, background preview generation, thumbnail seeking, start /
+victory / postroll controls, Agent JSON handoff, saved drafts, and MP4 export.
+**Codex CLI visual analysis is available using `gpt-5.6-luna`.** It reuses the CLI's
+existing login, reviews sampled frames, and proposes timestamps for human review.
+No separate API key is needed when Codex is signed in with ChatGPT. Manual editing
+and external Agent JSON import also remain available.
+
+From the repository root (Python 3.11+, Node 22.12+, trusted FFmpeg and ffprobe):
+
+```bash
+uv sync --extra web
+npm --prefix web ci
+npm --prefix web run build
+uv run --extra web game-vod-web
+```
+
+Open **http://127.0.0.1:8000**. The backend serves the built React app, so only one
+server is needed. Keep this terminal running while processing videos. In a remote
+development container, privately forward port 8000 to your own machine.
+
+Local import lists files already under `downloads/` and `clips/`. Put a new source
+recording in `downloads/`, then open the import dialog. The browser never uploads
+your source file. Preview files and task state live in `runs/web/`; exports and
+their JSON receipts live in `clips/web/`. Source videos are never overwritten.
+
+See [the POC guide](docs/web-poc.md) for development, the Agent JSON contract,
+testing, and current limitations.
+
+To enable Codex analysis, install Codex CLI and run `codex login` in the same
+environment as the backend. Import a video, select up to 30 minutes in the **Codex**
+panel, then start analysis. Sampled images are sent to OpenAI; the source video
+stays local. The result does not automatically change the draft or export a clip.
+
 ## What It Produces
 
 A valid final clip should:

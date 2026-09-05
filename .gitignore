@@ -16,3 +16,9 @@ clips/
 # Build outputs
 build/
 dist/
+
+# Web POC
+node_modules/
+playwright-report/
+test-results/
+*.tsbuildinfo
