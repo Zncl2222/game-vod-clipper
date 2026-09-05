@@ -1,0 +1,37 @@
+{
+  "name": "Game VOD Clipper",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "portsAttributes": {
+    "3000": {
+      "label": "Website APP (frontend)",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "Vite dev server",
+      "onAutoForward": "notify"
+    },
+    "8000": {
+      "label": "API / backend",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "uv sync --frozen",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/game-vod-clipper-venv/bin/python",
+        "python.terminal.activateEnvironment": true
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}
