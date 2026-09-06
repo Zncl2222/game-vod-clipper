@@ -52,6 +52,20 @@ If this fails because `ffmpeg` is missing, stop and report that FFmpeg must be i
 
 ## Workflow
 
+### Provisional Review Annotations
+
+When supporting an interactive editor, publish multiple plausible timestamped
+segments as soon as they are observed. Give each a stable ID, approximate start
+and end, an event type (possible victory, fight, death/retry, or unknown), confidence,
+and a short explanation of what needs checking. Keep distinct attempts separate
+and retain earlier segments while inspecting later packets. Unknown victory times
+must remain unknown. Do not invent segments to meet a minimum count.
+
+Uncertainty or incomplete dense review must not hide these annotations: users
+can select and preview source ranges to check them. These annotations are not
+accepted winning clips. Apply the core continuity and 5–10 second postroll rules
+when accepting and exporting the final clip.
+
 ### 1. Get The Video
 
 If the user provided a YouTube URL, download it:

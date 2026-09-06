@@ -12,13 +12,14 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.getByRole("button", { name: "建立第一個剪輯" }).click();
   await page.getByLabel("選擇影片").selectOption("downloads/synthetic.mp4");
   await page.getByRole("button", { name: "建立剪輯專案" }).click();
+  await page.locator(".editor-settings > summary").click();
   await expect(page.getByRole("heading", { name: "剪輯設定" })).toBeVisible({
     timeout: 30_000,
   });
   await expect(page.getByRole("button", { name: "匯出 MP4" })).toBeDisabled();
   await expect
     .poll(() =>
-      page.locator("video").evaluate((v: HTMLVideoElement) => v.readyState),
+      page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.readyState),
     )
     .toBeGreaterThanOrEqual(1);
   await page.getByLabel("開始時間").fill("1.25");
@@ -27,27 +28,31 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.getByRole("button", { name: "播放開頭" }).click();
   await expect
     .poll(() =>
-      page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime),
+      page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.currentTime),
     )
     .toBeGreaterThan(1.25);
-  await page.locator("video").evaluate((v: HTMLVideoElement) => v.pause());
+  await page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.pause());
   await page.getByRole("checkbox").check();
   // Any edit must invalidate the prior review.
   await page.getByLabel("開始時間").fill("1.5");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "匯出 MP4" }).click();
-  await expect(page.getByRole("link", { name: "下載 MP4" })).toBeVisible({
+  await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeAttached({
     timeout: 30_000,
   });
+  await page.locator(".jobs-details > summary").click();
+  await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("link", { name: "下載 MP4" }).click();
+  await page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true }).click();
   const download = await downloadPromise;
   await download.saveAs(path.resolve("../runs/web-poc-browser-export.mp4"));
   expect(await download.failure()).toBeNull();
   await page.reload();
+  await page.locator(".editor-settings > summary").click();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
-  await expect(page.getByRole("link", { name: "下載 MP4" })).toBeVisible();
+  await page.locator(".jobs-details > summary").click();
+  await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
   const projectId = await page.evaluate(async () => {
     const state = await (await fetch("/api/state")).json();
     return state.projects[0].id as string;
@@ -87,7 +92,7 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.getByRole("button", { name: "跳到開始", exact: true }).click();
   await expect
     .poll(() =>
-      page.locator("video").evaluate((v: HTMLVideoElement) => v.readyState),
+      page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.readyState),
     )
     .toBeGreaterThanOrEqual(2);
   await page.screenshot({ path: "../runs/web-poc-editor.png", fullPage: true });
@@ -132,8 +137,10 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     }),
   );
   await page.reload();
+  await page.locator(".editor-settings > summary").click();
   await expect(page.getByLabel("開始時間")).toHaveValue("2");
   await page.getByRole("checkbox").check();
+  await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await page.getByRole("button", { name: /套用候選/ }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("3");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
