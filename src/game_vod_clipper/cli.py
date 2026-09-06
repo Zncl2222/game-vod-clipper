@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("check", help="verify yt-dlp and ffmpeg are available")
+    subparsers.add_parser("check", help="verify yt-dlp, ffmpeg, and a YouTube JS runtime are available")
 
     download = subparsers.add_parser("download", help="download a single YouTube VOD")
     download.add_argument("url", help="YouTube URL")
