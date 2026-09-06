@@ -6,12 +6,13 @@ from pathlib import Path
 
 from .process import check_required_tools, resolve_tool_command, run_command
 from .timecode import format_timecode, format_timecode_for_filename, parse_timecode
+from .youtube import javascript_runtime, youtube_command
 
 REQUIRED_TOOLS = ["yt-dlp", "ffmpeg"]
 
 
 def check_tools() -> dict[str, str]:
-    return check_required_tools(REQUIRED_TOOLS)
+    return check_required_tools(REQUIRED_TOOLS) | {"javascript": javascript_runtime()}
 
 
 def download_video(
@@ -21,7 +22,7 @@ def download_video(
     format_selector: str | None = None,
     output_template: str | None = None,
 ) -> Path:
-    ytdlp = resolve_tool_command("yt-dlp")
+    ytdlp = youtube_command()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     args = ytdlp + [

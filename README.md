@@ -222,9 +222,22 @@ https://github.com/Zncl2222/game-vod-clipper.git
 - Python 3.11+
 - `uv`
 - FFmpeg on `PATH`
+- Deno 2.3+ or Node.js 22+ on the backend's `PATH` for YouTube downloads
 - Network access if downloading YouTube VODs
 
-`yt-dlp` is installed through the Python project. FFmpeg is not bundled and should be installed from a trusted source.
+`yt-dlp` and its EJS challenge scripts are installed through the Python project.
+Both the CLI and web worker automatically select Deno or Node.js. The development
+container already includes Node.js 22. FFmpeg is not bundled and should be
+installed from a trusted source.
+
+If YouTube import reports `No supported JavaScript runtime` or HTTP 403, update
+the project dependencies with `uv sync --extra web`, restart the backend, and retry
+the failed job. This installs the updated yt-dlp and EJS scripts and enables the runtime explicitly,
+including in the web worker, which ignores personal yt-dlp configuration.
+See the [official yt-dlp EJS setup guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS).
+If 403 persists, the runtime fix alone is insufficient; check that the source is
+public and the livestream has ended, or import your local recording. The web POC
+does not support ongoing livestreams or login-required videos.
 
 ## For Users
 

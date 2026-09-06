@@ -11,6 +11,7 @@ from pathlib import Path
 from .media import clip_video
 from .process import resolve_tool_command
 from .web_store import Store
+from .youtube import youtube_command
 
 
 def command(args: list[str]) -> str:
@@ -56,7 +57,7 @@ def run(root: Path, job_id: str):
             folder = root / "downloads" / "web" / project["id"]
             folder.mkdir(parents=True, exist_ok=True)
             output = command(
-                resolve_tool_command("yt-dlp")
+                youtube_command()
                 + [
                     "--ignore-config",
                     "--no-playlist",

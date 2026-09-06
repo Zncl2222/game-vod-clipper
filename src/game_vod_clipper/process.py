@@ -26,12 +26,13 @@ def require_tool(name: str) -> str:
 
 
 def resolve_tool_command(name: str) -> list[str]:
+    # Keep yt-dlp and its EJS dependency in the same Python environment.
+    if name == "yt-dlp" and importlib.util.find_spec("yt_dlp") is not None:
+        return [sys.executable, "-m", "yt_dlp"]
+
     path = shutil.which(name)
     if path is not None:
         return [path]
-
-    if name == "yt-dlp" and importlib.util.find_spec("yt_dlp") is not None:
-        return [sys.executable, "-m", "yt_dlp"]
 
     if name == "ffmpeg":
         raise ToolMissingError(
