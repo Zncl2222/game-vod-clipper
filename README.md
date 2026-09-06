@@ -14,7 +14,7 @@ The CLI handles deterministic media work. The agent handles visual judgment.
 A local, single-user editing workspace is now available. It supports importing local
 videos or a YouTube URL, background preview generation, thumbnail seeking, start /
 victory / postroll controls, Agent JSON handoff, saved drafts, and MP4 export.
-**Codex CLI visual analysis is available using `gpt-5.6-luna`.** It reuses the CLI's
+**Chat and visual analysis share the Codex CLI connection and model picker.** It reuses the CLI's
 existing login, reviews sampled frames, and proposes timestamps for human review.
 No separate API key is needed when Codex is signed in with ChatGPT. Manual editing
 and external Agent JSON import also remain available.
@@ -40,10 +40,163 @@ their JSON receipts live in `clips/web/`. Source videos are never overwritten.
 See [the POC guide](docs/web-poc.md) for development, the Agent JSON contract,
 testing, and current limitations.
 
-To enable Codex analysis, install Codex CLI and run `codex login` in the same
-environment as the backend. Import a video, select up to 30 minutes in the **Codex**
-panel, then start analysis. Sampled images are sent to OpenAI; the source video
-stays local. The result does not automatically change the draft or export a clip.
+### Chat and control the editor
+
+The main view keeps the video, one range timeline, previews and export together.
+**AI 對話** opens an optional conversation panel; on smaller screens it opens a
+full-height drawer. **精確時間與手動調整** expands the numeric editing controls. Account controls live behind **帳號設定**;
+search progress appears below the video and in the conversation; advanced Agent import/export and media job history are collapsible.
+
+- **一般聊天** supports ordinary conversation without attaching project metadata.
+- **剪輯助理** attaches the selected project's title, duration, and current draft
+  timestamps. For example, type `把勝利後收尾改成 8 秒` or `跳到 1 分 30 秒`.
+  Valid commands update the local draft or seek the preview. Changes invalidate
+  manual review; saving and exporting still use the workspace controls. Explicit
+  requests such as `搜尋前 10 分鐘的成功挑戰` schedule a bounded visual search.
+  Ordinary conversation does not start media work. Selecting a project defaults
+  to editing mode; you can switch back to general chat at any time.
+- The model picker uses official App Server `model/list` results. Your selection
+  applies to the next message and search task. Searches require image support and
+  retain their selected model when retried. There is no silent model fallback.
+- **一鍵搜尋成功挑戰** and typed search instructions both use `/api/codex/chat`
+  and the same validated task queue. Progress, cancellation, results, and candidate
+  application appear in conversation task cards. Follow-up questions receive the
+  latest project search result; explicit cancellation can also be requested in chat.
+- Chat supports follow-up questions, **新對話**, and **停止回應**. Recent messages
+  remain in the current browser tab's session storage; the last 24 messages within
+  a 24,000-character budget are included in each request. Messages are sent to the
+  selected model under the connected account. Chat does not save transcripts in
+  the project store. Switching accounts clears the current transcript.
+- Replies proposing editor commands are validated against the source duration.
+  A reply cannot overwrite a draft edited during generation or target a different
+  project after switching. No command can mark footage as reviewed or export it.
+
+The chat endpoint sends newline-delimited status and final-response events;
+responses appear when the model has completed its structured answer. Chat calls
+have a 120-second limit. Stopping a reply cancels its subprocess; an already queued
+search is cancelled through its task card or an explicit chat request. Chat and
+visual review use the same `codex_runtime.py` executor with isolated invocations.
+The legacy analyze endpoint remains a compatibility wrapper around the same queue.
+
+Run the lightweight tests without the video fixtures:
+
+```bash
+python -m unittest discover -s tests -p test_codex_connection.py -v
+python -m unittest discover -s tests -p test_codex_chat.py -v
+python -m unittest discover -s tests -p test_ai_dispatch.py -v
+PYTHONPATH=tests python -m unittest test_codex_analysis.CodexStreamingTest -v
+cd web
+npm run test:chat
+```
+
+The chat UI suite uses mocked API responses and metadata, with one browser worker;
+it never loads the existing FFmpeg fixture or calls a real AI model.
+
+### Visual clip workspace
+
+AI publishes multiple **候選片段** during analysis, including when its overall result
+is uncertain. The full-video overview shows numbered ranges for possible victories,
+fights, deaths/retries and unclear events. Click a marker to seek, then use
+**預覽 #N**, **上一段** / **下一段** to check the source footage. Overlapping segments
+occupy separate rows; the colored bars show their actual time spans.
+
+Each segment retains its ID and display number when a continued analysis refines
+its boundaries. **待核對／保留／排除** tags are saved to the project and survive reloads.
+Chat understands references such as **查看 #2**, using the same stored candidates.
+Selecting or tagging an annotation does not change or approve the export draft.
+For a possible victory with a known victory time, **將 #N 放入剪輯草稿** loads an
+unreviewed draft with 5–8 seconds of postroll, depending on the remaining footage.
+Annotations with an unknown victory remain previewable without inventing a win.
+Stopped or incomplete analysis keeps the annotations already found; an empty
+result does not manufacture candidates. Older single-result jobs with usable
+timestamps also appear as provisional annotations.
+
+The video and its selection track fit together in the main view. The compact AI
+bar offers search, stop/continue and **重置**; sampling details stay collapsed under
+**分析詳情**. Evidence markers and the currently sampled interval share the range
+track. Use **看全片** / **放大片段** to change its scale. Candidate switches, opening /
+victory / ending previews and export remain beside the player. Chat, numeric
+settings and completed exports open only when needed.
+
+**重置分析結果** stops this video's analysis and removes its candidates, evidence,
+checkpoints, sampled images, analysis logs and current draft. It preserves the source,
+preview, thumbnails, export files and export jobs, as well as other projects.
+A new search starts from scratch. Draft revisions and an analysis generation
+invalidate stale browser drafts, old continuations and late AI editor/search actions;
+old editing context is excluded from new conversation requests after reset.
+
+An untouched, unreviewed initial draft selects the latest candidate automatically;
+while a search is running, edits made since it started are preserved. Otherwise,
+select a candidate switch to load its range into the editor. Automatic candidate
+selection does not pause or seek the video. Saved/reviewed drafts are
+not automatically replaced on opening a project.
+
+Drag the start, victory and end handles to adjust the range while preserving a
+5–10-second post-victory ending.
+The handles also support arrow keys (Shift for one-second steps). Preview uses the
+existing source preview and stops at the selected end; no new encode is needed.
+Existing exported MP4s have inline players in the same workspace. Candidates remain
+unreviewed drafts until the user checks the footage and explicitly exports.
+
+### Connect your AI account first
+
+Install the official Codex CLI in the same environment as the backend. The
+**帳號設定** button in the right-hand conversation panel opens the
+**AI 帳號與連線** controls, even with an empty media library:
+
+1. Choose **使用 ChatGPT 登入** and complete the device-code flow on OpenAI's
+   official page. For a backend running on the same computer as your browser,
+   **瀏覽器登入（後端在本機）** supports the browser callback flow instead.
+2. Check the connected account and billing mode. ChatGPT sign-in uses the plan's
+   Codex entitlement; an existing API-key login uses separately billed API usage.
+   This app does not silently switch accounts, models, or billing modes.
+3. Choose **測試 AI 文字回應**. This sends one fixed short message to
+   `gpt-5.6-luna`, shows the actual reply, and stops after 60 seconds. It does not
+   import, read, sample, download, or encode video. Opening the page only checks
+   sign-in status; it does not automatically request an AI response.
+
+Account status, sign-in, and cancellation use the official **Codex App Server**
+JSON-RPC interface over local stdio. Codex owns OAuth and credential refresh;
+BossCut does not read/copy `auth.json`, ask for session cookies, or store tokens
+in browser storage. It shares the backend user's Codex login, so reconnecting also
+changes that CLI's account. Existing CLI authentication continues to work.
+Device-code login may require enabling device-code authorization in ChatGPT
+security settings. A remote container should use device-code login, or complete
+`codex login` in that backend environment with the appropriate port forwarding.
+
+The short response check uses official `codex exec` with a clean configuration,
+read-only sandbox, disabled shell/integrations, and an ephemeral conversation.
+Temporary response files under `runs/web/ai-check/` are deleted after the check.
+Login state is not proof of model access: permissions, network errors, or exhausted
+usage can still prevent a response. App Server is an evolving interface; this
+integration was verified with Codex CLI **0.153.4**. Keep this app a private,
+single-user local service; it is not a multi-user hosted account gateway.
+
+Official references: [App Server](https://learn.chatgpt.com/docs/app-server),
+[authentication and billing modes](https://learn.chatgpt.com/docs/auth), and
+[noninteractive mode](https://developers.openai.com/codex/noninteractive).
+
+When ready, import a video and use **一鍵搜尋成功挑戰** below the player.
+The default search covers the full VOD; the conversation panel allows a narrower
+range. After coarse discovery, Python schedules whole-candidate inspection at
+2-second then 0.5-second intervals, plus 60 samples/second around boundaries and
+model-identified suspicious transitions. The model can request additional ranges.
+This costs more time and model usage than the old 12-round search. Each pass allows
+up to 240 calls, 12,000 frames and two hours; these are workload limits, not cost
+caps. Unfinished results remain uncertain. **接續細查** reuses completed observations
+and continues the saved queue with the original model. Source changes invalidate
+the checkpoint. Sampled images are sent to OpenAI; the source stays local.
+Dense sampling improves the evidence but does not guarantee no missed frames or
+CLI-equivalent judgment. Preview and manual review remain required before export.
+
+Run only the lightweight connection tests with:
+
+```bash
+python -m unittest discover -s tests -p test_codex_connection.py -v
+```
+
+The general web/media test suites generate and process video; they are not part
+of this connection-only check.
 
 ## What It Produces
 

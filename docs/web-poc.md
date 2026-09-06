@@ -2,8 +2,8 @@
 
 This POC implements the first React + FastAPI + Python milestone: import → prepare
 preview → adjust → review → export. It is a local single-user application, not a
-hosted service. Codex CLI can now propose successful-attempt timestamps using
-`gpt-5.6-luna`. Publishing is not implemented, and every proposed clip still requires
+hosted service. Codex CLI can propose successful-attempt timestamps using
+the model selected in the AI sidebar. Publishing is not implemented, and every proposed clip still requires
 human review before export.
 
 ## Run
@@ -80,7 +80,8 @@ The original CLI and Skill remain usable. In an imported project, open **任務 
 to obtain `project_id`, source path, duration, current draft, and Skill instructions.
 Give this local metadata to your existing Agent and have it follow
 `skills/game-vod-boss-clipper/SKILL.md`. This manual JSON handoff does not itself
-invoke a model. The separate Codex panel described below directly invokes the CLI.
+invoke a model. The AI sidebar described below dispatches chat and visual search
+through the shared Codex CLI executor.
 
 Import an Agent JSON result using **匯入 Agent 結果**:
 
@@ -112,16 +113,20 @@ codex login status
 
 This integration was checked with `codex-cli 0.153.4`. It requires support for
 `exec --ignore-user-config`, `--image`, `--json`, and `--output-schema`. Older CLI
-versions may need updating. It always selects **`gpt-5.6-luna`**, with medium
-reasoning. Model access is checked by an actual invocation, not inferred from a
-successful login. Unsupported models or expired login fail visibly; there is no
+versions may need updating. Chat and search use the sidebar model picker. Search
+jobs pin the selected model and its advertised reasoning effort, including retries.
+Image support is checked before queueing; actual invocation still determines model
+access, which is not inferred from a successful login. Unsupported models or expired login fail visibly; there is no
 silent fallback. The CLI's credentials are not copied into the database, sent to
 the browser, or printed. ChatGPT login uses the applicable Codex plan allowance;
 API-key login follows its applicable billing instead.
 
-After preparing a video, select the source-relative start/end in the Codex panel
-and click **開始 Codex 分析**. The default range is the first 30 minutes or the full
-video if shorter. For longer VODs, choose another range to inspect later content.
+After preparing a video, select the source-relative start/end in the AI sidebar
+and click **一鍵搜尋成功挑戰**, or type an explicit search request with a range.
+Both inputs use `/api/codex/chat` and the same validated queue; task progress and
+results appear in the conversation. You can ask about the latest result, cancel
+the search, or manually apply a candidate from the video workspace. The default
+range is the entire video, including VODs longer than 30 minutes.
 Only that selected range is searched; the application never claims a whole-VOD
 search when a smaller interval was selected.
 
@@ -138,21 +143,45 @@ inherited model/provider settings and user-configured integrations, and uses
 CLI-level project/platform instructions and account policies may still apply.
 
 The initial coarse pass covers the selected range before refinement packets.
-Limits are 30 minutes of source per job, 12 CLI invocations, 600 extracted frames,
-20 minutes total scheduling time (an in-flight extraction can add up to its
-120-second timeout), and at most 180 seconds per CLI call. These are workload
-bounds, not guaranteed token or monetary caps. Observations and token usage are
-recorded with the job. Range errors, unsampled evidence times, and invalid clip
-boundaries are rejected. Unresolved requests/budget limits produce an uncertain
-result. Candidates over 60 seconds without full 2–5-second sampling coverage are
-also marked uncertain. This still does not provide frame-level continuity proof.
+Sparse sampling (intervals of at least five seconds) seeks to each target before
+extracting one frame; dense short windows use one sequential pass. Input decoding
+and JPEG encoding use two threads, with one filter thread. Each completed sparse
+frame updates the job progress. Sparse seeks have a 30-second per-frame limit
+within the packet budget; timeouts retain progress and report a readable error.
+See [FFmpeg input seeking](https://ffmpeg.org/ffmpeg.html#Main-options) for the
+accurate-seek behavior. This reduces unnecessary decoding, but performance still
+depends on keyframe spacing, storage speed, and machine load.
+Each pass allows 240 CLI invocations, 12,000 extracted frames and two hours of
+scheduling time. Extraction packets allow up to 180 seconds and CLI calls up to
+300 seconds, within the remaining pass budget. These are workload limits, not
+monetary or token caps. The selected model and its reasoning effort stay pinned.
 
-Results are shown as candidate / not found in samples / uncertain, with summary,
-warnings and timestamped evidence. Clicking evidence seeks the preview. A
-candidate only enters the editor when **套用候選** is clicked, clears the review
-checkbox, and must be saved/reviewed normally. Analysis never overwrites a saved
-draft or triggers export. A not-found result means no win was identified in the
-samples, not proof that the source has no wins.
+After discovery, the host requires whole-candidate checks at 2-second and then
+0.5-second intervals, including postroll, for short and long candidates alike.
+Start and victory each receive a +/-2-second window at 60 samples/second. The model
+can request arbitrary additional ranges and reports suspicious death/reset windows;
+those windows receive 60 samples/second regardless of the requested interval.
+These samples may repeat source frames when the source FPS is lower. This is not
+full-VOD frame-level validation and visual judgment can still miss events.
+
+A changed start or victory replans mandatory checks. Invalid requests, pending
+packets, incomplete density coverage and unresolved suspicious windows cannot
+produce an accepted candidate. Evidence must reference actual sampled timestamps.
+Per-round atomic checkpoints retain the queue, observations, usage and source
+identity. Stopping, a failed call or reaching the pass budget allows **接續細查**;
+completed observations are reused, while the interrupted packet is retried. A
+source or model-setting change invalidates the checkpoint. Legacy jobs without
+checkpoints restart when retried. A completed uncertain result with no pending
+checks requires a new search or additional user context.
+
+The video dock shows real stages and sampling density without moving the playhead.
+The timeline displays sampled coverage (which is not proof of success), evidence,
+compact candidate switches, and start/victory/end handles. Quick review buttons
+play the opening, victory or postroll and stop at that preview boundary. New
+candidates may select an untouched, unreviewed initial draft but never interrupt
+playback or replace edits made during the search. Export still requires manual
+review. A not-found result means no win was identified in the samples, not proof
+that the source has no wins.
 
 **Data flow:** full source video stays local, but selected sampled images, the
 Skill prompt, and observations are sent through Codex to OpenAI. Local cancellation
@@ -175,7 +204,7 @@ FastAPI (one local process)
         └── one media worker process at a time
                 ├── yt-dlp source acquisition
                 ├── FFmpeg preview and batch thumbnail extraction
-                ├── Codex CLI visual review (gpt-5.6-luna, opt-in per job)
+                ├── Shared Codex runtime (chat + explicitly requested visual review)
                 └── existing Python clip_video() + output verification
 ```
 
@@ -232,3 +261,20 @@ Boss victory. This consumes the signed-in account's applicable model usage:
 ```bash
 GAME_VOD_LIVE_CODEX_TEST=1 uv run --extra web --extra test python -m unittest discover -s tests -p test_codex_analysis.py -k test_live_codex -v
 ```
+
+
+### Compact review and per-video reset
+
+The default editor shows the video, one zoomable range track and export in the
+same view. Analysis details, numeric controls, exports and the conversation are
+collapsed. Browser tests assert that the video and range/export controls fit without
+scrolling at desktop 1440×900 and mobile 390×844.
+
+`POST /api/projects/{project_id}/reset-analysis` joins cancellation of the selected
+project's analysis workers, removes only their `codex/` artifacts and job logs, then
+atomically deletes analysis job records and resets the draft. It increments draft
+revision and `analysis_generation`. Source, preview, thumbnails, exports and other
+projects survive. A shared lock with search scheduling plus generation validation
+prevents an in-flight search request from resurrecting cleared work. The browser
+remounts the editor, invalidates cached drafts and excludes old editing context.
+Reset does not start a new analysis; the user can change the request and search again.

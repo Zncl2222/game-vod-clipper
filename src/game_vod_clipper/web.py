@@ -7,9 +7,8 @@ import json
 import logging
 import os
 import re
-import shutil
 import signal
-import subprocess
+import shutil
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -25,6 +24,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .web_store import Store
+from .codex_connection import CodexConnection, ConnectionError, MODEL
+from .codex_chat import ChatRequest, chat
+from .candidates import project_candidates
 
 ACTIVE = {"queued", "running"}
 EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
@@ -50,10 +52,22 @@ class ExportRequest(BaseModel):
     revision: int = Field(ge=0)
 
 
+class CandidateReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    candidate_id: str = Field(min_length=1, max_length=200)
+    review: Literal["pending", "keep", "reject"]
+    analysis_generation: int = Field(ge=0)
+
+
+class CodexLoginRequest(BaseModel):
+    method: Literal["chatgpt", "chatgptDeviceCode"] = "chatgptDeviceCode"
+
+
 class AnalysisRequest(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
     start: float = Field(ge=0)
     end: float = Field(gt=0)
+    model: str = Field(default=MODEL, min_length=1, max_length=120)
 
 
 def youtube_url(value: str) -> str:
@@ -113,6 +127,7 @@ class Jobs:
             "created": time.time(),
             "draft": draft,
             "analysis": analysis,
+            "model": analysis.get("model", MODEL) if analysis else None,
             "error": None,
         }
         self.store.put("jobs", job)
@@ -126,7 +141,7 @@ class Jobs:
         log = self.store.root / "runs" / "web" / f"{job_id}.log"
         try:
             async with self.limit:
-                self.store.patch("jobs", job_id, status="running")
+                self.store.patch("jobs", job_id, status="running", started_at=time.time())
                 with log.open("wb") as output:
                     process = await asyncio.create_subprocess_exec(
                         sys.executable,
@@ -144,6 +159,7 @@ class Jobs:
                     "jobs",
                     job_id,
                     status="succeeded" if code == 0 else "failed",
+                    finished_at=time.time(),
                     error=job.get("error")
                     if code == 0 or job.get("error")
                     else "處理失敗，請查看 runs/web/ 下的任務日誌。",
@@ -161,10 +177,10 @@ class Jobs:
                 except ProcessLookupError:
                     pass
                 await process.wait()
-            self.store.patch("jobs", job_id, status="cancelled", stage="已取消")
+            self.store.patch("jobs", job_id, status="cancelled", stage="已取消", finished_at=time.time())
         except Exception as exc:
             logger.exception("Media job %s failed", job_id)
-            self.store.patch("jobs", job_id, status="failed", error=str(exc))
+            self.store.patch("jobs", job_id, status="failed", error=str(exc), finished_at=time.time())
 
     async def close(self):
         tasks = list(self.tasks.values())
@@ -177,19 +193,28 @@ def create_app(root: Path | None = None) -> FastAPI:
     root = (root or Path(os.environ.get("GAME_VOD_ROOT", "."))).resolve()
     store = Store(root)
     jobs = Jobs(store)
+    codex = CodexConnection(root)
+    analysis_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(app):
         for job in store.all("jobs"):
             if job["status"] in ACTIVE:
                 store.patch(
-                    "jobs", job["id"], status="interrupted", stage="服務重啟，請重試"
+                    "jobs", job["id"], status="interrupted", stage="服務重啟，請重試", finished_at=time.time()
                 )
         yield
         await jobs.close()
+        await codex.close()
 
     app = FastAPI(title="BossCut local POC", lifespan=lifespan)
     app.state.store = store
+    app.state.codex = codex
+
+    @app.exception_handler(ConnectionError)
+    async def codex_error(request, error):
+        return JSONResponse({"detail": str(error)}, status_code=503)
+
     hosts = ["localhost", "127.0.0.1", "[::1]", "testserver"]
     hosts += [h for h in os.environ.get("GAME_VOD_ALLOWED_HOSTS", "").split(",") if h]
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
@@ -231,53 +256,112 @@ def create_app(root: Path | None = None) -> FastAPI:
         return state()
 
     @app.get("/api/codex")
-    def codex_status():
-        executable = shutil.which("codex")
-        if not executable:
-            return {
-                "available": False,
-                "model": "gpt-5.6-luna",
-                "detail": "後端環境尚未安裝 Codex CLI。",
-            }
-        try:
-            status = subprocess.run(
-                [executable, "login", "status"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            logged_in = status.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            logged_in = False
-        return {
-            "available": logged_in,
-            "model": "gpt-5.6-luna",
-            "detail": "使用現有 Codex CLI 登入狀態；模型權限將於執行時確認。"
-            if logged_in
-            else "請先在後端環境執行 codex login。",
-        }
+    async def codex_status():
+        return await codex.status()
+
+    @app.post("/api/codex/login")
+    async def codex_login(body: CodexLoginRequest):
+        return await codex.begin_login(body.method)
+
+    @app.post("/api/codex/login/cancel")
+    async def codex_cancel_login():
+        return await codex.cancel_login()
+
+    @app.post("/api/codex/test")
+    async def codex_test():
+        return await codex.probe()
+
+    @app.get("/api/codex/models")
+    async def codex_models():
+        return {"models": await codex.models()}
+
+    async def enqueue_analysis(project_id: str, body: AnalysisRequest, request_id: str, resume_job: dict | None = None, expected_generation: int | None = None):
+        project = get("projects", project_id)
+        generation = project.get("analysis_generation", 0) if expected_generation is None else expected_generation
+        if not project["ready"]:
+            raise HTTPException(409, "請先完成影片預覽。")
+        if not body.start < body.end <= project["duration"]:
+            raise HTTPException(422, "分析範圍須位於原片內。")
+        status = await codex.status()
+        if not status["available"]:
+            raise ConnectionError(status["detail"])
+        selected = next((m for m in await codex.models() if m["id"] == body.model), None)
+        if not selected or "image" not in selected.get("input_modalities", []):
+            raise ConnectionError("所選模型不支援畫面判讀，請在同一模型選單選擇支援影像的模型。")
+        async with analysis_lock:
+            if get("projects", project_id).get("analysis_generation", 0) != generation:
+                raise HTTPException(409, "影片分析已重置，請重新搜尋。")
+            if resume_job and not store.get("jobs", resume_job["id"]):
+                raise HTTPException(409, "舊分析已清除，請重新搜尋。")
+            current = store.all("jobs")
+            duplicate = next((j for j in current if j["project_id"] == project_id and
+                              (j.get("analysis") or {}).get("request_id") == request_id), None)
+            if duplicate:
+                return duplicate
+            if any(j["project_id"] == project_id and j["kind"] == "analyze" and j["status"] in ACTIVE for j in current):
+                raise HTTPException(409, "此影片已有搜尋任務，請先等待完成或取消。")
+            if sum(j["status"] in ACTIVE for j in current) >= 8:
+                raise HTTPException(429, "任務佇列已滿。")
+            return jobs.submit(project_id, "analyze", analysis={**body.model_dump(),
+                "effort": resume_job["analysis"].get("effort") if resume_job else selected.get("effort"),
+                "request_id": request_id, **({"resume_from": resume_job["id"]} if resume_job else {})})
+
+    @app.post("/api/codex/chat")
+    async def codex_chat(body: ChatRequest):
+        project = get("projects", body.context.project_id) if body.context else None
+        if project:
+            all_jobs = store.all("jobs")
+            latest = next((j for j in all_jobs if j["project_id"] == project["id"] and j["kind"] == "analyze"), None)
+            project = {**project, "candidates": project_candidates(project, all_jobs)}
+            project = {**project, "latest_search": ({k: latest.get(k) for k in
+                ("id", "status", "stage", "model", "frames", "rounds", "result", "error")} if latest else None)}
+
+        async def dispatch():
+            result = await chat(codex, body, project)
+            action = result.get("action")
+            if action and action["kind"] == "search":
+                if project is None:
+                    raise ConnectionError("請先選擇影片。")
+                job = await enqueue_analysis(project["id"], AnalysisRequest(
+                    start=action["start"], end=action["end"], model=body.model), body.request_id,
+                    expected_generation=body.context.analysis_generation)
+                result = {**result, "action": None, "job_id": job["id"],
+                          "reply": "已建立成功挑戰搜尋任務。進度與結果會顯示在這段對話下方，你也可以繼續提問。"}
+            elif action and action["kind"] == "cancel_search" and project:
+                if get("projects", project["id"]).get("analysis_generation", 0) != body.context.analysis_generation:
+                    raise HTTPException(409, "影片分析已重置，舊操作已忽略。")
+                running = next((j for j in store.all("jobs") if j["project_id"] == project["id"]
+                                and j["kind"] == "analyze" and j["status"] in ACTIVE), None)
+                if running:
+                    await cancel(running["id"])
+                result = {**result, "action": None,
+                          "reply": "已取消目前影片的搜尋任務。" if running else "目前影片沒有進行中的搜尋任務。"}
+            return result
+
+        async def stream():
+            task = asyncio.create_task(dispatch())
+            try:
+                yield json.dumps({"type": "waiting"}) + "\n"
+                while not task.done():
+                    await asyncio.wait({task}, timeout=5)
+                    if not task.done():
+                        yield json.dumps({"type": "waiting"}) + "\n"
+                yield json.dumps({"type": "reply", **task.result()}, ensure_ascii=False) + "\n"
+            except ConnectionError as error:
+                yield json.dumps({"type": "error", "detail": str(error)}, ensure_ascii=False) + "\n"
+            except HTTPException as error:
+                yield json.dumps({"type": "error", "detail": error.detail}, ensure_ascii=False) + "\n"
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+        return StreamingResponse(stream(), media_type="application/x-ndjson",
+                                 headers={"X-Accel-Buffering": "no"})
 
     @app.post("/api/projects/{project_id}/analyze", status_code=202)
     async def analyze(project_id: str, body: AnalysisRequest):
-        project = get("projects", project_id)
-        if not project["ready"]:
-            raise HTTPException(409, "請先完成影片預覽。")
-        if (
-            not body.start < body.end <= project["duration"]
-            or body.end - body.start > 1800
-        ):
-            raise HTTPException(422, "分析範圍須位於原片內，且每次最多 30 分鐘。")
-        if any(
-            j["project_id"] == project_id
-            and j["kind"] == "analyze"
-            and j["status"] in ACTIVE
-            for j in store.all("jobs")
-        ):
-            raise HTTPException(409, "此影片已有 Codex 分析任務。")
-        if len([j for j in store.all("jobs") if j["status"] in ACTIVE]) >= 8:
-            raise HTTPException(429, "任務佇列已滿。")
-        return jobs.submit(project_id, "analyze", analysis=body.model_dump())
+        # Compatibility route: same validation, model selection and queue.
+        return public_job(await enqueue_analysis(project_id, body, uuid4().hex))
 
     @app.get("/api/events")
     async def events(request: Request):
@@ -346,6 +430,19 @@ def create_app(root: Path | None = None) -> FastAPI:
             "job": jobs.submit(project["id"], "prepare"),
         }
 
+    @app.put("/api/projects/{project_id}/candidate-review")
+    async def review_candidate(project_id: str, body: CandidateReviewRequest):
+        project = get("projects", project_id)
+        if body.analysis_generation != project.get("analysis_generation", 0):
+            raise HTTPException(409, "影片分析已重置，請重新選取片段。")
+        if not any(c["id"] == body.candidate_id for c in project_candidates(project, store.all("jobs"))):
+            raise HTTPException(404, "找不到這個影片的候選片段。")
+        try:
+            store.set_candidate_review(project_id, body.candidate_id, body.review, body.analysis_generation)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+        return {"candidate_id": body.candidate_id, "review": body.review}
+
     @app.put("/api/projects/{project_id}/draft")
     async def save_draft(project_id: str, body: Draft):
         project = get("projects", project_id)
@@ -400,8 +497,17 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.post("/api/jobs/{job_id}/retry", status_code=202)
     async def retry(job_id: str):
         job = get("jobs", job_id)
-        if job["status"] not in {"failed", "cancelled", "interrupted"}:
+        if job["status"] not in {"failed", "cancelled", "interrupted"} and not (
+            job["kind"] == "analyze" and job["status"] == "succeeded"
+            and (job.get("result") or {}).get("can_continue")
+        ):
             raise HTTPException(409, "此任務不需要重試。")
+        if job["kind"] == "analyze":
+            bounds = job["analysis"]
+            checkpoint = store.root / "runs" / "web" / job["project_id"] / "codex" / job["id"] / "checkpoint.json"
+            return public_job(await enqueue_analysis(job["project_id"], AnalysisRequest(
+                start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL)), uuid4().hex,
+                resume_job=job if checkpoint.is_file() else None))
         if any(
             j["project_id"] == job["project_id"] and j["status"] in ACTIVE
             for j in store.all("jobs")
@@ -414,6 +520,33 @@ def create_app(root: Path | None = None) -> FastAPI:
         return jobs.submit(
             job["project_id"], job["kind"], job.get("draft"), job.get("analysis")
         )
+
+    @app.post("/api/projects/{project_id}/reset-analysis")
+    async def reset_analysis(project_id: str):
+        async with analysis_lock:
+            project = get("projects", project_id)
+            if not project.get("ready"):
+                raise HTTPException(409, "請先完成影片預覽。")
+            analysis_jobs = [j for j in store.all("jobs")
+                             if j["project_id"] == project_id and j["kind"] == "analyze"]
+            # Join worker cancellation before removing any checkpoint or database row.
+            for job in analysis_jobs:
+                await cancel(job["id"])
+            work = root / "runs" / "web"
+            artifacts = work / project_id / "codex"
+            if artifacts.is_symlink() or not artifacts.resolve().is_relative_to(work.resolve()):
+                raise HTTPException(409, "分析目錄位置異常，未清除資料。")
+            try:
+                if artifacts.exists():
+                    await asyncio.to_thread(shutil.rmtree, artifacts)
+                for job in analysis_jobs:
+                    log = work / f"{job['id']}.log"
+                    if log.parent.resolve() != work.resolve():
+                        raise OSError("Unexpected log location")
+                    log.unlink(missing_ok=True)
+            except OSError as exc:
+                raise HTTPException(500, "分析檔案清理未完成，請重試重置。") from exc
+            return {"project": public_project(store.reset_analysis(project_id))}
 
     @app.get("/api/projects/{project_id}/media/{filename}")
     async def media(project_id: str, filename: str):
@@ -464,4 +597,6 @@ def main():
     )
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    uvicorn.run(create_app(), host="127.0.0.1", port=args.port)
+    # Persistent event streams must not leave an old server hanging on restart.
+    uvicorn.run(create_app(), host="127.0.0.1", port=args.port,
+                timeout_graceful_shutdown=5)

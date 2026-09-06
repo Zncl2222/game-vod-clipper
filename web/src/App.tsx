@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import CodexPanel from "./CodexPanel";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import BossReviewDock from "./BossReviewDock";
+import ClipWorkspace, { candidates } from "./ClipWorkspace";
+import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./ChatPanel";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -29,6 +31,8 @@ import {
   api,
   media,
   time,
+  reviewCandidates,
+  type NumberedCandidate,
   type Draft,
   type Job,
   type Project,
@@ -44,6 +48,10 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [modal, setModal] = useState(false);
   const [error, setError] = useState("");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [editorContext, setEditorContext] = useState<EditorContext | null>(null);
+  const editorChat = useRef<EditorChatHandle>(null);
+  const aiChat = useRef<ChatHandle>(null);
   useEffect(() => {
     const stream = new EventSource("/api/events");
     stream.onmessage = (event) => {
@@ -60,6 +68,7 @@ export default function App() {
     localStorage.setItem("bosscut:selected", id);
   }
   const projectJobs = state.jobs.filter((j) => j.project_id === project?.id);
+  const mediaJobs = projectJobs.filter((job) => job.kind !== "analyze");
   async function action(job: Job, command: "cancel" | "retry") {
     try {
       await api(`/jobs/${job.id}/${command}`, "POST");
@@ -69,7 +78,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${chatOpen ? "chat-is-open" : ""} ${project?.ready ? "has-editor" : ""}`}>
       <aside className="sidebar">
         <a className="brand" href="/" aria-label="BossCut 首頁">
           <span className="brand-icon">
@@ -223,9 +232,18 @@ export default function App() {
             </div>
           ) : project.ready ? (
             <Editor
-              key={project.id}
+              key={`${project.id}:${project.analysis_generation ?? 0}`}
+              onReset={async () => {
+                const result = await api<{ project: Project }>(`/projects/${project.id}/reset-analysis`, "POST");
+                localStorage.removeItem(`bosscut:draft:${project.id}`);
+                setState(previous => ({ projects: previous.projects.map(p => p.id === result.project.id ? result.project : p),
+                  jobs: previous.jobs.filter(j => j.project_id !== result.project.id || j.kind !== "analyze") }));
+              }}
               project={project}
               jobs={projectJobs}
+              chatRef={editorChat}
+              onSearch={async () => { await aiChat.current?.search(); }}
+              onContext={setEditorContext}
               onError={setError}
             />
           ) : (
@@ -239,14 +257,16 @@ export default function App() {
               <small>長影片需要較多時間，可以離開此頁，稍後回來查看。</small>
             </div>
           )}
-          {projectJobs.length > 0 && (
+          {mediaJobs.length > 0 && (
+            <details className="workspace-details jobs-details" open={mediaJobs.some(active) || undefined}>
+            <summary><Clock3 size={16} /> 處理紀錄 <span>{mediaJobs.length} 項</span></summary>
             <section className="jobs-panel">
               <div className="section-title">
                 <Clock3 size={16} />
                 <h2>處理紀錄</h2>
                 <span>關閉分頁後，背景工作仍會繼續</span>
               </div>
-              {projectJobs.map((job) => (
+              {mediaJobs.map((job) => (
                 <div key={job.id} className="job-row">
                   <div
                     className={`job-symbol ${job.status === "succeeded" ? "success" : ""}`}
@@ -263,9 +283,7 @@ export default function App() {
                     <strong>
                       {job.kind === "prepare"
                         ? "準備預覽"
-                        : job.kind === "analyze"
-                          ? "Codex 分析 · gpt-5.6-luna"
-                          : `匯出剪輯 · 版本 ${job.draft?.revision}`}
+                        : `匯出剪輯 · 版本 ${job.draft?.revision}`}
                     </strong>
                     <small>
                       {job.error ||
@@ -280,8 +298,8 @@ export default function App() {
                   </div>
                   {active(job) && (
                     <>
-                      <div className="progress-track">
-                        <div style={{ width: `${job.progress}%` }} />
+                      <div className={`progress-track ${job.kind === "analyze" ? "analysis-track is-running" : ""}`}>
+                        <div style={job.kind === "analyze" ? undefined : { width: `${job.progress}%` }} />
                       </div>
                       <button
                         className="text-button"
@@ -315,13 +333,24 @@ export default function App() {
                 </div>
               ))}
             </section>
+            </details>
           )}
           <footer>
             為完整的 Boss 勝利而設計。
-            <span>POC · Codex CLI / gpt-5.6-luna · 分析結果仍需人工確認</span>
+            <span>搜尋與聊天共用 AI · 候選結果仍需人工確認</span>
           </footer>
         </main>
       </div>
+      <ChatPanel
+        jobs={projectJobs}
+        searchRef={aiChat}
+        onSearchError={(message) => { setError(message); setChatOpen(true); }}
+        open={chatOpen}
+        onToggle={() => setChatOpen((value) => !value)}
+        context={project?.ready ? (editorContext?.project_id === project.id && (editorContext.analysis_generation ?? 0) === (project.analysis_generation ?? 0)
+          ? editorContext : { project_id: project.id, title: project.title, duration: project.duration!, draft: project.draft!, analysis_generation: project.analysis_generation ?? 0 }) : null}
+        onAction={(action, expected) => editorChat.current?.apply(action, expected) ?? "影片已切換，未套用操作。"}
+      />
       {modal && (
         <ImportModal
           onClose={() => setModal(false)}
@@ -475,10 +504,18 @@ function Editor({
   project,
   jobs,
   onError,
+  chatRef,
+  onContext,
+  onSearch,
+  onReset,
 }: {
   project: Project;
   jobs: Job[];
   onError: (message: string) => void;
+  chatRef: Ref<EditorChatHandle>;
+  onSearch: () => Promise<void>;
+  onReset: () => Promise<void>;
+  onContext: (context: EditorContext) => void;
 }) {
   const duration = project.duration!;
   const [draft, setDraft] = useState<Draft>(() => {
@@ -493,12 +530,27 @@ function Editor({
       return project.draft!;
     }
   });
+  const [selectedClip, setSelectedClip] = useState<string | null>(() => draft.origin === "agent"
+    ? candidates(project, jobs).find(j => j.result!.start === draft.start && j.result!.victory === draft.victory && j.result!.postroll === draft.postroll)?.id ?? null : null);
+  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const seenCandidates = useRef(new Set<string>());
+  const candidateBaseline = useRef<string | null>(!draft.reviewed && draft.revision === 0 && JSON.stringify(draft) === JSON.stringify(project.draft) ? JSON.stringify(draft) : null);
   const [current, setCurrent] = useState(0);
   const [busy, setBusy] = useState(false);
   const [savedMessage, setSavedMessage] = useState("");
   const video = useRef<HTMLVideoElement>(null);
   const stopAt = useRef<number | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  const [aiFeedback, setAiFeedback] = useState<{ text: string; fields: string[]; id: number } | null>(null);
+  const feedbackSequence = useRef(0);
+  useEffect(() => {
+    if (!aiFeedback) return;
+    const timer = window.setTimeout(() => setAiFeedback(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [aiFeedback]);
+  function markAI(text: string, fields: string[]) {
+    setAiFeedback({ text, fields, id: ++feedbackSequence.current });
+  }
   const end = draft.victory + draft.postroll;
   const valid =
     [draft.start, draft.victory, draft.postroll].every(Number.isFinite) &&
@@ -511,7 +563,43 @@ function Editor({
   useEffect(() => {
     localStorage.setItem(`bosscut:draft:${project.id}`, JSON.stringify(draft));
   }, [draft, project.id]);
+  useEffect(() => {
+    onContext({ project_id: project.id, title: project.title, duration, draft, analysis_generation: project.analysis_generation ?? 0 });
+  }, [draft, project.id, project.title, onContext]);
+  useImperativeHandle(chatRef, () => ({
+    apply(action, expected) {
+      if ((expected.analysis_generation ?? 0) !== (project.analysis_generation ?? 0)) return "影片已重置，未套用舊操作。";
+      if (expected.project_id !== project.id) return "影片已切換，未套用操作。";
+      if (action.kind === "select_candidate") {
+        const segment = reviewCandidates(project, jobs).find(c => c.id === action.candidate_id);
+        if (!segment) return "候選片段已不存在，請重新選取。";
+        selectSegment(segment);
+        markAI(`已選取片段 #${segment.number}，可在時間軸預覽與核對`, ["seek"]);
+        return `已選取 #${segment.number} · ${time(segment.start)}–${time(segment.end)}`;
+      }
+      if (action.kind === "seek") {
+        if (action.seconds === null || !Number.isFinite(action.seconds) || action.seconds < 0 || action.seconds > duration) return "時間無效，未跳轉。";
+        seek(action.seconds);
+        markAI(`AI 已將預覽定位到 ${time(action.seconds)}`, ["seek"]);
+        return `已跳到 ${time(action.seconds)}`;
+      }
+      if (JSON.stringify(expected.draft) !== JSON.stringify(draft)) return "你已修改草稿，未覆蓋新的設定。請再送出一次需求。";
+      const { start, victory, postroll } = action;
+      if (start === null || victory === null || postroll === null ||
+          ![start, victory, postroll].every(Number.isFinite) || start < 0 || start >= victory ||
+          postroll < 5 || postroll > 10 || victory + postroll > duration) return "時間範圍無效，未修改草稿。";
+      change({ start, victory, postroll, origin: "agent" });
+      markAI("AI 已更新剪輯設定，變動欄位已標示", [
+        ...(start !== draft.start ? ["start"] : []),
+        ...(victory !== draft.victory ? ["victory"] : []),
+        ...(postroll !== draft.postroll ? ["postroll"] : []),
+      ]);
+      return `已更新草稿 · ${time(start)} → ${time(victory)} · 收尾 ${postroll} 秒`;
+    },
+  }));
   function change(values: Partial<Draft>) {
+    setAiFeedback(null);
+    setSelectedClip(null);
     setDraft((d) => ({ ...d, ...values, reviewed: false }));
     setSavedMessage("");
   }
@@ -613,12 +701,36 @@ function Editor({
       onError((e as Error).message);
     }
   }
-  const zoomStart = Math.max(0, draft.start - 10);
-  const zoomEnd = Math.min(duration, Math.max(end + 10, zoomStart + 1));
+  const searchingId = jobs.find(j => j.kind === "analyze" && active(j))?.id;
+  useEffect(() => {
+    if (searchingId) candidateBaseline.current = draft.reviewed ? null : JSON.stringify(draft);
+  }, [searchingId]);
+  function selectClip(job: Job, navigate = true) {
+    if (!candidates(project, [job]).length) return;
+    const result = job.result!;
+    if (navigate) video.current?.pause();
+    setDraft(d => ({ ...d, start: result.start!, victory: result.victory!, postroll: result.postroll, origin: "agent", reviewed: false }));
+    setSelectedClip(job.id);
+    setSavedMessage("");
+    if (navigate) seek(result.start!);
+    markAI("候選片段已放入時間軸，可直接預覽與拖曳調整。", ["start", "victory", "postroll"]);
+  }
+  function selectSegment(segment: NumberedCandidate) {
+    video.current?.pause();
+    setSelectedSegment(segment.id);
+    seek(segment.start);
+  }
+  useEffect(() => {
+    const candidate = candidates(project, jobs)[0];
+    if (!candidate || seenCandidates.current.has(candidate.id)) return;
+    seenCandidates.current.add(candidate.id);
+    if (candidateBaseline.current === JSON.stringify(draft) && !draft.reviewed) selectClip(candidate, false);
+  }, [jobs, project.id]);
   return (
     <>
+      {aiFeedback && <div className="ai-editor-feedback" role="status" key={aiFeedback.id}><Sparkles size={14} />{aiFeedback.text}</div>}
       <div className="editor-grid">
-        <section className="preview-panel">
+        <section aria-label="影片與選取範圍" className={`preview-panel ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
           <div className="panel-heading">
             <span>
               <Film size={16} />
@@ -690,6 +802,43 @@ function Editor({
               <option value="2">2×</option>
             </select>
           </div>
+          <BossReviewDock jobs={jobs} onSearch={onSearch} onReset={onReset} onError={onError} />
+          <ClipWorkspace project={project} jobs={jobs} draft={draft} selected={selectedClip}
+            selectedSegment={selectedSegment} onSelectSegment={selectSegment} onError={onError}
+            onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current} />
+          <div className="compact-export">            <label className="review-checkbox">
+              <input
+                type="checkbox"
+                checked={draft.reviewed}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, reviewed: e.target.checked }))
+                }
+              />
+              <span>
+                我已完整看過：只有成功挑戰，包含勝利。
+              </span>
+            </label>
+            <button
+              className="primary export-button"
+              disabled={
+                !valid ||
+                !draft.reviewed ||
+                busy ||
+                jobs.some((j) => j.kind === "export" && active(j))
+              }
+              onClick={() => save(true)}
+            >
+              {busy ? (
+                <LoaderCircle size={16} className="spin" />
+              ) : (
+                <ArrowDownToLine size={16} />
+              )}
+              匯出 MP4
+            </button>
+            <p className="export-help">原片重新編碼 · 保留原始音訊內容</p>
+          </div>
+        </section>
+        <details className="editor-settings workspace-details"><summary>精確時間與手動調整</summary>
           <div className="quick-actions">
             <button
               onClick={() =>
@@ -723,7 +872,6 @@ function Editor({
               播放結尾
             </button>
           </div>
-        </section>
         <aside className="inspector">
           <div className="inspector-heading">
             <Scissors size={17} />
@@ -749,6 +897,7 @@ function Editor({
             <div className="number-field">
               <input
                 id="start"
+                className={aiFeedback?.fields.includes("start") ? "ai-target" : undefined}
                 type="number"
                 min="0"
                 max={duration}
@@ -768,6 +917,7 @@ function Editor({
             <div className="number-field">
               <input
                 id="victory"
+                className={aiFeedback?.fields.includes("victory") ? "ai-target" : undefined}
                 type="number"
                 min="0"
                 max={duration}
@@ -785,7 +935,7 @@ function Editor({
             </label>
             <input
               id="postroll"
-              className="postroll"
+              className={`postroll ${aiFeedback?.fields.includes("postroll") ? "ai-target" : ""}`}
               type="range"
               min="5"
               max="10"
@@ -807,137 +957,8 @@ function Editor({
                 請讓開始早於勝利，並確保收尾未超出原片。
               </p>
             )}
-            <label className="review-checkbox">
-              <input
-                type="checkbox"
-                checked={draft.reviewed}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, reviewed: e.target.checked }))
-                }
-              />
-              <span>
-                我已完整檢查這次成功挑戰，確認沒有死亡、讀取、重試或跑圖，並包含勝利畫面。
-              </span>
-            </label>
-            <button
-              className="primary export-button"
-              disabled={
-                !valid ||
-                !draft.reviewed ||
-                busy ||
-                jobs.some((j) => j.kind === "export" && active(j))
-              }
-              onClick={() => save(true)}
-            >
-              {busy ? (
-                <LoaderCircle size={16} className="spin" />
-              ) : (
-                <ArrowDownToLine size={16} />
-              )}
-              匯出 MP4
-            </button>
-            <p className="export-help">原片重新編碼 · 保留原始音訊內容</p>
           </div>
         </aside>
-        <section className="timeline-panel">
-          <div className="section-title">
-            <Clapperboard size={16} />
-            <h2>時間軸</h2>
-            <span>點選縮圖定位，再調整成功挑戰範圍</span>
-            <span className="timeline-count">
-              {project.thumbnails.length} 張預覽
-            </span>
-          </div>
-          <div className="filmstrip">
-            {project.thumbnails.map((t) => (
-              <button
-                key={t.file}
-                onClick={() => seek(t.time)}
-                title={time(t.time)}
-              >
-                <img
-                  src={media(project, t.file)}
-                  alt={`影片 ${time(t.time)}`}
-                  loading="lazy"
-                />
-                <span>{time(t.time)}</span>
-              </button>
-            ))}
-          </div>
-          <div className="overview">
-            <div
-              className="selection"
-              style={{
-                left: `${Math.min(100, (draft.start / duration) * 100)}%`,
-                width: `${(Math.max(0, Math.min(duration, end) - draft.start) / duration) * 100}%`,
-              }}
-            />
-            <input
-              aria-label="全片播放位置"
-              type="range"
-              min="0"
-              max={duration}
-              step="0.033333"
-              value={current}
-              onChange={(e) => seek(Number(e.target.value))}
-            />
-          </div>
-          <div className="range-labels">
-            <span>00:00:00</span>
-            <span>{time(duration / 2)}</span>
-            <span>{time(duration)}</span>
-          </div>
-          <div className="trim-controls">
-            <label htmlFor="trim-start">
-              <span className="marker start" />
-              開始
-            </label>
-            <input
-              id="trim-start"
-              type="range"
-              min="0"
-              max={Math.max(0, draft.victory - 0.033)}
-              step="0.033333"
-              value={draft.start}
-              onChange={(e) => change({ start: Number(e.target.value) })}
-            />
-            <span className="mono">{time(draft.start)}</span>
-            <label htmlFor="trim-victory">
-              <span className="marker victory" />
-              勝利
-            </label>
-            <input
-              id="trim-victory"
-              className="gold-range"
-              type="range"
-              min={Math.min(duration - draft.postroll, draft.start + 0.033)}
-              max={Math.max(0, duration - draft.postroll)}
-              step="0.033333"
-              value={draft.victory}
-              onChange={(e) => change({ victory: Number(e.target.value) })}
-            />
-            <span className="mono">{time(draft.victory)}</span>
-          </div>
-          {valid && (
-            <div className="zoom-row">
-              <span>片段細調</span>
-              <input
-                aria-label="片段細調位置"
-                type="range"
-                min={zoomStart}
-                max={zoomEnd}
-                step="0.033333"
-                value={Math.max(zoomStart, Math.min(zoomEnd, current))}
-                onChange={(e) => seek(Number(e.target.value))}
-              />
-              <button
-                className="text-button"
-                onClick={() => playRange(draft.start, end)}
-              >
-                播放選取範圍
-              </button>
-            </div>
-          )}
           <div className="timeline-footer">
             <span>
               <span className="tiny-dot" />
@@ -964,25 +985,10 @@ function Editor({
               儲存草稿
             </button>
           </div>
-        </section>
+        </details>
       </div>
-      <CodexPanel
-        project={project}
-        jobs={jobs}
-        onError={onError}
-        onApply={(result) => {
-          if (result.start !== null && result.victory !== null) {
-            change({
-              start: result.start,
-              victory: result.victory,
-              postroll: result.postroll,
-              origin: "agent",
-            });
-            seek(result.start);
-          }
-        }}
-        onSeek={seek}
-      />
+      <details className="workspace-details">
+      <summary><FileJson size={16} /> 進階 Agent 匯入／匯出</summary>
       <div className="agent-strip">
         <div className="agent-icon">
           <Sparkles size={20} />
@@ -1019,6 +1025,7 @@ function Editor({
           }}
         />
       </div>
+      </details>
     </>
   );
 }

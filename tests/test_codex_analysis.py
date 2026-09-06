@@ -4,16 +4,21 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, AsyncMock, patch
 
 try:
     from fastapi.testclient import TestClient
 
     from game_vod_clipper.codex_analysis import (
         MODEL,
+        AnalysisProgress,
+        invoke_codex,
         packets,
         run_analysis,
         validate_observation,
@@ -38,6 +43,118 @@ def observation(**changes):
         "evidence": [],
         "sample_requests": [],
     } | changes
+
+
+@unittest.skipUnless(AVAILABLE, "Install web/test extras")
+class CodexStreamingTest(unittest.TestCase):
+    def test_analysis_passes_selected_model_to_shared_executor(self):
+        with patch("game_vod_clipper.codex_analysis.execute",
+                   return_value={"reply": "{}", "usage": {}}) as execute:
+            invoke_codex(self.work, [], "metadata only", 10, model="picked", effort="low")
+        self.assertEqual(execute.call_args.kwargs["model"], "picked")
+        self.assertEqual(execute.call_args.kwargs["effort"], "low")
+        self.assertIn("schema", execute.call_args.kwargs)
+
+    def setUp(self):
+        runs = Path(__file__).resolve().parents[1] / "runs"
+        runs.mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(prefix="codex-stream-test-", dir=runs)
+        self.work = Path(self.temp.name)
+        self.script = self.work / "fake_codex.py"
+        self.script.write_text('''
+import json, pathlib, sys, time
+mode, result = sys.argv[1], pathlib.Path(sys.argv[2])
+print('{"type":"thread.started"}', flush=True)
+sys.stderr.write("diagnostic " * 20000)
+sys.stderr.flush()
+if mode == "timeout":
+    time.sleep(10)
+    sys.exit(1)
+if mode == "failed":
+    print('{"type":"turn.failed","error":{"message":"fixture failure"}}', flush=True)
+    sys.exit(2)
+deadline = time.monotonic() + 4
+while not (result.parent / "continue").exists():
+    if time.monotonic() > deadline:
+        sys.exit(3)
+    time.sleep(0.02)
+print('not json')
+print('[]')
+sys.stdout.write('{"type":"item.')
+sys.stdout.flush()
+time.sleep(0.25)
+print('completed","item":{"type":"reasoning","text":"private reasoning"}}', flush=True)
+result.write_text('{"status":"not_found"}')
+sys.stdout.write('{"type":"turn.completed","usage":{"input_tokens":12}}')
+sys.stdout.flush()
+''', encoding="utf-8")
+        self.processes = []
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def invoke(self, mode, callback, timeout=5):
+        real_popen = subprocess.Popen
+
+        def fake_popen(args, **kwargs):
+            process = real_popen(
+                [sys.executable, "-u", str(self.script), mode, args[args.index("-o") + 1]],
+                **kwargs,
+            )
+            self.processes.append(process)
+            return process
+
+        with patch("game_vod_clipper.codex_runtime.shutil.which", return_value=sys.executable), patch(
+            "game_vod_clipper.codex_runtime.subprocess.Popen", side_effect=fake_popen
+        ):
+            return invoke_codex(self.work, [], "fixture prompt" * 20000, timeout, on_event=callback)
+
+    def test_events_arrive_before_exit_and_partial_lines_are_preserved(self):
+        received = []
+
+        def update(event):
+            received.append(event)
+            if event["type"] == "thread.started":
+                self.assertIsNone(self.processes[0].poll())
+                (self.work / "continue").touch()
+
+        result, usage = self.invoke("success", update)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(usage, {"input_tokens": 12})
+        self.assertEqual([e["type"] for e in received], ["thread.started", "item.completed", "turn.completed"])
+        self.assertIn("item.completed", (self.work / "events.jsonl").read_text())
+        self.assertGreater((self.work / "diagnostics.log").stat().st_size, 100000)
+
+    def test_timeout_kills_process_and_preserves_partial_logs(self):
+        with self.assertRaisesRegex(RuntimeError, "已停止"):
+            self.invoke("timeout", lambda event: None, timeout=0.4)
+        self.assertIsNotNone(self.processes[0].poll())
+        self.assertIn("thread.started", (self.work / "events.jsonl").read_text())
+
+    def test_failure_is_not_reported_as_a_result(self):
+        (self.work / "response.json").write_text('{"stale":true}')
+        with self.assertRaisesRegex(RuntimeError, "呼叫失敗"):
+            self.invoke("failed", lambda event: None)
+        self.assertFalse((self.work / "response.json").exists())
+
+    def test_heartbeat_is_distinct_from_activity_and_stops_on_exit(self):
+        store = Store(self.work)
+        store.put("jobs", {"id": "analysis"})
+        with patch("game_vod_clipper.codex_analysis.HEARTBEAT_INTERVAL", 0.02):
+            with AnalysisProgress(store, "analysis") as progress:
+                progress.codex_event({"type": "item.completed", "item": {"type": "reasoning", "text": "private reasoning"}})
+                initial = store.get("jobs", "analysis")
+                deadline = time.monotonic() + 2
+                while store.get("jobs", "analysis")["heartbeat_at"] <= initial["heartbeat_at"]:
+                    self.assertLess(time.monotonic(), deadline)
+                    threading.Event().wait(0.01)
+                current = store.get("jobs", "analysis")
+                self.assertEqual(current["last_activity_at"], initial["last_activity_at"])
+                self.assertNotIn("private reasoning", json.dumps(current))
+                for index in range(20):
+                    progress.report("extracting", f"packet {index}")
+                self.assertEqual(len(store.get("jobs", "analysis")["activity"]), 12)
+            self.assertFalse(progress.thread.is_alive())
 
 
 @unittest.skipUnless(
@@ -113,7 +230,7 @@ class CodexAnalysisTest(unittest.TestCase):
                     observation(status="candidate", **values), 0, 16, 16
                 )
         with self.assertRaises(ValueError):
-            packets(0, 100, 0.01)
+            packets(0, 100, 0.00001)
         with self.assertRaises(ValueError):
             packets(0, 100, float("inf"))
         self.assertEqual(len(packets(0, 1800, 30)), 2)
@@ -158,9 +275,14 @@ class CodexAnalysisTest(unittest.TestCase):
         )
 
     def test_api_validates_range_and_queues_exact_model_job(self):
-        # A mocked queue keeps the regular test suite free of paid model calls.
+        # A mocked connection and queue avoid paid model calls.
+        app = create_app(self.root)
+        app.state.codex.status = AsyncMock(return_value={"available": True})
+        app.state.codex.models = AsyncMock(return_value=[{
+            "id": MODEL, "effort": "medium", "input_modalities": ["text", "image"]
+        }])
         with (
-            TestClient(create_app(self.root)) as client,
+            TestClient(app) as client,
             patch(
                 "game_vod_clipper.web.Jobs.submit", return_value={"id": "queued"}
             ) as submit,
@@ -183,7 +305,8 @@ class CodexAnalysisTest(unittest.TestCase):
                 202,
             )
             submit.assert_called_once_with(
-                "synthetic", "analyze", analysis={"start": 0.0, "end": 16.0}
+                "synthetic", "analyze", analysis={"start": 0.0, "end": 16.0,
+                    "model": MODEL, "effort": "medium", "request_id": ANY}
             )
 
     @unittest.skipUnless(
