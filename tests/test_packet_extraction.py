@@ -48,6 +48,15 @@ class PacketExtractionTest(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertEqual(manifest['timestamps'], [10, 11, 12])
 
+    def test_overview_has_clear_detail_anchors_without_extra_sampling(self):
+        with patch('game_vod_clipper.codex_analysis.subprocess.run', side_effect=self.fake_run) as run:
+            images, manifest = extract_packet(Path('unopened.mp4'), self.work, (10, 29, 1))
+        self.assertEqual(run.call_count, 1)
+        self.assertIn('scale=1920:-2', run.call_args.args[0][run.call_args.args[0].index('-vf') + 1])
+        self.assertEqual(len(manifest['timestamps']), 20)
+        self.assertEqual([p.name for p in images], ['sheet-00.jpg', 'sheet-01.jpg',
+            'detail-001.jpg', 'detail-011.jpg', 'detail-020.jpg'])
+
     def test_timeout_reports_completed_frames_without_command_dump(self):
         def slow(args, **kwargs):
             if args[-1].endswith('002.jpg'):

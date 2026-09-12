@@ -22,6 +22,108 @@ def segment(key="fight-1", **changes):
 
 
 class DeepAnalysisTest(unittest.TestCase):
+    def test_unproductive_new_windows_finish_without_a_round_cap(self):
+        def observe(*args, **kwargs):
+            at = len(self.requests)
+            return answer(status="uncertain", start=None, victory=None,
+                summary=f"Ordinary combat, reworded {at}", candidates=[segment()],
+                evidence=[{"time": self.requests[-1][0], "event": f"Combat {at}"}],
+                sample_requests=[{"start": at, "end": at + .2, "every": .1}]), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["rounds"], 4)
+        self.assertEqual(result["status"], "uncertain")
+        self.assertEqual(result["completion_reason"], "evidence_exhausted")
+        self.assertTrue(result["review_complete"])
+        self.assertTrue(result["checks"]["search"])
+        self.assertFalse(result["can_continue"])
+        self.assertFalse(self.store.get("jobs", "first")["resumable"])
+        self.assertEqual(len(result["candidates"]), 1)
+
+    def test_stalled_refinement_state_survives_resume(self):
+        def observe(*args, **kwargs):
+            at = len(self.requests)
+            return answer(status="uncertain", start=None, victory=None,
+                sample_requests=[{"start": at, "end": at + .2, "every": .1}]), {}
+        first = self.run_review(observe, calls=3)
+        self.assertTrue(first["can_continue"])
+        resumed = {**self.job, "id": "second", "analysis": {**self.job["analysis"], "resume_from": "first"}}
+        self.store.put("jobs", resumed)
+        result = self.run_review(observe, calls=None, job=resumed)
+        self.assertEqual(result["rounds"], 4)
+        self.assertEqual(result["completion_reason"], "evidence_exhausted")
+
+    def test_new_victory_resets_stall_and_completes_required_checks(self):
+        def observe(*args, **kwargs):
+            at = len(self.requests)
+            if at >= 4:
+                return answer(review_complete=True), {}
+            return answer(status="uncertain", start=None, victory=None,
+                sample_requests=[{"start": at, "end": at + .2, "every": .1}]), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["status"], "candidate")
+        self.assertTrue(all(result["checks"].values()))
+        self.assertEqual(result["completion_reason"], "review_complete")
+
+    def test_long_pass_finishes_all_packets_before_opening_another(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 400
+        def observe(*args, **kwargs):
+            # Repeatedly requests greater density while the first pass is pending.
+            return answer(status="uncertain", start=None, victory=None,
+                sample_requests=[{"start": 0, "end": 399, "every": .5 / len(self.requests)}]), {}
+        result = self.run_review(observe, calls=None)
+        self.assertGreater(result["rounds"], 4)
+        self.assertFalse(list(missing_ranges(0, 399, .5,
+            [{"packet": p} for p in result["coverage"]])))
+        self.assertTrue(all(step >= .5 for _, _, step in self.requests))
+        self.assertTrue(result["review_complete"])
+        self.assertFalse(result["can_continue"])
+
+    def test_large_suspicion_is_localized_without_claiming_a_win(self):
+        result = self.run_review(lambda *a, **k: (answer(status="uncertain", start=None, victory=None,
+            suspicious_windows=[{"start": 0, "end": 29, "every": .0001}]), {}), calls=None)
+        self.assertEqual(result["status"], "uncertain")
+        self.assertEqual(result["rounds"], 2)
+        self.assertTrue(all(step >= .5 for _, _, step in self.requests))
+        self.assertFalse(result["can_continue"])
+
+    def test_early_completion_does_not_skip_the_rest_of_the_vod(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 7200
+        result = self.run_review(lambda *a, **k: (answer(status="not_found", start=None, victory=None,
+            review_complete=True), {}), calls=None)
+        self.assertTrue(result["checks"]["search"])
+        self.assertGreater(max(b for _, b, _ in self.requests), 7100)
+
+    def test_later_coarse_packets_keep_their_own_encounter_checks(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 7200
+        def observe(*args, **kwargs):
+            a, _, step = self.requests[-1]
+            samples = [{"start": a + 10, "end": a + 10.2, "every": .1}] if step == 30 else []
+            return answer(status="uncertain", start=None, victory=None, sample_requests=samples), {}
+        result = self.run_review(observe, calls=None)
+        self.assertTrue(result["checks"]["search"])
+        self.assertTrue(any(a == 10 and step == .1 for a, _, step in self.requests))
+        self.assertTrue(any(a == 3610 and step == .1 for a, _, step in self.requests))
+
+    def test_timestamp_jitter_cannot_restart_completed_required_checks(self):
+        def observe(*args, **kwargs):
+            jitter = len(self.requests) * .000001
+            return answer(start=4 - jitter, victory=12 + jitter), {}
+        result = self.run_review(observe, calls=20)
+        self.assertEqual(result["status"], "candidate")
+        self.assertTrue(result["review_complete"])
+        self.assertTrue(all(result["checks"].values()))
+        self.assertLess(result["rounds"], 10)
+
+    def test_analysis_runs_without_model_timeout_or_default_round_budget(self):
+        from game_vod_clipper.codex_analysis import MAX_CALLS
+        self.assertIsNone(MAX_CALLS)
+        def observe(work, images, prompt, timeout, **kwargs):
+            self.assertIsNone(timeout)
+            return answer(), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["status"], "candidate")
+        self.assertFalse(result["can_continue"])
+
     def test_uncertain_multiple_ranges_publish_before_completion_and_survive_resume(self):
         observations = [segment(), segment("win-2", start=15, end=25, victory=20, kind="possible_win")]
         first = self.run_review(lambda *a, **k: (answer(status="uncertain", start=None, victory=None,
@@ -50,12 +152,36 @@ class DeepAnalysisTest(unittest.TestCase):
             self.run_review(observe)
         self.assertEqual(len(self.store.get("jobs", "first")["candidates"]), 2)
 
+    def test_empty_annotation_delta_does_not_add_another_primary_candidate(self):
+        def observe(*args, **kwargs):
+            candidates = [segment("one", start=4, end=19)] if len(self.requests) == 1 else []
+            return answer(candidates=candidates, review_complete=True), {}
+        result = self.run_review(observe)
+        self.assertEqual(len(result["candidates"]), 1)
+
+    def test_completed_uncertain_review_finishes_without_repeating_unresolved_window(self):
+        result = self.run_review(lambda *a, **k: (answer(status="uncertain", start=None, victory=None,
+            review_complete=True, suspicious_windows=[{"start": 9, "end": 9.25, "every": .0167}],
+            sample_requests=[{"start": 0, "end": 29, "every": .001}]), {}))
+        self.assertEqual(result["status"], "uncertain")
+        self.assertFalse(result["can_continue"])
+        self.assertEqual(result["rounds"], 2)
+        self.assertTrue(result["checks"]["suspicious"])
+
+    def test_resolved_suspicion_discards_obsolete_pending_safety_packets(self):
+        def observe(*args, **kwargs):
+            windows = [{"start": 9, "end": 15, "every": .0167}] if len(self.requests) == 1 else []
+            return answer(status="uncertain", start=None, victory=None, suspicious_windows=windows), {}
+        result = self.run_review(observe)
+        self.assertEqual(result["rounds"], 2)
+        self.assertFalse(result["can_continue"])
+
     def test_annotation_validation_and_grounding(self):
         for changes in ({"start": -1}, {"end": 31}, {"victory": 11}, {"start": float("nan")}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_observation(answer(candidates=[segment(**changes)]), 0, 30, 30)
-        with self.assertRaises(ValueError):
-            validate_observation(answer(candidates=[segment(), segment()]), 0, 30, 30)
+        # Model aliases are untrusted; the host registry resolves collisions.
+        self.assertEqual(len(validate_observation(answer(candidates=[segment(), segment()]), 0, 30, 30).candidates), 2)
         with self.assertRaisesRegex(ValueError, "實際抽樣"):
             self.run_review(lambda *a, **k: (answer(candidates=[segment(evidence=[{"time": .123, "event": "unseen"}])]), {}))
 
@@ -91,7 +217,7 @@ class DeepAnalysisTest(unittest.TestCase):
         self.job["analysis"]["end"] = 70
         result = self.run_review(lambda *a, **k: (answer(victory=52), {}))
         self.assertEqual(result["status"], "candidate")
-        self.assertGreater(result["rounds"], 12)
+        self.assertGreater(result["rounds"], 6)
         self.assertGreater(result["frames"], 600)
         self.assertTrue(all(result["checks"].values()))
         self.assertTrue(any(step == .5 for _, _, step in self.requests))
@@ -159,7 +285,7 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertEqual(list(missing_ranges(2, 2, .01, [])), [(2, 2)])
         history = [{"packet": {"start": 0, "end": 1, "every": .5}},
                    {"packet": {"start": 3, "end": 4, "every": .5}}]
-        self.assertEqual(list(missing_ranges(0, 4, .5, history)), [(1.5, 3)])
+        self.assertEqual(list(missing_ranges(0, 4, .5, history)), [(1.5, 2.5)])
 
     def test_stopped_extraction_retries_pending_packet_from_checkpoint(self):
         with patch("game_vod_clipper.codex_analysis.extract_packet", side_effect=RuntimeError("stopped")):

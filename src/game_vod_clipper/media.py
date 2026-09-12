@@ -148,7 +148,7 @@ def create_contact_sheet(
     columns: int = 5,
     rows: int = 4,
     width: int = 320,
-) -> Path:
+) -> list[Path]:
     ffmpeg = resolve_tool_command("ffmpeg")
     if columns <= 0 or rows <= 0 or width <= 0:
         raise ValueError("columns, rows, and width must be positive")
@@ -160,6 +160,15 @@ def create_contact_sheet(
         raise FileNotFoundError(f"no JPG frames found in: {frame_dir}")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    capacity = columns * rows
+    count = (len(frames) + capacity - 1) // capacity
+    pages = [output_path] if count == 1 else [
+        output_path.with_name(f"{output_path.stem}-page-{i + 1:03d}{output_path.suffix}")
+        for i in range(count)
+    ]
+    pattern = output_path if count == 1 else output_path.with_name(
+        f"{output_path.stem}-page-%03d{output_path.suffix}"
+    )
     run_command(
         ffmpeg
         + [
@@ -174,11 +183,20 @@ def create_contact_sheet(
             "-vf",
             f"scale={width}:-1,tile={columns}x{rows}",
             "-frames:v",
-            "1",
-            str(output_path),
+            str(count),
+            str(pattern),
         ]
     )
-    return output_path
+    if any(not page.is_file() or not page.stat().st_size for page in pages):
+        raise RuntimeError("Contact sheet generation did not produce all expected pages")
+    # The ordered page manifest makes omissions observable to the reviewing agent.
+    manifest = {"frame_count": len(frames), "page_count": count, "pages": [
+        {"path": str(page), "first_frame": i * capacity,
+         "frames": [str(frame) for frame in frames[i * capacity:(i + 1) * capacity]]}
+        for i, page in enumerate(pages)
+    ]}
+    output_path.with_suffix(".json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return pages
 
 
 def clip_video(

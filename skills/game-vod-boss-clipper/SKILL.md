@@ -1,182 +1,221 @@
 ---
 name: game-vod-boss-clipper
-description: Use this skill whenever the user provides a YouTube or local game livestream VOD and wants a boss fight, boss win, successful attempt, victory clip, Elden Ring/Dark Souls boss kill, or similar gameplay moment clipped. This skill guides Claude Code, Codex, OpenCode, and similar coding agents through using the repository CLI to download, sample, visually inspect, and cut only the successful boss attempt with a small clean lead-in when available, excluding failed attempts, death screens, loading screens, respawns, and runback footage while keeping 5-10 seconds after victory.
-compatibility: Requires the game-vod-clipper CLI, yt-dlp through the project or uv tool install, and a trusted ffmpeg binary on PATH.
+description: Find and clip successful boss attempts from YouTube or local game livestream VODs, including Elden Ring and Dark Souls boss wins. Use the repository CLI to sample, visually verify, and export a continuous winning attempt with 5-10 seconds after victory, excluding earlier failures and runbacks.
+metadata:
+  compatibility: Requires the game-vod-clipper CLI, yt-dlp through the project or uv tool install, and a trusted ffmpeg binary on PATH.
 ---
 
 # Game VOD Boss Clipper
 
-Use this skill to turn a long game livestream VOD into a precise clip of the user's successful boss fight attempt. The Python CLI performs deterministic media operations; you provide the visual judgment.
+Find useful encounters, verify the successful attempt, and finish with a clip or a
+clear evidence-limited result. The CLI handles media; you provide visual judgment.
+In the interactive editor the host handles extraction, checkpoints and export;
+return observations instead of running the CLI setup or downloading again.
 
 ## Core Rules
 
-- Clip only the successful boss attempt.
-- Do not include earlier failed attempts, `YOU DIED` screens, death fades, post-death loading screens, respawns, or runback footage.
-- When a clean lead-in exists, preserve a little context before combat: entering the boss arena, crossing the fog gate, stepping into the boss room, the boss title/name reveal, the approach inside the arena, or a brief readying moment before the first exchange. This lead-in is valuable, but it must still be part of the same successful attempt and must not include death, loading after death, respawn, retry UI, menuing, or runback context.
-- A clip is invalid if any point after the chosen start shows player death, a red death/failure overlay, a death fade, a black loading/transition caused by failure, retry UI, respawn context, or combat from an attempt that fails before the victory.
-- Treat the combination of the player character collapsing or lying prone, the whole screen shifting red or heavily tinted, and any loading-like fade/cut as a high-confidence death or failure signal even when there is no explicit `YOU DIED` text. Do not dismiss it as a generic combat effect unless dense inspection clearly proves the attempt continues without reset. Fast deaths can be followed by a very short black/loading screen and immediate arena reset; sparse thumbnails can easily miss this.
-- After choosing a candidate range, inspect it at frame-level or near-frame-level density before cutting. Do not rely only on 2-5 second thumbnails for the final decision; dense inspection must rule out single-frame or short death/failure records hidden between sampled thumbnails.
-- If a dense inspection finds any death/failure frame inside the candidate, discard everything before and during that failure. Restart from the first clean frame after the failure, retry UI, respawn, runback, or reset context has fully ended.
-- Treat a boss HP bar that disappears and later returns with higher health as a retry/death warning until inspection proves otherwise.
-- Include the boss victory moment and 5-10 seconds after it.
+- Clip only one continuous successful boss attempt, with a small clean arena-entry
+  lead-in when available. Do not reduce it to the last hits if the full attempt is visible.
+- Do not include earlier failed attempts, `YOU DIED`, death fades, post-death loading,
+  respawns, retry UI, menuing, or runback footage.
+- Any death/failure inside a proposed clip invalidates its start. Move it past that
+  failure AND its loading, respawn and runback, to the next attempt's clean entry.
+- A collapsing/prone player together with red tint and a loading-like fade is a
+  strong failure signal even without death text. Inspect its local sequence;
+  do not explain it away as a combat effect without evidence of continuity.
+- A boss HP bar disappearing and returning with higher health requires checking
+  for retry versus a same-attempt phase change. Unresolved resets block acceptance.
+- Include visible victory and 5-10 seconds after it; both must fit the source.
 - Keep generated media under `downloads/`, `runs/`, or `clips/`.
 - Do not upload, redistribute, or expose the source video.
-- Prefer accurate re-encoded cuts. Use stream copy only when the user explicitly asks for speed.
+- Prefer accurate re-encoded cuts; use stream copy only if the user requests speed.
 
-## Setup
+## Review Progress and Stopping
 
-If the CLI is installed globally, use `game-vod-clipper` directly. If you are working from this repository without a global install, use `uv run game-vod-clipper` from the repository root.
+Keep one review ledger under `runs/` (or use the editor's checkpoint). Record the
+source and requested bounds, viewed pages/packets with interval and timestamps,
+encounters with stable IDs, unresolved questions, and pending checks. Extracting a
+page does not mean it has been viewed: open every page before recording it as seen.
+Read existing coverage before extracting anything else. Reuse it after resuming.
 
-For source checkouts, install project-managed Python tools:
+Every additional inspection must answer a named missing fact: which encounter,
+whether the enemy was defeated, whether a reset occurred, or where the attempt
+starts/ends. Record the question and the observed answer. Ordinary combat frames,
+reworded summaries, and timestamp jitter alone are not new findings.
 
-```bash
-uv sync
-```
+Use a finite progression: coarse search, candidate localization, whole-attempt
+continuity, then short targeted detail checks. Use intervals such as 30/60/90,
+5/10/15, 2, 0.5 seconds, then 0.1 seconds or native frames for a specific transition.
+Do not repeatedly shave tiny amounts off an interval or split already seen frames
+into new packets. Do not request an entire fight or VOD at native frame density.
+For detail windows longer than 12 seconds, first localize the event at 0.5 seconds,
+then inspect the relevant short transition. At native density there are no extra
+frames to discover by sampling more densely.
 
-Install FFmpeg from a trusted source and make sure `ffmpeg` is on `PATH`:
+Complete each requested refinement pass before opening another. If three completed
+extra passes change no encounter, victory/failure decision, or meaningful boundary,
+stop adding exploratory work. Finish the pending pass and required checks, retain
+useful candidates, and conclude uncertain. Do not impose a whole-VOD round cap that
+silently leaves the end unsearched; coarse and required checks are useful progress.
 
-- Linux: use official distro packages such as Debian/Ubuntu `apt install ffmpeg`.
-- macOS: use Homebrew `brew install ffmpeg`.
-- Windows: use `winget install ffmpeg` or `winget install "FFmpeg (Essentials Build)"`.
-- Source/manual builds: use sources or binary providers linked from `https://ffmpeg.org/download.html`; verify PGP signatures or SHA-256 checksums where available.
+Finish when all of these hold:
 
-Do not install FFmpeg from random Python packages or unverified binary mirrors.
+1. Every coarse page in the requested range has been viewed. Every plausible
+   encounter has a disposition: verified winner, failed/non-target, or uncertain
+   with the specific missing evidence. A missing range remains incomplete.
+2. The chosen attempt has whole-range continuity coverage and its opening,
+   victory/postroll and suspicious transitions have been checked. If evidence
+   cannot resolve a question after local detail and surrounding context, mark it
+   uncertain; do not search unrelated combat to force a winner.
+3. No useful unseen check remains. Report the outcome and end the turn. Do not
+   restart discovery, reopen unchanged pages, or rerun completed validation.
 
-Verify tools:
+In the editor, set `review_complete=true` and `sample_requests=[]` when evidence is
+sufficient or exhausted. Keep unresolved `suspicious_windows` and warnings; the
+host still completes coarse coverage and required checks. Completion is separate
+from accepting a win. Report actual sampling coverage, never claim every source
+frame was watched unless it was. If interrupted, report the remaining ranges.
+
+## Provisional Review Annotations
+
+Publish plausible timestamped encounters as they appear, even before verification.
+Include approximate start/end, kind (possible win, fight, death/retry, unknown),
+confidence, observed evidence and what needs checking. Keep victory unknown when
+unseen. Never invent segments to meet a count.
+
+Track encounters, not sampling packets. Update the same encounter's existing ID
+when boundaries or interpretation change. In the editor copy host-assigned short
+IDs exactly; use a new temporary label only for a new encounter. Return only new
+or changed annotations and explicitly identify superseded hypotheses. Keep other
+encounters and death/retry evidence visible. These are playable review ranges;
+uncertain annotations are not accepted winning clips.
+
+## Setup and Source
+
+Use `game-vod-clipper` if installed, or `uv run game-vod-clipper` from this checkout.
+For a checkout run `uv sync` once if dependencies are missing. Use FFmpeg from a
+trusted source: official distro packages, Homebrew, winget, or providers linked
+from https://ffmpeg.org/download.html with available signature/checksum validation.
+Do not install random Python FFmpeg binaries or unverified mirrors.
 
 ```bash
 game-vod-clipper check
 ```
 
-If this fails because `ffmpeg` is missing, stop and report that FFmpeg must be installed from a trusted source before media work can proceed.
-
-## Workflow
-
-### Provisional Review Annotations
-
-When supporting an interactive editor, publish multiple plausible timestamped
-segments as soon as they are observed. Give each a stable ID, approximate start
-and end, an event type (possible victory, fight, death/retry, or unknown), confidence,
-and a short explanation of what needs checking. Keep distinct attempts separate
-and retain earlier segments while inspecting later packets. Unknown victory times
-must remain unknown. Do not invent segments to meet a minimum count.
-
-Uncertainty or incomplete dense review must not hide these annotations: users
-can select and preview source ranges to check them. These annotations are not
-accepted winning clips. Apply the core continuity and 5–10 second postroll rules
-when accepting and exporting the final clip.
-
-### 1. Get The Video
-
-If the user provided a YouTube URL, download it:
+If trusted FFmpeg is missing, stop and report the setup blocker. Otherwise reuse an
+existing source or download the provided YouTube URL once, then probe its duration:
 
 ```bash
 game-vod-clipper download "https://www.youtube.com/watch?v=..."
-```
-
-If the user provided a local file, use that path directly.
-
-Probe the duration:
-
-```bash
 game-vod-clipper probe "downloads/video.mp4"
 ```
 
-### 2. Coarse Search
+A provided local file is used directly. Restrict discovery to the user's requested
+range, or the whole source if no range was given. Do not seek exactly at EOF.
 
-Sample wide ranges first. Start with 30-90 second intervals depending on VOD length:
+## 1. Coarse Search
+
+Sample the requested range at 30-90 second intervals (short clips need a smaller
+interval). Substitute actual source bounds in these examples:
 
 ```bash
-game-vod-clipper sample "downloads/video.mp4" --start 00:00:00 --end 03:00:00 --every 60 -o runs/coarse
+game-vod-clipper sample "downloads/video.mp4" --start 00:00:00 --end 02:59:59 --every 60 -o runs/coarse
 game-vod-clipper sheet runs/coarse -o runs/coarse.jpg
 ```
 
-Look for fog gates, boss title cards, arena transitions, large boss HP bars, phase changes, reward text, achievements, rune/soul gains, and celebration behavior.
+`sheet` prints ALL page paths plus a JSON manifest. When more than one page is
+needed it writes `coarse-page-001.jpg`, etc.; `coarse.json` lists every page and
+its ordered frames. Open every listed page exactly once. Use `samples.json` to map
+cells back to source timestamps. Check the viewed page/frame counts against the
+manifest before marking this range covered. Never look at only the first page of
+a long VOD. An unreadable cell calls for its existing full-resolution frame first,
+not another extraction of the same time.
 
-Do not conclude from the first coarse sheet too quickly. Build a short candidate list across the whole VOD before narrowing down:
+Collect boss HUD/name, fog gates, arena fights, reward/achievement UI, deaths and
+retries across the whole range. Preserve earlier plausible encounters instead of
+choosing only the latest or loudest fight. Prioritize cues described by the user.
 
-- Mark every timestamp that shows a boss-like HUD, large centered enemy HP bar/name, arena combat, victory/reward UI, death/loading screen, or retry context.
-- Keep earlier candidates until you have inspected them at fine resolution. A later, louder-looking fight may be a different encounter or a later retry, not necessarily the successful boss attempt.
-- If the user described a visual cue such as a centered boss name/extra HP bar, prioritize candidates that match that cue even if a later combat segment looks more dramatic.
+## 2. Resolve Useful Encounters
 
-### 3. Fine Search
-
-For each candidate boss range, sample at 5-15 second intervals:
+For each plausible encounter, inspect its fight ending and surrounding context at
+5-15 second intervals; then focus on its victory/reset and successful-attempt start.
+This is more useful than repeatedly sampling ordinary middle-of-fight action.
 
 ```bash
 game-vod-clipper sample "downloads/video.mp4" --start 01:20:00 --end 01:35:00 --every 10 -o runs/boss-candidate
 game-vod-clipper sheet runs/boss-candidate -o runs/boss-candidate.jpg --columns 6 --rows 5
 ```
 
-For each fine sheet, track the boss HP bar over time instead of only looking for the final victory frame:
+A victory can be shown by defeat text, enemy death/surrender plus rewards,
+achievement or other clear game-specific outcome. Read small reward counters,
+boss labels and subtitles at full resolution. Distinguish the player from the
+enemy. A missing HP bar, ordinary damage numbers or a nearby NPC alone is not a win.
 
-- Do not rely on only the candidate's first and last frames. For any candidate longer than 60 seconds, sample the whole candidate at 2-5 second intervals before cutting.
-- If any sampled frame shows the player dying, lying collapsed/prone while the screen is red-tinted, a red failure overlay, a fade to black, loading, retry/respawn UI, or a sudden return to an earlier arena state, the candidate contains a failed attempt. Move the start to after that failure context and inspect again.
-- If a boss HP bar disappears and later reappears with more health, full health, or a clearly higher amount than the previous fine samples, treat it as a likely death/retry, phase reset, or cut to a different attempt.
-- When HP increases unexpectedly, sample the gap at 1-3 second intervals and inspect for death text, player collapse, fade to black, loading, respawn, menuing, runback, or a new arena entry.
-- Do not include frames before an HP reset in the final clip unless the reset is clearly an intentional phase transition within the same successful attempt.
-- If multiple attempts are present, keep moving forward attempt by attempt and choose the start of the last attempt that leads continuously to the victory.
-- If a candidate contains a death screen before the victory, keep moving forward until you find the winning attempt's real start.
-- Before accepting a candidate range, inspect the whole proposed range at frame-level or near-frame-level density. For 60 FPS footage, use about `--every 0.0167` when feasible, or split the range into smaller chunks and inspect high-density sheets. If full frame-level extraction is too large, use the densest practical interval plus targeted frame-level inspection around every red flash, HP depletion, black frame, cut, knockdown, UI change, or boss HP disappearance.
-- Any red failure overlay, player collapse, prone player body combined with red tint, death/failure subtitle, loading transition, retry UI, or respawn context found during dense inspection invalidates the current start timestamp even if sparse thumbnails missed it.
+Track HP and attempt continuity across the range. Localize any reset, collapse,
+red failure overlay, black/loading frame or cut; inspect the suspicious sequence
+and its context at native density if needed. Separate failed attempts from the
+one leading to victory. Keep uncertain cases with an explanation instead of
+revisiting them indefinitely. Select the verified winner matching the user's
+request; preserve other useful encounters in the report/editor.
 
-### 4. Pick Clip Boundaries
+## 3. Verify Boundaries and Continuity
 
-Choose the start after the latest prior failure context, with a small clean lead-in when possible:
+Choose the winning attempt's clean arena entry, fog crossing, boss reveal or brief
+readying moment before combat. Exclude all earlier failure/runback context. If the
+candidate begins mid-fight, inspect earlier context once to find the real start.
+If the available source begins mid-fight, disclose that limitation.
 
-- Best starts: a few seconds before the winning attempt's first meaningful combat action, while the player is cleanly entering the boss arena, crossing fog, stepping into the boss room, approaching the boss inside the arena, or seeing the boss title/name reveal.
-- Good fallback starts: the first clean frame after death/loading/respawn/runback context has fully ended, even if that means starting close to the first exchange.
-- Bad starts: death screen, respawn, loading after death, elevator/runback, menuing before retry, or previous failed attempt combat.
-- Also bad starts: travel back to the arena after a death, objective markers/distance prompts that clearly indicate runback, post-death tutorial or retry UI, or any clip lead-in that begins before the failed attempt has fully cleared.
-- Also bad starts: any combat before a boss HP reset that indicates a failed attempt. If the boss HP later jumps upward, move the start to after the reset and after any respawn/runback context.
-- If death or failure appears anywhere inside a draft clip, the start is wrong even if the clip eventually reaches victory. Regenerate from the first clean frame of the attempt after that failure.
-- Do not over-trim to the final phase or last hits if a safe same-attempt lead-in is available. The goal is a complete successful boss fight clip, not just the kill shot.
+Inspect the whole proposed attempt including postroll at 2-second intervals, then
+fill missing coverage at 0.5 seconds. Inspect short windows around the start and
+victory (roughly two seconds on either side) and each suspicious transition at
+native or near-native frame density (about `--every 0.0167` for 60 FPS footage).
+A completed denser pass covers the coarser requirement; reuse those observations.
+This is sampling, not proof that every source frame is clean. Unresolved failure
+signals prevent accepting the candidate even when coverage is complete.
 
-Choose the end at the victory moment:
+If a failure changes the start, retain already viewed coverage and inspect only
+new boundaries/gaps. Trust user corrections about death/loading and invalidate the
+old clip. Do not repeat a whole successful-attempt review because the start moved.
 
-- Examples: `Enemy Felled`, `Great Enemy Felled`, `Legend Felled`, `Remembrance`, souls/runes gained, achievement popup, boss death animation completion, or equivalent victory UI.
-- Use `--postroll` between 5 and 10 seconds so the final clip preserves reward and reaction context.
+## 4. Cut The Clip
 
-### 5. Cut The Clip
-
-Set `--end` to the victory moment. The CLI adds postroll:
+Only export a verified continuous win; the interactive editor also requires its
+existing user review step. Set `--end` to the victory moment; the CLI adds postroll:
 
 ```bash
 game-vod-clipper clip "downloads/video.mp4" --start 01:23:42 --end 01:31:18 --postroll 8 -o clips/boss-win.mp4
 ```
 
-### 6. Validate The Result
+## 5. Validate The Result
 
-Check the beginning and ending before reporting success:
+Probe the output duration and inspect its opening and ending, mapping output times
+back to the already reviewed source range. Confirm clean entry, visible victory
+and 5-10 seconds of postroll. Reuse source continuity evidence for this re-encoded
+continuous range; do not extract and review the entire fight a second time.
 
 ```bash
-game-vod-clipper sample clips/boss-win.mp4 --start 0 --end 20 --every 5 -o runs/final-start-check
 game-vod-clipper probe clips/boss-win.mp4
+game-vod-clipper sample clips/boss-win.mp4 --start 0 --end 15 --every 5 -o runs/final-start-check
 ```
 
-Also inspect the final seconds by sampling near the clip duration. If the beginning includes failure context, move `--start` later and regenerate. If the ending cuts off reward or reaction context, increase `--postroll` up to 10 seconds or move `--end` later.
-
-Before reporting success, validate continuity inside the clip:
-
-- The opening should show a clean lead-in or clean first combat moment from the successful attempt. It must not show death, loading after death, respawn, retry UI, menuing, or runback context.
-- Sample the full clip densely, not just the opening and ending. Use frame-level or near-frame-level inspection when feasible; otherwise use the densest practical interval and targeted frame-level checks around every suspicious transition, red flash, HP depletion, boss HP disappearance, black frame, UI change, player collapse/prone frame, or knockdown.
-- A 2-5 second continuity sheet is only a coarse validation aid. It is not sufficient by itself when the clip contains fast deaths, red overlays, rapid failures, or multiple attempts.
-- If a red/death-looking segment is followed by black/loading frames and then gameplay resumes in the same arena, assume it may be a death and retry, not a victory transition. Inspect the exact sequence at 1 second or denser intervals, then move the start to the first clean gameplay frame after the loading/retry context.
-- If the user points out that a segment is death or loading context, trust that correction and mark the current clip invalid. Regenerate from after the corrected failure context instead of defending the previous interpretation.
-- If the boss HP suddenly increases inside the clip, regenerate from after that reset unless visual inspection proves it is a same-attempt phase transition.
-- If any sampled frame inside the clip shows player death or failure context, the clip is invalid. Move the start after the failure and regenerate.
-- Confirm the clip contains one continuous successful attempt from start to victory, not several retries stitched together by a broad timestamp range.
+Use the actual output duration to sample the last seconds as well. If a concrete
+boundary or encoding defect appears, fix that defect and recheck only the affected
+part. If the same issue remains after two corrections, report the blocker and
+retain the artifacts instead of looping through export and validation.
 
 ## Output Report
 
-When done, report:
+Return the result and stop:
 
-- Final clip path.
-- Source video path.
-- Start timestamp, victory timestamp, and postroll used.
-- Brief validation result: clean lead-in included when available, no prior death/loading/respawn/runback included, no death/failure context inside the clip, no unexplained boss HP reset inside the clip, victory and postroll included.
-- Any blockers, especially missing trusted FFmpeg installation.
+- Verified clip: output/source paths, start, victory, postroll and validation result.
+- Useful candidates: timestamp ranges, observed event, confidence and unresolved
+  question; rejected failures should not be presented as successful clips.
+- Coverage: requested range, viewed pages/packets, sampling intervals and any gaps.
+- Outcome: completed with verified win, completed with no win found in the sampled
+  evidence, completed uncertain, or interrupted/blocked with the remaining work.
 
-## Time Format
+Do not claim an uncertain range is safe to export, a coarse search found every
+possible event, or sampled coverage is full frame-by-frame viewing.
 
-The CLI accepts `SS`, `MM:SS`, and `HH:MM:SS`, including fractional values such as `01:23:45.5`.
+Times accepted by the CLI: `SS`, `MM:SS`, `HH:MM:SS`, including fractions such as
+`01:23:45.5`.

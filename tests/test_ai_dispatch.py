@@ -53,6 +53,16 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(second["model"], "picked")
         self.assertIsNone(text["action"])
 
+    def test_selected_effort_reaches_search_and_retry_without_checkpoint(self):
+        self.codex.models.return_value[0]["supported_efforts"] = ["low", "high"]
+        first = self.request(intent="search", search_start=0, search_end=120, effort="high")
+        job = self.store.get("jobs", first["job_id"])
+        self.assertEqual(job["analysis"]["effort"], "high")
+        self.store.patch("jobs", job["id"], status="failed")
+        retry = self.client.post(f'/api/jobs/{job["id"]}/retry')
+        self.assertEqual(retry.status_code, 202)
+        self.assertEqual(retry.json()["analysis"]["effort"], "high")
+
     def test_repeated_request_is_idempotent_and_other_search_is_rejected(self):
         body = {"intent": "search", "search_start": 0, "search_end": 120, "request_id": "same-request"}
         first = self.request(**body)
@@ -183,6 +193,94 @@ class ResetAnalysisTest(unittest.TestCase):
         self.assertEqual(result["type"], "error")
         self.assertIn("重置", result["detail"])
         self.assertFalse(any(j["project_id"] == "p" and j["kind"] == "analyze" for j in self.store.all("jobs")))
+
+    def test_progress_reset_preserves_edits_candidates_exports_and_other_projects(self):
+        checkpoint = self.prepare_reset()
+        draft = self.store.get("projects", "p")["draft"]
+        queued = self.request(intent="search", search_start=0, search_end=120, request_id="original")
+        old_id = queued["job_id"]
+        candidate = {"id": f"{old_id}:c1", "start": 20, "end": 108, "victory": 100,
+                     "kind": "possible_win", "confidence": "low", "boss": "Boss", "summary": "待核對",
+                     "warnings": [], "evidence": [{"time": 100, "event": "勝利文字"}]}
+        self.store.patch("jobs", old_id, candidates=[candidate], resumable=True,
+                         coverage=[{"start": 0, "end": 120, "every": 5}])
+        self.store.set_candidate_review("p", candidate["id"], "keep", 0)
+        before = self.client.get("/api/state").json()
+        log = self.store.root / f"runs/web/{old_id}.log"
+        log.write_text("old log")
+
+        response = self.client.post('/api/projects/p/reset-analysis-progress')
+        self.assertEqual(response.status_code, 200)
+        project = response.json()["project"]
+        self.assertEqual(project["draft"], draft)
+        self.assertEqual(project["analysis_generation"], 1)
+        self.assertEqual(project["editor_generation"], 0)
+        self.assertEqual(project["candidate_reviews"], {candidate["id"]: "keep"})
+        old_project = next(p for p in before["projects"] if p["id"] == "p")
+        self.assertEqual(project["review_candidates"], old_project["review_candidates"])
+        old_job = self.store.get("jobs", old_id)
+        self.assertEqual(old_job["status"], "cancelled")
+        self.assertTrue(old_job["progress_reset"])
+        self.assertFalse(old_job["resumable"])
+        self.assertEqual(old_job["coverage"], [])
+        self.assertEqual(old_job["candidates"], [candidate])
+        self.assertFalse(checkpoint.exists())
+        self.assertFalse(log.exists())
+        self.assertEqual(self.client.post(f'/api/jobs/{old_id}/retry').status_code, 409)
+        for relative in ("downloads/source.mp4", "clips/export.mp4", "runs/web/p/preview.mp4", "runs/web/p/thumb-001.jpg", "runs/web/other/codex/keep.json"):
+            self.assertEqual((self.store.root / relative).read_bytes(), b"keep")
+        after = self.client.get("/api/state").json()
+        self.assertEqual(next(p for p in after["projects"] if p["id"] == "p"), project)
+        for job_id in ("export", "other-analysis"):
+            self.assertEqual(next(j for j in before["jobs"] if j["id"] == job_id),
+                             next(j for j in after["jobs"] if j["id"] == job_id))
+        self.assertEqual(self.request(intent="search", search_start=0, search_end=120)["type"], "error")
+        fresh = self.request(intent="search", search_start=0, search_end=300, request_id="original",
+            context={"project_id": "p", "analysis_generation": 1,
+                     "draft": {k: draft[k] for k in ("start", "victory", "postroll")}})
+        self.assertNotEqual(fresh["job_id"], old_id)
+        self.assertNotIn("resume_from", self.store.get("jobs", fresh["job_id"])["analysis"])
+
+    def test_completed_progress_reset_hides_previous_search_from_chat(self):
+        self.prepare_reset()
+        self.store.put("jobs", {"id": "completed", "project_id": "p", "kind": "analyze", "status": "succeeded",
+            "result": {"status": "uncertain", "can_continue": True, "summary": "OLD_PROGRESS_SENTINEL",
+                       "coverage": [{"start": 0, "end": 120, "every": 5}]}})
+        self.assertEqual(self.client.post('/api/projects/p/reset-analysis-progress').status_code, 200)
+        old = self.store.get("jobs", "completed")
+        self.assertFalse(old["result"]["can_continue"])
+        self.assertEqual(old["result"]["coverage"], [])
+        self.assertEqual(self.client.post('/api/jobs/completed/retry').status_code, 409)
+        self.codex.respond.return_value = {"reply": json.dumps({"reply": "可以重新搜尋", "action": None})}
+        result = self.request(message="現在進度如何？", context={"project_id": "p", "analysis_generation": 1,
+            "draft": {"start": 20, "victory": 100, "postroll": 8}})
+        self.assertEqual(result["type"], "reply")
+        self.assertNotIn("OLD_PROGRESS_SENTINEL", self.codex.respond.call_args.args[0])
+        # Repeated progress resets keep editing state; a full reset still clears it.
+        self.assertEqual(self.client.post('/api/projects/p/reset-analysis-progress').json()["project"]["editor_generation"], 0)
+        project = self.client.post('/api/projects/p/reset-analysis').json()["project"]
+        self.assertEqual(project["analysis_generation"], 3)
+        self.assertEqual(project["editor_generation"], 1)
+        self.assertIsNone(self.store.get("jobs", "completed"))
+        self.assertEqual(project["draft"]["start"], 0)
+
+    def test_progress_reset_rejects_late_search_and_failed_cleanup_is_retryable(self):
+        self.prepare_reset()
+        queued = self.request(intent="search", search_start=0, search_end=120)
+        with patch("game_vod_clipper.web.shutil.rmtree", side_effect=OSError("busy")):
+            response = self.client.post('/api/projects/p/reset-analysis-progress')
+        self.assertEqual(response.status_code, 500)
+        self.assertFalse(self.store.get("jobs", queued["job_id"]).get("progress_reset"))
+        self.assertEqual(self.store.get("projects", "p").get("analysis_generation", 0), 0)
+        async def reset_during_response(*args, **kwargs):
+            self.store.reset_analysis("p", progress_only=True)
+            return {"reply": json.dumps({"reply": "search", "action": self.action})}
+        self.codex.respond.side_effect = reset_during_response
+        result = self.request()
+        self.assertEqual(result["type"], "error")
+        self.assertIn("重置", result["detail"])
+        self.assertEqual(self.client.post('/api/projects/p/reset-analysis-progress').status_code, 200)
+        self.assertFalse(any(j["project_id"] == "p" and j["status"] in {"queued", "running"} for j in self.store.all("jobs")))
 
 
 if __name__ == "__main__":

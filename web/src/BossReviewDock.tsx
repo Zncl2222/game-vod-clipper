@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { LoaderCircle, Sparkles, Trophy } from "lucide-react";
-import { active, analysisError, api, time, type Job } from "./api";
+import { active, currentAnalysis, analysisError, api, time, type Job } from "./api";
 
-export default function BossReviewDock({ jobs, onSearch, onReset, onError }: {
-  jobs: Job[]; onSearch: () => Promise<void>; onReset: () => Promise<void>; onError: (message: string) => void;
+export default function BossReviewDock({ jobs, segmentCount, onSearch, onReset, resetting, onError }: {
+  jobs: Job[]; segmentCount: number; onSearch: () => Promise<void>; onReset: () => Promise<void>; resetting: boolean; onError: (message: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
-  const job = jobs.find(j => j.kind === "analyze" && active(j)) ?? jobs.find(j => j.kind === "analyze");
+  const searches = jobs.filter(currentAnalysis);
+  const job = searches.find(active) ?? searches[0];
   const working = !!job && active(job);
   const result = job?.status === "succeeded" ? job.result : undefined;
-  const segmentCount = new Set(jobs.filter(j => j.kind === "analyze").flatMap(j => (j.candidates ?? j.result?.candidates ?? []).map(c => c.id))).size;
   const stage = ({ search: 0, refine: 1, continuity: 1, dense: 2, suspicious: 2, boundaries: 3 } as Record<string, number>)[job?.review_stage ?? ""];
   const complete = result?.status === "candidate";
   const retry = !!job && (["failed", "cancelled", "interrupted"].includes(job.status) || result?.can_continue);
@@ -22,7 +22,7 @@ export default function BossReviewDock({ jobs, onSearch, onReset, onError }: {
     } catch (e) { onError((e as Error).message); }
     finally { setBusy(false); }
   }
-  const heading = segmentCount ? `已標註 ${segmentCount} 個候選片段${working ? "，持續檢查中" : "，可逐段核對"}`
+  const heading = segmentCount ? `已標註 ${segmentCount} 個候選片段${working ? "，持續檢查中" : result?.review_complete ? "，分析已完成" : "，可逐段核對"}`
     : working ? (job.status === "queued" ? "已排入細查，等待開始" : "AI 正在逐段檢查影片")
     : complete ? "找到勝利候選，先看看這一場"
     : result?.can_continue ? "這次還沒查完，已保留進度"
@@ -35,10 +35,10 @@ export default function BossReviewDock({ jobs, onSearch, onReset, onError }: {
       <div className="boss-review-icon">{working ? <LoaderCircle size={20} className="spin" /> : complete ? <Trophy size={20} /> : <Sparkles size={20} />}</div>
       <div className="boss-review-copy"><strong role="status">{heading}</strong>
 </div>
-      <button className="secondary" disabled={busy} onClick={() => act(working ? "cancel" : retry ? "retry" : undefined)}>
+      <button className="secondary" disabled={busy || resetting} onClick={() => act(working ? "cancel" : retry ? "retry" : undefined)}>
         {busy ? "處理中…" : working ? "停止搜尋" : retry ? (job?.resumable || result?.can_continue ? "接續細查" : "重新搜尋") : "一鍵搜尋成功挑戰"}
       </button>
-      <button className="text-button reset-analysis" disabled={busy} onClick={() => act("reset")} aria-label="重置分析結果" title="停止分析並清除這支影片的候選、檢查點與剪輯草稿；保留原片與成品。">重置</button>
+      <button className="text-button reset-analysis" disabled={busy || resetting} onClick={() => act("reset")} aria-label="重置分析結果" title="停止分析並清除這支影片的查看進度、候選與剪輯草稿；保留原片與成品。">清除全部</button>
     </div>
     <details className="dock-details"><summary>分析詳情</summary>
     <p>{working ? job.stage : result?.summary}</p>
@@ -51,7 +51,9 @@ export default function BossReviewDock({ jobs, onSearch, onReset, onError }: {
       <span>已判讀 {job.rounds ?? result?.rounds ?? 0} 輪 · {job.frames ?? result?.frames ?? 0} 張畫面</span>
       {working && job.sample_start !== undefined && job.sample_end !== undefined && <span>正在看 {time(job.sample_start)}–{time(job.sample_end)}</span>}
       {working && job.sample_every !== undefined && <span>{job.sample_every < 1 ? `每秒約 ${Math.round(1 / job.sample_every)} 張` : `每 ${job.sample_every.toFixed(1)} 秒一張`}</span>}
-      {result && <span>{complete ? "細查結果仍需完整預覽確認" : "尚未套用這次結果"}</span>}
+      {result && <span>{result.completion_reason === "evidence_exhausted" ? "追加檢查沒有新發現，已結束；疑點保留供核對"
+        : result.review_complete ? "本次抽樣與必要檢查已結束，候選仍需預覽核對"
+        : complete ? "細查結果仍需完整預覽確認" : "尚未套用這次結果"}</span>}
     </div>}
     {!!job?.error && <p className="inline-error">{analysisError(job.error)}</p>}
     {!job && <p className="boss-review-hint">預設搜尋全片；可在 AI 對話設定範圍與模型。細查需要較多時間與模型用量，可停止後接續。</p>}

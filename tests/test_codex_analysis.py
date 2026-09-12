@@ -131,6 +131,14 @@ sys.stdout.flush()
         self.assertIsNotNone(self.processes[0].poll())
         self.assertIn("thread.started", (self.work / "events.jsonl").read_text())
 
+    def test_unlimited_model_wait_still_streams_events_and_finishes(self):
+        def update(event):
+            if event["type"] == "thread.started":
+                (self.work / "continue").touch()
+        result, _ = self.invoke("success", update, timeout=None)
+        self.assertEqual(result["status"], "not_found")
+        self.assertIsNotNone(self.processes[0].poll())
+
     def test_failure_is_not_reported_as_a_result(self):
         (self.work / "response.json").write_text('{"stale":true}')
         with self.assertRaisesRegex(RuntimeError, "呼叫失敗"):
@@ -233,7 +241,9 @@ class CodexAnalysisTest(unittest.TestCase):
             packets(0, 100, 0.00001)
         with self.assertRaises(ValueError):
             packets(0, 100, float("inf"))
-        self.assertEqual(len(packets(0, 1800, 30)), 2)
+        chunks = packets(0, 1800, 30)
+        self.assertEqual(chunks[0][0], 0)
+        self.assertEqual(chunks[-1][1], 1800)
 
     def test_offline_analysis_preserves_existing_draft(self):
         with patch(

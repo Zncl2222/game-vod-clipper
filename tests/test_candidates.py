@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from game_vod_clipper.candidates import project_candidates
+from game_vod_clipper.candidate_registry import CandidateRegistry
 from game_vod_clipper.web import create_app
 from game_vod_clipper.web_store import Store
 
@@ -49,6 +50,39 @@ class CandidatesTest(unittest.TestCase):
             self.store.reset_analysis("p")
             self.assertEqual(client.put("/api/projects/p/candidate-review", json=body).status_code, 409)
             self.assertEqual(self.store.get("projects", "p")["candidate_reviews"], {})
+
+    def test_legacy_duplicates_share_canonical_ui_and_chat_view_preserving_review(self):
+        duplicate = dict(self.segment, id="first:duplicate", summary="updated")
+        self.store.put("jobs", self.job | {"candidates": [self.segment, duplicate]})
+        self.store.set_candidate_review("p", duplicate["id"], "keep", 0)
+        with TestClient(self.app) as client:
+            state = client.get("/api/state").json()
+        project = state["projects"][0]
+        values = project["review_candidates"]
+        self.assertEqual(len(values), 1)
+        self.assertEqual(values[0]["id"], self.segment["id"])
+        self.assertEqual(values[0]["summary"], "updated")
+        self.assertEqual(values[0]["review"], "keep")
+        self.assertEqual(values, project_candidates(project, state["jobs"]))
+        self.assertEqual(len(self.store.get("jobs", "first")["candidates"]), 2)
+
+    def test_superseded_candidates_do_not_reappear_from_previous_jobs(self):
+        self.store.put("jobs", self.job | {"id": "second", "superseded_candidates": [self.segment["id"]],
+            "candidates": [dict(self.segment, id="first:c2", end=50)]})
+        values = project_candidates(self.project, self.store.all("jobs"))
+        self.assertEqual([v["id"] for v in values], ["first:c2"])
+
+    def test_legacy_resume_changes_bounds_without_resurrecting_old_ids_or_losing_tags(self):
+        registry = CandidateRegistry("first")
+        registry.update([self.segment])
+        registry.update([dict(self.segment, id="c0001", start=22, end=42)])
+        self.store.put("jobs", self.job | {"id": "resume", "candidates": registry.public(),
+            "superseded_candidates": registry.superseded_ids()})
+        project = self.project | {"candidate_reviews": {self.segment["id"]: "keep"}}
+        values = project_candidates(project, self.store.all("jobs"))
+        self.assertEqual(len(values), 1)
+        self.assertEqual(values[0]["start"], 22)
+        self.assertEqual(values[0]["review"], "keep")
 
     def test_chat_receives_numbered_uncertain_candidates_and_saved_tags(self):
         self.store.set_candidate_review("p", "first:c1", "keep", 0)

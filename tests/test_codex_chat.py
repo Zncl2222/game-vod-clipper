@@ -26,12 +26,34 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
         self.connection.models = AsyncMock(return_value=[{"id": "selected-model", "effort": "low"}])
         self.connection.respond = AsyncMock(return_value={"reply": json.dumps({"reply": "你好", "action": None})})
 
+    async def test_export_requires_project_and_null_parameters(self):
+        action = {"kind": "export", "start": None, "victory": None, "postroll": None, "seconds": None}
+        self.connection.respond.return_value = {"reply": json.dumps({"reply": "提交剪輯", "action": action})}
+        result = await chat(self.connection, ChatRequest(model="selected-model", message="匯出", context=CONTEXT), PROJECT)
+        self.assertEqual(result["action"]["kind"], "export")
+        with self.assertRaises(ConnectionError):
+            await chat(self.connection, ChatRequest(model="selected-model", message="匯出"), None)
+        action["start"] = 1
+        self.connection.respond.return_value = {"reply": json.dumps({"reply": "提交剪輯", "action": action})}
+        with self.assertRaises(ConnectionError):
+            await chat(self.connection, ChatRequest(model="selected-model", message="匯出", context=CONTEXT), PROJECT)
+
     async def test_chat_preserves_history_and_selected_model(self):
         request = ChatRequest(model="selected-model", message="我的顏色？", history=[{"role": "user", "content": "喜歡綠色"}])
         result = await chat(self.connection, request, None)
         self.assertIsNone(result["action"])
         self.assertIn("喜歡綠色", self.connection.respond.call_args.args[0])
         self.assertEqual(self.connection.respond.call_args.kwargs["model"], "selected-model")
+        self.assertIsNone(self.connection.respond.call_args.kwargs["timeout"])
+
+    async def test_selected_effort_is_forwarded_and_invalid_effort_rejected(self):
+        self.connection.models.return_value[0]["supported_efforts"] = ["low", "high"]
+        await chat(self.connection, ChatRequest(model="selected-model", effort="high", message="hi"), None)
+        self.assertEqual(self.connection.respond.call_args.kwargs["effort"], "high")
+        self.connection.respond.reset_mock()
+        with self.assertRaises(ConnectionError):
+            await chat(self.connection, ChatRequest(model="selected-model", effort="ultra", message="hi"), None)
+        self.connection.respond.assert_not_awaited()
 
     async def test_unknown_model_never_falls_back(self):
         with self.assertRaises(ConnectionError):
@@ -72,7 +94,7 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValidationError):
                 ChatRequest.model_validate({"model": "selected-model", "message": "hi", **extra})
 
-    async def test_model_list_pagination_filters_hidden_and_images(self):
+    async def test_model_list_pagination_includes_hidden_text_models(self):
         c = CodexConnection(Path("."))
         c.start = AsyncMock()
         c.rpc = AsyncMock(side_effect=[{"data": [
@@ -80,7 +102,8 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
             {"model": "hidden", "hidden": True},
             {"model": "image", "inputModalities": ["image"]},
         ], "nextCursor": "next"}, {"data": [{"model": "second"}], "nextCursor": None}])
-        self.assertEqual([m["id"] for m in await c.models()], ["visible", "second"])
+        self.assertEqual([m["id"] for m in await c.models()], ["visible", "hidden", "second"])
+        self.assertTrue(c.rpc.call_args.args[1]["includeHidden"])
         self.assertEqual(c.rpc.call_args.args[1]["cursor"], "next")
 
     async def test_cancelling_response_signals_shared_executor(self):

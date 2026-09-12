@@ -1,13 +1,14 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
 import { ArrowUp, Check, ChevronDown, MessageCircle, Plus, Settings2, Sparkles, Square, X } from "lucide-react";
 import AIConnection, { type Connection } from "./AIConnection";
-import { active, api, apiError, time, type Draft, type Job } from "./api";
+import { active, currentAnalysis, api, apiError, time, type Draft, type Job } from "./api";
 import AIActivity from "./AIActivity";
 import AnalysisTask from "./AnalysisTask";
+import ModelSettings, { type Model } from "./ModelSettings";
 
 export type EditorContext = { analysis_generation?: number; project_id: string; title: string; duration: number; draft: Draft };
 export type ChatAction = {
-  kind: "set_draft" | "seek" | "select_candidate";
+  kind: "set_draft" | "seek" | "select_candidate" | "export";
   candidate_id?: string | null;
   start: number | null;
   victory: number | null;
@@ -18,7 +19,6 @@ export type EditorChatHandle = {
   apply: (action: ChatAction, expected: EditorContext) => string;
 };
 export type ChatHandle = { search: () => Promise<void> };
-type Model = { id: string; name: string; description: string; is_default: boolean; input_modalities?: string[] };
 type Message = { project_id?: string; analysis_generation?: number; id: string; role: "user" | "assistant"; content: string; model?: string; operation?: string; failed?: boolean };
 type Reply = { type: string; reply?: string; model?: string; action?: ChatAction | null; project_id?: string; detail?: string };
 const STORAGE = "bosscut:chat:v1";
@@ -44,6 +44,11 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState(() => localStorage.getItem("bosscut:chat-model") ?? "");
   const [modelError, setModelError] = useState("");
+  const [effort, setEffort] = useState(() => localStorage.getItem("bosscut:effort") ?? "");
+  const selectedModel = models.find(m => m.id === model);
+  const supportedEfforts = selectedModel?.supported_efforts ?? [];
+  const effectiveEffort = supportedEfforts.includes(effort) ? effort : "";
+  useEffect(() => { localStorage.setItem("bosscut:effort", effort); }, [effort]);
   const [mode, setMode] = useState<"chat" | "edit">("chat");
   const [messages, setMessages] = useState<Message[]>(readMessages);
   const [input, setInput] = useState("");
@@ -62,8 +67,8 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
   currentContext.current = context;
   const previousGeneration = useRef(context?.analysis_generation ?? 0);
   const restoredMessageIds = useRef(new Set(messages.map((message) => message.id)));
-  const analysis = jobs.find((job) => job.kind === "analyze" && active(job))
-    ?? jobs.find((job) => job.kind === "analyze");
+  const searches = jobs.filter(currentAnalysis);
+  const analysis = searches.find(active) ?? searches[0];
   useEffect(() => {
     setMode(context ? "edit" : "chat");
     setSearchStart(0);
@@ -112,7 +117,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
       const data = await api<{ models: Model[] }>("/codex/models");
       setModels(data.models);
       setModel((current) => data.models.some((m) => m.id === current) ? current :
-        (data.models.find((m) => m.id === "gpt-5.6-luna") ?? data.models.find((m) => m.is_default) ?? data.models[0])?.id ?? "");
+        (data.models.find((m) => m.is_default) ?? data.models[0])?.id ?? "");
       if (!data.models.length) setModelError("尚無可選模型，請檢查登入狀態後重新整理。");
     } catch (e) { setModelError((e as Error).message); }
   }
@@ -164,7 +169,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
     try {
       const response = await fetch("/api/codex/chat", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: abort.signal,
-        body: JSON.stringify({ message: text, model, history, request_id: userId,
+        body: JSON.stringify({ message: text, model, effort: effectiveEffort || null, history, request_id: userId,
           intent: search ? "search" : "message", search_start: search ? searchStart : null,
           search_end: search ? searchEnd : null,
           context: snapshot ? { project_id: snapshot.project_id, analysis_generation: snapshot.analysis_generation ?? 0, draft: {
@@ -242,9 +247,9 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
           <div className="chat-welcome-icon"><Sparkles size={28} strokeWidth={1.4} /></div>
           <span className="eyebrow">A LITTLE HELP, A GOOD CONVERSATION</span>
           <h3>{mode === "chat" ? "想聊些什麼？" : "用一句話，調整你的剪輯。"}</h3>
-          <p>{mode === "chat" ? "聊遊戲、整理想法，或問一個好奇的問題。這裡不只聊剪輯。" : "告訴我開始時間、勝利時間或收尾秒數，我會幫你更新草稿。"}</p>
+          <p>{mode === "chat" ? "聊遊戲、整理想法，或問一個好奇的問題。這裡不只聊剪輯。" : "依 Boss Fight SKILL 搜尋成功挑戰、調整片段，並用 FFmpeg 匯出已確認的草稿。"}</p>
           <div className="chat-suggestions">
-            {(mode === "chat" ? ["幫我想三個有趣的直播標題", "陪我聊聊最近玩的遊戲"] : ["把勝利後收尾改成 8 秒", "跳到 1 分 30 秒"]).map((text) => <button key={text} onClick={() => { setInput(text); composer.current?.focus(); }}>{text}<ArrowUp size={13} /></button>)}
+            {(mode === "chat" ? ["幫我想三個有趣的直播標題", "陪我聊聊最近玩的遊戲"] : ["根據 SKILL 搜尋整部影片的 BOSS FIGHT", "把勝利後收尾改成 8 秒", "匯出目前已確認的片段"]).map((text) => <button key={text} onClick={() => { setInput(text); composer.current?.focus(); }}>{text}<ArrowUp size={13} /></button>)}
           </div>
           {!connection?.available && <button className="primary" onClick={() => setSettings(true)}>連接 AI 帳號</button>}
         </div>}
@@ -256,11 +261,11 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
         {busy && <div className="chat-thinking" role="status"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" />正在回應…</div>}
         <div ref={taskArea}>
           {analysis && <AIActivity job={analysis} onInspect={() => taskArea.current?.querySelector(".assistant-task")?.scrollIntoView({ block: "nearest" })} />}
-          {jobs.filter((job) => job.kind === "analyze").length > 1 &&
+          {searches.length > 1 &&
             <button className="text-button" aria-expanded={showSearchHistory} onClick={() => setShowSearchHistory(!showSearchHistory)}>
               {showSearchHistory ? "收起較早的搜尋紀錄" : "查看較早的搜尋紀錄"}
             </button>}
-          {jobs.filter((job) => job.kind === "analyze").slice(0, showSearchHistory ? 3 : 1).reverse().map((job) =>
+          {searches.slice(0, showSearchHistory ? 3 : 1).reverse().map((job) =>
             <AnalysisTask key={job.id} job={job} onError={setError}
               onSeek={(seconds) => { if (context) onAction({ kind: "seek", seconds, start: null, victory: null, postroll: null }, context); }}
               onApply={(result) => {
@@ -295,10 +300,8 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
             value={input} maxLength={4000} rows={1} onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} />
           <div className="chat-composer-tools">
-            <div className="chat-model-picker"><ChevronDown size={13} /><select aria-label="選擇 AI 模型" value={model} disabled={busy || !models.length} onChange={(e) => setModel(e.target.value)}>
-              {!models.length && <option value="">{connection?.available ? "載入模型…" : "請先連接帳號"}</option>}
-              {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select></div>
+            <ModelSettings models={models} model={model} effort={effectiveEffort} disabled={busy}
+              connected={!!connection?.available} onModelChange={setModel} onEffortChange={setEffort} />
             {busy ? <button type="button" className="chat-send" aria-label="停止回應" onClick={() => controller.current?.abort()}><Square size={14} fill="currentColor" /></button> :
               <button type="submit" className="chat-send" aria-label="送出訊息" disabled={!input.trim() || !model || !connection?.available || (mode === "edit" && !context)}><ArrowUp size={19} /></button>}
           </div>

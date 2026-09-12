@@ -7,8 +7,10 @@ export type Draft = {
   origin: "manual" | "agent";
 };
 export type Project = {
+  review_candidates?: NumberedCandidate[];
   candidate_reviews?: Record<string, CandidateReview>;
   analysis_generation?: number;
+  editor_generation?: number;
   id: string;
   title: string;
   ready: boolean;
@@ -19,6 +21,7 @@ export type Project = {
   draft?: Draft;
 };
 export type Job = {
+  progress_reset?: boolean;
   candidates?: CandidateSegment[];
   model?: string;
   id: string;
@@ -53,6 +56,8 @@ export type Coverage = { start: number; end: number; every: number };
 export type AnalysisResult = {
   candidates?: CandidateSegment[];
   can_continue?: boolean;
+  review_complete?: boolean;
+  completion_reason?: "pending_review" | "evidence_exhausted" | "review_complete";
   coverage?: Coverage[];
   checks?: Record<string, boolean>;
   project_id?: string;
@@ -80,6 +85,7 @@ export type CandidateSegment = {
 export type NumberedCandidate = CandidateSegment & { number: number; review: CandidateReview };
 
 export function reviewCandidates(project: Project, jobs: Job[]): NumberedCandidate[] {
+  if (project.review_candidates) return project.review_candidates;
   const found = new Map<string, CandidateSegment>();
   for (const job of [...jobs].reverse()) {
     if (job.project_id !== project.id || job.kind !== "analyze") continue;
@@ -150,6 +156,7 @@ export function media(project: Project, file: string) {
 }
 
 export const active = (job: Job) => ["queued", "running"].includes(job.status);
+export const currentAnalysis = (job: Job) => job.kind === "analyze" && !job.progress_reset;
 
 // Older jobs retain the original diagnostic in storage; show an actionable summary.
 export function analysisError(error: string): string {

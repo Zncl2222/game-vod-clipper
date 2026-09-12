@@ -69,25 +69,48 @@ class Store:
             db.execute("UPDATE projects SET data=? WHERE id=?",
                        (json.dumps(project, ensure_ascii=False), project_id))
 
-    def reset_analysis(self, project_id: str) -> dict:
-        """Invalidate browser drafts and forget only this project's derived analysis."""
+    def delete_project(self, project_id: str):
+        """Remove workspace records atomically; retain source and generated files."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+                raise KeyError(project_id)
+            keys = [(key,) for key, data in db.execute("SELECT id, data FROM jobs").fetchall()
+                    if json.loads(data).get("project_id") == project_id]
+            db.executemany("DELETE FROM jobs WHERE id=?", keys)
+            db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+
+    def reset_analysis(self, project_id: str, *, progress_only: bool = False) -> dict:
+        """Forget viewing progress, optionally retaining candidate records and edits."""
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT data FROM projects WHERE id=?", (project_id,)).fetchone()
             if not row:
                 raise KeyError(project_id)
             project = json.loads(row[0])
+            project["editor_generation"] = project.get("editor_generation", project.get("analysis_generation", 0))
             project["analysis_generation"] = project.get("analysis_generation", 0) + 1
-            project["candidate_reviews"] = {}
-            project["draft"] = {
-                "start": 0, "victory": project["duration"] - 8,
-                "postroll": 8, "reviewed": False,
-                "origin": "manual", "revision": project["draft"]["revision"] + 1,
-            }
+            if not progress_only:
+                project["editor_generation"] += 1
+                project["candidate_reviews"] = {}
+                project["draft"] = {
+                    "start": 0, "victory": project["duration"] - 8,
+                    "postroll": 8, "reviewed": False,
+                    "origin": "manual", "revision": project["draft"]["revision"] + 1,
+                }
             for key, data in db.execute("SELECT id, data FROM jobs").fetchall():
                 job = json.loads(data)
                 if job["project_id"] == project_id and job["kind"] == "analyze":
-                    db.execute("DELETE FROM jobs WHERE id=?", (key,))
+                    if progress_only:
+                        # Keep reviewable candidates, but never resume this old run
+                        # or count it toward the next search's viewing progress.
+                        job.update(progress_reset=True, resumable=False, coverage=[])
+                        if job.get("result"):
+                            job["result"].update(can_continue=False, coverage=[])
+                        db.execute("UPDATE jobs SET data=? WHERE id=?",
+                                   (json.dumps(job, ensure_ascii=False), key))
+                    else:
+                        db.execute("DELETE FROM jobs WHERE id=?", (key,))
             db.execute("UPDATE projects SET data=? WHERE id=?",
                        (json.dumps(project, ensure_ascii=False), project_id))
         return project

@@ -31,6 +31,19 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.currentTime),
     )
     .toBeGreaterThan(1.25);
+  const player = page.locator(".preview-panel .video-wrap video");
+  const playingAt = await player.evaluate((v: HTMLVideoElement) => {
+    v.dataset.instance = "original-playing-video";
+    return v.currentTime;
+  });
+  await page.getByRole("button", { name: "劇院模式", exact: true }).click();
+  await expect(player).toHaveAttribute("data-instance", "original-playing-video");
+  expect(await player.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+  expect(await player.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThanOrEqual(playingAt);
+  await page.screenshot({ path: "../runs/large-preview-real-theater.png" });
+  await page.getByRole("button", { name: "返回工作區", exact: true }).click();
+  await expect(player).toHaveAttribute("data-instance", "original-playing-video");
+  expect(await player.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
   await page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.pause());
   await page.getByRole("checkbox").check();
   // Any edit must invalidate the prior review.

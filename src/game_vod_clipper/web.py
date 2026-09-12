@@ -17,7 +17,9 @@ from typing import Literal
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+import anyio
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,7 +27,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .web_store import Store
 from .codex_connection import CodexConnection, ConnectionError, MODEL
-from .codex_chat import ChatRequest, chat
+from .codex_chat import ChatRequest, chat, resolve_effort
 from .candidates import project_candidates
 
 ACTIVE = {"queued", "running"}
@@ -36,6 +38,11 @@ logger = logging.getLogger(__name__)
 class ImportRequest(BaseModel):
     kind: Literal["local", "youtube"]
     source: str = Field(min_length=1, max_length=2000)
+
+
+class ProjectUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=120)
 
 
 class Draft(BaseModel):
@@ -64,6 +71,7 @@ class CodexLoginRequest(BaseModel):
 
 
 class AnalysisRequest(BaseModel):
+    effort: str | None = Field(default=None, max_length=40)
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
     start: float = Field(ge=0)
     end: float = Field(gt=0)
@@ -189,27 +197,70 @@ class Jobs:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+class LocalFileResponse(FileResponse):
+    async def __call__(self, scope, receive, send):
+        scope["game_vod_clipper.file_response"] = True
+
+        async def disconnected():
+            while True:
+                if (await receive())["type"] == "http.disconnect":
+                    group.cancel_scope.cancel()
+                    return
+
+        # Stop disk reads when a player disconnects or the server closes its
+        # transport. FileResponse otherwise keeps reading the entire file.
+        async with anyio.create_task_group() as group:
+            group.start_soon(disconnected)
+            await super().__call__(scope, receive, send)
+            group.cancel_scope.cancel()
+
+
+class LocalServer(uvicorn.Server):
+    def __init__(self, config: uvicorn.Config, shutdown_event: asyncio.Event):
+        super().__init__(config)
+        self.shutdown_event = shutdown_event
+
+    async def shutdown(self, sockets=None):
+        # Uvicorn drains HTTP requests BEFORE sending lifespan.shutdown. Notify
+        # our persistent streams here so they can finish before that drain.
+        self.shutdown_event.set()
+        for connection in list(self.server_state.connections):
+            if getattr(connection, "scope", {}).get("game_vod_clipper.file_response"):
+                # A paused player may never drain a large Range response. Closing
+                # with buffered bytes would still wait; abort releases it now and
+                # LocalFileResponse's disconnect listener stops the file reader.
+                connection.transport.abort()
+        await super().shutdown(sockets=sockets)
+
+
 def create_app(root: Path | None = None) -> FastAPI:
     root = (root or Path(os.environ.get("GAME_VOD_ROOT", "."))).resolve()
     store = Store(root)
     jobs = Jobs(store)
     codex = CodexConnection(root)
     analysis_lock = asyncio.Lock()
+    deleting_projects: set[str] = set()
+    shutting_down = asyncio.Event()
 
     @asynccontextmanager
     async def lifespan(app):
+        shutting_down.clear()
         for job in store.all("jobs"):
             if job["status"] in ACTIVE:
                 store.patch(
                     "jobs", job["id"], status="interrupted", stage="服務重啟，請重試", finished_at=time.time()
                 )
-        yield
-        await jobs.close()
-        await codex.close()
+        try:
+            yield
+        finally:
+            shutting_down.set()
+            await jobs.close()
+            await codex.close()
 
     app = FastAPI(title="BossCut local POC", lifespan=lifespan)
     app.state.store = store
     app.state.codex = codex
+    app.state.shutting_down = shutting_down
 
     @app.exception_handler(ConnectionError)
     async def codex_error(request, error):
@@ -234,6 +285,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         return response
 
     def get(table: str, key: str):
+        if table == "projects" and key in deleting_projects:
+            raise HTTPException(409, "專案正在刪除，請稍候。")
         result = store.get(table, key)
         if result is None:
             raise HTTPException(404, "找不到項目。")
@@ -246,9 +299,10 @@ def create_app(root: Path | None = None) -> FastAPI:
         return {k: v for k, v in job.items() if k != "output"}
 
     def state():
+        all_jobs = store.all("jobs")
         return {
-            "projects": [public_project(p) for p in store.all("projects")],
-            "jobs": [public_job(j) for j in store.all("jobs")],
+            "projects": [public_project(p) | {"review_candidates": project_candidates(p, all_jobs)} for p in store.all("projects")],
+            "jobs": [public_job(j) for j in all_jobs],
         }
 
     @app.get("/api/state")
@@ -288,13 +342,16 @@ def create_app(root: Path | None = None) -> FastAPI:
         selected = next((m for m in await codex.models() if m["id"] == body.model), None)
         if not selected or "image" not in selected.get("input_modalities", []):
             raise ConnectionError("所選模型不支援畫面判讀，請在同一模型選單選擇支援影像的模型。")
+        effort = resume_job["analysis"].get("effort") if resume_job else resolve_effort(selected, body.effort)
         async with analysis_lock:
             if get("projects", project_id).get("analysis_generation", 0) != generation:
                 raise HTTPException(409, "影片分析已重置，請重新搜尋。")
-            if resume_job and not store.get("jobs", resume_job["id"]):
-                raise HTTPException(409, "舊分析已清除，請重新搜尋。")
+            if resume_job:
+                saved_job = store.get("jobs", resume_job["id"])
+                if not saved_job or saved_job.get("progress_reset"):
+                    raise HTTPException(409, "舊分析進度已重置，請重新搜尋。")
             current = store.all("jobs")
-            duplicate = next((j for j in current if j["project_id"] == project_id and
+            duplicate = next((j for j in current if j["project_id"] == project_id and not j.get("progress_reset") and
                               (j.get("analysis") or {}).get("request_id") == request_id), None)
             if duplicate:
                 return duplicate
@@ -303,7 +360,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             if sum(j["status"] in ACTIVE for j in current) >= 8:
                 raise HTTPException(429, "任務佇列已滿。")
             return jobs.submit(project_id, "analyze", analysis={**body.model_dump(),
-                "effort": resume_job["analysis"].get("effort") if resume_job else selected.get("effort"),
+                "effort": effort,
                 "request_id": request_id, **({"resume_from": resume_job["id"]} if resume_job else {})})
 
     @app.post("/api/codex/chat")
@@ -311,7 +368,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         project = get("projects", body.context.project_id) if body.context else None
         if project:
             all_jobs = store.all("jobs")
-            latest = next((j for j in all_jobs if j["project_id"] == project["id"] and j["kind"] == "analyze"), None)
+            latest = next((j for j in all_jobs if j["project_id"] == project["id"] and j["kind"] == "analyze" and not j.get("progress_reset")), None)
             project = {**project, "candidates": project_candidates(project, all_jobs)}
             project = {**project, "latest_search": ({k: latest.get(k) for k in
                 ("id", "status", "stage", "model", "frames", "rounds", "result", "error")} if latest else None)}
@@ -323,7 +380,7 @@ def create_app(root: Path | None = None) -> FastAPI:
                 if project is None:
                     raise ConnectionError("請先選擇影片。")
                 job = await enqueue_analysis(project["id"], AnalysisRequest(
-                    start=action["start"], end=action["end"], model=body.model), body.request_id,
+                    start=action["start"], end=action["end"], model=body.model, effort=body.effort), body.request_id,
                     expected_generation=body.context.analysis_generation)
                 result = {**result, "action": None, "job_id": job["id"],
                           "reply": "已建立成功挑戰搜尋任務。進度與結果會顯示在這段對話下方，你也可以繼續提問。"}
@@ -340,20 +397,24 @@ def create_app(root: Path | None = None) -> FastAPI:
 
         async def stream():
             task = asyncio.create_task(dispatch())
+            shutdown = asyncio.create_task(shutting_down.wait())
             try:
                 yield json.dumps({"type": "waiting"}) + "\n"
-                while not task.done():
-                    await asyncio.wait({task}, timeout=5)
-                    if not task.done():
+                while not task.done() and not shutdown.done():
+                    await asyncio.wait({task, shutdown}, timeout=5,
+                                       return_when=asyncio.FIRST_COMPLETED)
+                    if not task.done() and not shutdown.done():
                         yield json.dumps({"type": "waiting"}) + "\n"
-                yield json.dumps({"type": "reply", **task.result()}, ensure_ascii=False) + "\n"
+                if not shutting_down.is_set():
+                    yield json.dumps({"type": "reply", **task.result()}, ensure_ascii=False) + "\n"
             except ConnectionError as error:
                 yield json.dumps({"type": "error", "detail": str(error)}, ensure_ascii=False) + "\n"
             except HTTPException as error:
                 yield json.dumps({"type": "error", "detail": error.detail}, ensure_ascii=False) + "\n"
             finally:
                 task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+                shutdown.cancel()
+                await asyncio.gather(task, shutdown, return_exceptions=True)
 
         return StreamingResponse(stream(), media_type="application/x-ndjson",
                                  headers={"X-Accel-Buffering": "no"})
@@ -367,13 +428,16 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def events(request: Request):
         async def stream():
             previous = ""
-            while not await request.is_disconnected():
+            while not shutting_down.is_set() and not await request.is_disconnected():
                 current = json.dumps(state(), ensure_ascii=False)
                 yield (
                     f"data: {current}\n\n" if current != previous else ": heartbeat\n\n"
                 )
                 previous = current
-                await asyncio.sleep(1)
+                try:
+                    await asyncio.wait_for(shutting_down.wait(), timeout=1)
+                except TimeoutError:
+                    pass
 
         return StreamingResponse(
             stream(),
@@ -429,6 +493,37 @@ def create_app(root: Path | None = None) -> FastAPI:
             "project": public_project(project),
             "job": jobs.submit(project["id"], "prepare"),
         }
+
+    @app.get("/api/projects/{project_id}")
+    async def project_details(project_id: str):
+        project = get("projects", project_id)
+        return public_project(project) | {
+            "source": project.get("source"), "url": project.get("url"),
+        }
+
+    @app.patch("/api/projects/{project_id}")
+    async def rename_project(project_id: str, body: ProjectUpdate):
+        get("projects", project_id)
+        if any(ord(char) < 32 for char in body.title):
+            raise HTTPException(422, "專案名稱不能包含換行或控制字元。")
+        return public_project(store.patch("projects", project_id, title=body.title))
+
+    @app.delete("/api/projects/{project_id}")
+    async def delete_project(project_id: str):
+        async with analysis_lock:
+            get("projects", project_id)
+            deleting_projects.add(project_id)
+            try:
+                related = [job for job in store.all("jobs") if job["project_id"] == project_id]
+                tasks = [jobs.tasks[job["id"]] for job in related if job["id"] in jobs.tasks]
+                for task in tasks:
+                    task.cancel()
+                # Workers must finish cancellation before their database rows go.
+                await asyncio.gather(*tasks, return_exceptions=True)
+                store.delete_project(project_id)
+            finally:
+                deleting_projects.discard(project_id)
+        return {"id": project_id, "deleted": True}
 
     @app.put("/api/projects/{project_id}/candidate-review")
     async def review_candidate(project_id: str, body: CandidateReviewRequest):
@@ -491,12 +586,16 @@ def create_app(root: Path | None = None) -> FastAPI:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             # A task cancelled before its first instruction never enters execute().
-            store.patch("jobs", job_id, status="cancelled", stage="已取消")
+            if store.get("jobs", job_id) is not None:
+                store.patch("jobs", job_id, status="cancelled", stage="已取消")
         return public_job(get("jobs", job_id))
 
     @app.post("/api/jobs/{job_id}/retry", status_code=202)
     async def retry(job_id: str):
         job = get("jobs", job_id)
+        get("projects", job["project_id"])
+        if job.get("progress_reset"):
+            raise HTTPException(409, "此分析的查看進度已重置，請重新搜尋。")
         if job["status"] not in {"failed", "cancelled", "interrupted"} and not (
             job["kind"] == "analyze" and job["status"] == "succeeded"
             and (job.get("result") or {}).get("can_continue")
@@ -506,7 +605,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             bounds = job["analysis"]
             checkpoint = store.root / "runs" / "web" / job["project_id"] / "codex" / job["id"] / "checkpoint.json"
             return public_job(await enqueue_analysis(job["project_id"], AnalysisRequest(
-                start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL)), uuid4().hex,
+                start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL), effort=bounds.get("effort")), uuid4().hex,
                 resume_job=job if checkpoint.is_file() else None))
         if any(
             j["project_id"] == job["project_id"] and j["status"] in ACTIVE
@@ -521,8 +620,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             job["project_id"], job["kind"], job.get("draft"), job.get("analysis")
         )
 
-    @app.post("/api/projects/{project_id}/reset-analysis")
-    async def reset_analysis(project_id: str):
+    async def clear_analysis(project_id: str, *, progress_only: bool = False):
         async with analysis_lock:
             project = get("projects", project_id)
             if not project.get("ready"):
@@ -546,7 +644,18 @@ def create_app(root: Path | None = None) -> FastAPI:
                     log.unlink(missing_ok=True)
             except OSError as exc:
                 raise HTTPException(500, "分析檔案清理未完成，請重試重置。") from exc
-            return {"project": public_project(store.reset_analysis(project_id))}
+            project = store.reset_analysis(project_id, progress_only=progress_only)
+            remaining_jobs = store.all("jobs")
+            return {"project": public_project(project) | {"review_candidates": project_candidates(project, remaining_jobs)},
+                    "jobs": [public_job(j) for j in remaining_jobs if j["project_id"] == project_id]}
+
+    @app.post("/api/projects/{project_id}/reset-analysis")
+    async def reset_analysis(project_id: str):
+        return await clear_analysis(project_id)
+
+    @app.post("/api/projects/{project_id}/reset-analysis-progress")
+    async def reset_analysis_progress(project_id: str):
+        return await clear_analysis(project_id, progress_only=True)
 
     @app.get("/api/projects/{project_id}/media/{filename}")
     async def media(project_id: str, filename: str):
@@ -554,14 +663,14 @@ def create_app(root: Path | None = None) -> FastAPI:
         allowed = {"preview.mp4"} | {t["file"] for t in project["thumbnails"]}
         if not project["ready"] or filename not in allowed:
             raise HTTPException(404, "找不到預覽。")
-        return FileResponse(root / "runs" / "web" / project_id / filename)
+        return LocalFileResponse(root / "runs" / "web" / project_id / filename)
 
     @app.get("/api/jobs/{job_id}/download")
     async def download(job_id: str):
         job = get("jobs", job_id)
         if job["status"] != "succeeded" or job["kind"] != "export":
             raise HTTPException(404, "尚無可下載的剪輯。")
-        return FileResponse(
+        return LocalFileResponse(
             root / job["output"],
             filename=f"boss-fight-{job_id[:8]}.mp4",
             media_type="video/mp4",
@@ -581,6 +690,12 @@ def create_app(root: Path | None = None) -> FastAPI:
             "draft": project["draft"],
         }
 
+    # State updates use SSE. Reject unsupported WebSocket upgrades before the
+    # catch-all static mount, whose ASGI application only accepts HTTP scopes.
+    @app.websocket("/{path:path}")
+    async def reject_websocket(websocket: WebSocket):
+        await websocket.close(code=1008)
+
     frontend = Path(__file__).resolve().parents[2] / "web" / "dist"
     if frontend.is_dir():
         app.mount("/", StaticFiles(directory=frontend, html=True), name="frontend")
@@ -590,13 +705,16 @@ def create_app(root: Path | None = None) -> FastAPI:
 def main():
     import argparse
 
-    import uvicorn
-
     parser = argparse.ArgumentParser(
         description="Local BossCut POC (one server process)"
     )
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    # Persistent event streams must not leave an old server hanging on restart.
-    uvicorn.run(create_app(), host="127.0.0.1", port=args.port,
-                timeout_graceful_shutdown=5)
+    app = create_app()
+    config = uvicorn.Config(app, host="127.0.0.1", port=args.port,
+                            timeout_graceful_shutdown=5)
+    try:
+        LocalServer(config, app.state.shutting_down).run()
+    except KeyboardInterrupt:
+        # Match uvicorn.run(): signal handling and cleanup already ran.
+        pass

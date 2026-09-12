@@ -16,7 +16,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 def execute(
-    work: Path, images: list[Path], prompt: str, timeout: float,
+    work: Path, images: list[Path], prompt: str, timeout: float | None,
     *, model: str, schema: dict | None = None, effort: str | None = None,
     on_event: Callable[[dict], None] | None = None,
     cancel: threading.Event | None = None,
@@ -94,7 +94,7 @@ def execute(
         prompt_input.write(prompt)
         prompt_input.seek(0)
         with subprocess.Popen(args, stdin=prompt_input, stdout=output, stderr=diagnostics) as process:
-            deadline = time.monotonic() + timeout
+            deadline = time.monotonic() + timeout if timeout is not None else None
             pending = b""
             try:
                 while True:
@@ -109,7 +109,7 @@ def execute(
                         break
                     if cancel and cancel.is_set():
                         raise RuntimeError("AI 工作已取消。")
-                    if time.monotonic() >= deadline:
+                    if deadline is not None and time.monotonic() >= deadline:
                         raise RuntimeError(
                             f"Codex 本輪超過 {timeout:.0f} 秒仍未完成，已停止。請重試或縮小分析範圍。"
                         )

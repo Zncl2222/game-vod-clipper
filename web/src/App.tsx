@@ -1,7 +1,11 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import BossReviewDock from "./BossReviewDock";
+import AIWorkspaceTimeline from "./AIWorkspaceTimeline";
+import { type TimeWindow } from "./TimelineZoom";
 import ClipWorkspace, { candidates } from "./ClipWorkspace";
 import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./ChatPanel";
+import ProjectLibrary from "./ProjectLibrary";
+import { usePanelLayout } from "./ResizableSidebars";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -16,6 +20,8 @@ import {
   FolderOpen,
   HardDrive,
   LoaderCircle,
+  Maximize2,
+  Minimize2,
   Plus,
   RotateCcw,
   Save,
@@ -48,14 +54,19 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [modal, setModal] = useState(false);
   const [error, setError] = useState("");
-  const [chatOpen, setChatOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(() => window.matchMedia("(min-width: 1200px)").matches);
+  const layout = usePanelLayout(chatOpen);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [editorContext, setEditorContext] = useState<EditorContext | null>(null);
   const editorChat = useRef<EditorChatHandle>(null);
   const aiChat = useRef<ChatHandle>(null);
+  const deletedProjects = useRef(new Set<string>());
   useEffect(() => {
     const stream = new EventSource("/api/events");
     stream.onmessage = (event) => {
-      setState(JSON.parse(event.data));
+      const incoming: State = JSON.parse(event.data);
+      setState({ projects: incoming.projects.filter(project => !deletedProjects.current.has(project.id)),
+        jobs: incoming.jobs.filter(job => !deletedProjects.current.has(job.project_id)) });
       setConnected(true);
     };
     stream.onerror = () => setConnected(false);
@@ -63,9 +74,32 @@ export default function App() {
   }, []);
   const project =
     state.projects.find((p) => p.id === selected) ?? state.projects[0];
+  useEffect(() => { setPreviewExpanded(false); }, [project?.id]);
+  useEffect(() => {
+    if (!previewExpanded) return;
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setPreviewExpanded(false); }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [previewExpanded]);
   function select(id: string) {
     setSelected(id);
     localStorage.setItem("bosscut:selected", id);
+  }
+  function renameProject(id: string, title: string) {
+    setState(previous => ({ ...previous, projects: previous.projects.map(project => project.id === id ? { ...project, title } : project) }));
+  }
+  function deleteProject(id: string) {
+    deletedProjects.current.add(id);
+    setState(previous => ({ projects: previous.projects.filter(project => project.id !== id), jobs: previous.jobs.filter(job => job.project_id !== id) }));
+    if (project?.id === id) {
+      const next = state.projects.find(project => project.id !== id);
+      setSelected(next?.id ?? null);
+      setEditorContext(null);
+      if (next) localStorage.setItem("bosscut:selected", next.id);
+      else localStorage.removeItem("bosscut:selected");
+    }
   }
   const projectJobs = state.jobs.filter((j) => j.project_id === project?.id);
   const mediaJobs = projectJobs.filter((job) => job.kind !== "analyze");
@@ -78,8 +112,9 @@ export default function App() {
   }
 
   return (
-    <div className={`app ${chatOpen ? "chat-is-open" : ""} ${project?.ready ? "has-editor" : ""}`}>
-      <aside className="sidebar">
+    <div style={layout.style} className={`app ${chatOpen ? "chat-is-open" : ""} ${project?.ready ? "has-editor" : ""} ${previewExpanded ? "preview-is-large" : ""} ${layout.resizing ? "is-resizing" : ""}`}>
+      {layout.handles}
+      <aside className="sidebar" id="project-sidebar" aria-label="素材庫側欄">
         <a className="brand" href="/" aria-label="BossCut 首頁">
           <span className="brand-icon">
             <Scissors size={23} />
@@ -102,36 +137,8 @@ export default function App() {
           素材庫{" "}
           <span>{state.projects.length.toString().padStart(2, "0")}</span>
         </div>
-        <nav className="project-list" aria-label="影片專案">
-          {state.projects.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => select(p.id)}
-              className={`project-card ${p.id === project?.id ? "selected" : ""}`}
-            >
-              <span className="project-icon">
-                {p.ready ? (
-                  <Film size={18} />
-                ) : (
-                  <LoaderCircle size={18} className="spin" />
-                )}
-              </span>
-              <span>
-                <strong>{p.title}</strong>
-                <small>
-                  {p.ready ? `${time(p.duration!)} · 待人工檢查` : "準備素材中"}
-                </small>
-              </span>
-            </button>
-          ))}
-          {!state.projects.length && (
-            <p className="library-empty">
-              你的下一場勝利，
-              <br />
-              就從一支影片開始。
-            </p>
-          )}
-        </nav>
+        <ProjectLibrary projects={state.projects} selected={project?.id} jobs={state.jobs}
+          onSelect={select} onRenamed={renameProject} onDeleted={deleteProject} onError={setError} />
         <div className="sidebar-bottom">
           <div className="local-card">
             <ShieldCheck size={19} />
@@ -232,12 +239,19 @@ export default function App() {
             </div>
           ) : project.ready ? (
             <Editor
-              key={`${project.id}:${project.analysis_generation ?? 0}`}
+              key={`${project.id}:${project.editor_generation ?? project.analysis_generation ?? 0}`}
+              previewExpanded={previewExpanded}
+              onTogglePreview={() => setPreviewExpanded(value => !value)}
               onReset={async () => {
                 const result = await api<{ project: Project }>(`/projects/${project.id}/reset-analysis`, "POST");
                 localStorage.removeItem(`bosscut:draft:${project.id}`);
                 setState(previous => ({ projects: previous.projects.map(p => p.id === result.project.id ? result.project : p),
                   jobs: previous.jobs.filter(j => j.project_id !== result.project.id || j.kind !== "analyze") }));
+              }}
+              onResetProgress={async () => {
+                const result = await api<{ project: Project; jobs: Job[] }>(`/projects/${project.id}/reset-analysis-progress`, "POST");
+                setState(previous => ({ projects: previous.projects.map(p => p.id === result.project.id ? result.project : p),
+                  jobs: [...result.jobs, ...previous.jobs.filter(j => j.project_id !== result.project.id)] }));
               }}
               project={project}
               jobs={projectJobs}
@@ -508,6 +522,9 @@ function Editor({
   onContext,
   onSearch,
   onReset,
+  onResetProgress,
+  previewExpanded,
+  onTogglePreview,
 }: {
   project: Project;
   jobs: Job[];
@@ -515,9 +532,13 @@ function Editor({
   chatRef: Ref<EditorChatHandle>;
   onSearch: () => Promise<void>;
   onReset: () => Promise<void>;
+  onResetProgress: () => Promise<void>;
+  previewExpanded: boolean;
+  onTogglePreview: () => void;
   onContext: (context: EditorContext) => void;
 }) {
   const duration = project.duration!;
+  const [timelineView, setTimelineView] = useState<TimeWindow>({ from: 0, to: duration });
   const [draft, setDraft] = useState<Draft>(() => {
     try {
       const saved = JSON.parse(
@@ -537,8 +558,23 @@ function Editor({
   const candidateBaseline = useRef<string | null>(!draft.reviewed && draft.revision === 0 && JSON.stringify(draft) === JSON.stringify(project.draft) ? JSON.stringify(draft) : null);
   const [current, setCurrent] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const resetPending = useRef(false);
+  async function reset(progressOnly: boolean) {
+    if (resetPending.current) return;
+    resetPending.current = true;
+    setResetting(true);
+    onError("");
+    try { await (progressOnly ? onResetProgress() : onReset()); }
+    catch (e) { onError((e as Error).message); }
+    finally { resetPending.current = false; setResetting(false); }
+  }
   const [savedMessage, setSavedMessage] = useState("");
   const video = useRef<HTMLVideoElement>(null);
+  const previewPanel = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (previewExpanded) previewPanel.current?.scrollIntoView({ block: "start" });
+  }, [previewExpanded]);
   const stopAt = useRef<number | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const [aiFeedback, setAiFeedback] = useState<{ text: string; fields: string[]; id: number } | null>(null);
@@ -565,9 +601,10 @@ function Editor({
   }, [draft, project.id]);
   useEffect(() => {
     onContext({ project_id: project.id, title: project.title, duration, draft, analysis_generation: project.analysis_generation ?? 0 });
-  }, [draft, project.id, project.title, onContext]);
+  }, [draft, project.id, project.title, project.analysis_generation, duration, onContext]);
   useImperativeHandle(chatRef, () => ({
     apply(action, expected) {
+      if (resetPending.current || resetting) return "影片正在重置，未套用舊操作。";
       if ((expected.analysis_generation ?? 0) !== (project.analysis_generation ?? 0)) return "影片已重置，未套用舊操作。";
       if (expected.project_id !== project.id) return "影片已切換，未套用操作。";
       if (action.kind === "select_candidate") {
@@ -584,6 +621,12 @@ function Editor({
         return `已跳到 ${time(action.seconds)}`;
       }
       if (JSON.stringify(expected.draft) !== JSON.stringify(draft)) return "你已修改草稿，未覆蓋新的設定。請再送出一次需求。";
+      if (action.kind === "export") {
+        if (!draft.reviewed) return "請先檢查完整片段並勾選成功挑戰確認，再要求匯出。";
+        if (busy || jobs.some(j => j.kind === "export" && active(j))) return "影片正在儲存或匯出，請等候完成。";
+        void save(true);
+        return "正在儲存草稿並提交 FFmpeg 剪輯，結果會顯示在成品區。";
+      }
       const { start, victory, postroll } = action;
       if (start === null || victory === null || postroll === null ||
           ![start, victory, postroll].every(Number.isFinite) || start < 0 || start >= victory ||
@@ -715,10 +758,10 @@ function Editor({
     if (navigate) seek(result.start!);
     markAI("候選片段已放入時間軸，可直接預覽與拖曳調整。", ["start", "victory", "postroll"]);
   }
-  function selectSegment(segment: NumberedCandidate) {
+  function selectSegment(segment: NumberedCandidate, seconds = segment.start) {
     video.current?.pause();
     setSelectedSegment(segment.id);
-    seek(segment.start);
+    seek(seconds);
   }
   useEffect(() => {
     const candidate = candidates(project, jobs)[0];
@@ -730,15 +773,21 @@ function Editor({
     <>
       {aiFeedback && <div className="ai-editor-feedback" role="status" key={aiFeedback.id}><Sparkles size={14} />{aiFeedback.text}</div>}
       <div className="editor-grid">
-        <section aria-label="影片與選取範圍" className={`preview-panel ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
+        <section ref={previewPanel} aria-label="影片與選取範圍" className={`preview-panel ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
+          <div className="preview-stage">
           <div className="panel-heading">
             <span>
               <Film size={16} />
               <strong title={project.title}>{project.title}</strong>
             </span>
-            <span className="resolution">
-              {project.width} × {project.height}
-            </span>
+            <div className="preview-display-controls">
+              <span className="resolution">{project.width} × {project.height}</span>
+              <button type="button" className="preview-expand" aria-pressed={previewExpanded}
+                onClick={onTogglePreview} title={previewExpanded ? "退出劇院模式（Esc）" : "放大影片並保留剪輯拉條"}>
+                {previewExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                {previewExpanded ? "返回工作區" : "劇院模式"}
+              </button>
+            </div>
           </div>
           <div className="video-wrap">
             <video
@@ -750,6 +799,7 @@ function Editor({
                   : undefined
               }
               controls
+              playsInline
               preload="metadata"
               onError={() => onError("預覽影片載入失敗，請確認服務仍在運作。")}
               onTimeUpdate={() => {
@@ -802,10 +852,14 @@ function Editor({
               <option value="2">2×</option>
             </select>
           </div>
-          <BossReviewDock jobs={jobs} onSearch={onSearch} onReset={onReset} onError={onError} />
+          </div>
+          <div className="preview-editing" aria-label="剪輯與候選檢查區" tabIndex={0}>
           <ClipWorkspace project={project} jobs={jobs} draft={draft} selected={selectedClip}
+            view={timelineView} onViewChange={setTimelineView}
             selectedSegment={selectedSegment} onSelectSegment={selectSegment} onError={onError}
             onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current} />
+          <BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />
+          </div>
           <div className="compact-export">            <label className="review-checkbox">
               <input
                 type="checkbox"
@@ -838,6 +892,7 @@ function Editor({
             <p className="export-help">原片重新編碼 · 保留原始音訊內容</p>
           </div>
         </section>
+        <AIWorkspaceTimeline project={project} jobs={jobs} draft={draft} current={current} onSeek={seek} view={timelineView} onResetProgress={() => reset(true)} resetting={resetting} />
         <details className="editor-settings workspace-details"><summary>精確時間與手動調整</summary>
           <div className="quick-actions">
             <button

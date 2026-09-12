@@ -36,6 +36,10 @@ Local import lists files already under `downloads/` and `clips/`. Put a new sour
 recording in `downloads/`, then open the import dialog. The browser never uploads
 your source file. Preview files and task state live in `runs/web/`; exports and
 their JSON receipts live in `clips/web/`. Source videos are never overwritten.
+Each web export is saved as `clips/web/<project-id>/<job-id>.mp4` under the
+backend workspace (`GAME_VOD_ROOT` if configured). The finished clip's
+**檔案儲存位置** disclosure shows its path. **下載 MP4** saves another copy through
+your browser's download location.
 
 See [the POC guide](docs/web-poc.md) for development, the Agent JSON contract,
 testing, and current limitations.
@@ -111,14 +115,42 @@ Stopped or incomplete analysis keeps the annotations already found; an empty
 result does not manufacture candidates. Older single-result jobs with usable
 timestamps also appear as provisional annotations.
 
-The video and its selection track fit together in the main view. The compact AI
-bar offers search, stop/continue and **重置**; sampling details stay collapsed under
+Candidate identities are assigned by the host, not generated job prefixes. Updates
+reuse the same encounter, and explicit replacement retires old hypotheses. Exact
+legacy duplicates are consolidated for both the UI and chat without deleting old
+analysis artifacts or review tags. Long candidate overviews scroll within the panel.
+Sampling requests are deduplicated against both completed and queued coverage, and
+checked again immediately before execution. Refinement uses fixed density levels
+and completes a requested pass before opening another. After three extra passes
+without a new encounter, victory/failure decision or meaningful boundary change,
+the host stops expanding exploration, finishes required checks and returns
+**uncertain** with playable candidates. This stopping state survives continuation;
+it does not approve export. Completed results explicitly report search coverage
+and a completion reason, and do not offer continuation when no work remains.
+
+The preview uses most of the editor height. The selection track is immediately
+below it in an independently scrolling area, followed by candidates and the AI
+controls, so checking more encounters does not scroll the source video away.
+Export stays visible at the bottom of the player panel. **劇院模式** temporarily
+hides the library and chat to enlarge the preview while keeping the timeline
+editable; **返回工作區** or Escape restores the layout. The same video element
+retains its playback position, speed and volume. Mobile previews use the available
+width at 16:9 instead of a small fixed height.
+
+The compact AI bar offers search, stop/continue and **清除全部**; sampling details stay collapsed under
 **分析詳情**. Evidence markers and the currently sampled interval share the range
 track. Use **看全片** / **放大片段** to change its scale. Candidate switches, opening /
 victory / ending previews and export remain beside the player. Chat, numeric
 settings and completed exports open only when needed.
 
-**重置分析結果** stops this video's analysis and removes its candidates, evidence,
+Use **重置 AI 查看進度** beside **AI 探索 · 全片** to stop the current analysis and
+clear viewed ranges and continuation checkpoints. Candidates, review tags, the
+current draft (including unsaved edits), source and exports remain available. The
+next search starts fresh within the selected range instead of continuing the old
+run. You can change the search range or model before starting it. This also clears
+old AI conversation context so previous replies cannot restore a stopped search.
+
+**清除全部** (accessible name: **重置分析結果**) stops this video's analysis and removes its candidates, evidence,
 checkpoints, sampled images, analysis logs and current draft. It preserves the source,
 preview, thumbnails, export files and export jobs, as well as other projects.
 A new search starts from scratch. Draft revisions and an analysis generation
@@ -133,10 +165,21 @@ not automatically replaced on opening a project.
 
 Drag the start, victory and end handles to adjust the range while preserving a
 5–10-second post-victory ending.
+Use **＋ / −** or the zoom slider to enlarge a long VOD down to a five-second
+visible window. **選取範圍** fits the draft; **全片** resets the view. Drag the
+overview window or use the left/right buttons to pan without changing the draft.
+Ctrl/⌘ + wheel over a track zooms around the pointed timestamp; ordinary wheel
+scrolling remains available. Candidates, draft, AI coverage and finished clips
+share the same visible time range. The overview window also supports arrow keys,
+Home and End, and touch dragging.
 The handles also support arrow keys (Shift for one-second steps). Preview uses the
 existing source preview and stops at the selected end; no new encode is needed.
 Existing exported MP4s have inline players in the same workspace. Candidates remain
 unreviewed drafts until the user checks the footage and explicitly exports.
+
+The chat panel has separate **AI 模型** and **思考強度** fields above the composer.
+Effort choices use readable labels and the selected model's supported values;
+switching to a model that does not support the current effort uses its default.
 
 ### Connect your AI account first
 
@@ -180,10 +223,16 @@ When ready, import a video and use **一鍵搜尋成功挑戰** below the player
 The default search covers the full VOD; the conversation panel allows a narrower
 range. After coarse discovery, Python schedules whole-candidate inspection at
 2-second then 0.5-second intervals, plus 60 samples/second around boundaries and
-model-identified suspicious transitions. The model can request additional ranges.
-This costs more time and model usage than the old 12-round search. Each pass allows
-up to 240 calls, 12,000 frames and two hours; these are workload limits, not cost
-caps. Unfinished results remain uncertain. **接續細查** reuses completed observations
+model-identified suspicious transitions. Detail windows over 12 seconds first
+receive 0.5-second localization; the model then identifies short transitions for
+frame-level review. The model can request additional ranges at fixed density levels.
+Analysis and chat have no application-imposed model response timeout. Analysis
+continues without fixed session time, call-count or total-frame budgets until the
+review completes, exhausts useful refinement, fails, or you cancel it. The
+no-progress guard counts completed extra passes, not packets of a long scan, and
+does not skip mandatory coverage. Select reasoning effort beside the model;
+the available choices come from that model's Codex capabilities. Unfinished results
+remain uncertain. **接續細查** reuses completed observations
 and continues the saved queue with the original model. Source changes invalidate
 the checkpoint. Sampled images are sent to OpenAI; the source stays local.
 Dense sampling improves the evidence but does not guarantee no missed frames or
@@ -467,6 +516,12 @@ Sample a broad range:
 game-vod-clipper sample "downloads/video.mp4" --start 00:00:00 --end 03:00:00 --every 60 -o runs/coarse
 game-vod-clipper sheet runs/coarse -o runs/coarse.jpg
 ```
+
+`sheet` prints every page plus `runs/coarse.json`, an ordered page/frame manifest.
+More than 20 frames (the default 5×4 layout) produce `coarse-page-001.jpg`, etc.
+Inspect all listed pages and use `runs/coarse/samples.json` for source timestamps;
+only opening the first page does not complete the search. Reuse these observations
+for continuity validation instead of resampling the exported clip in full.
 
 Sample a candidate range more closely:
 

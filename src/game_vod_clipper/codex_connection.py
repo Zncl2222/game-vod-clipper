@@ -167,9 +167,9 @@ class CodexConnection:
         cursor = None
         seen = set()
         for _ in range(20):
-            page = await self.rpc("model/list", {"limit": 100, "includeHidden": False, "cursor": cursor})
+            page = await self.rpc("model/list", {"limit": 100, "includeHidden": True, "cursor": cursor})
             for item in page.get("data", []):
-                if item.get("hidden") or "text" not in item.get("inputModalities", ["text"]):
+                if "text" not in item.get("inputModalities", ["text", "image"]):
                     continue
                 model = item.get("model")
                 if not isinstance(model, str) or not model:
@@ -179,7 +179,9 @@ class CodexConnection:
                     "description": item.get("description", ""),
                     "is_default": bool(item.get("isDefault")),
                     "effort": item.get("defaultReasoningEffort"),
-                    "input_modalities": item.get("inputModalities", ["text"]),
+                    "supported_efforts": [e["reasoningEffort"] for e in item.get("supportedReasoningEfforts", [])
+                                          if isinstance(e.get("reasoningEffort"), str)],
+                    "input_modalities": item.get("inputModalities", ["text", "image"]),
                 }
             cursor = page.get("nextCursor")
             if not cursor:
@@ -193,10 +195,11 @@ class CodexConnection:
         return await self.respond(
             "This is a text-only connection check. Do not use any tools, read files, "
             "or process media. Reply in Traditional Chinese with exactly: AI 連線成功。",
+            timeout=60,
         )
 
     async def respond(self, prompt: str, *, model: str = MODEL,
-                      schema: dict | None = None, effort: str | None = "low", timeout: int = 60):
+                      schema: dict | None = None, effort: str | None = "low", timeout: int | None = None):
         if self.busy.locked():
             raise ConnectionError("AI 連線操作進行中，請等候完成。")
         async with self.busy:

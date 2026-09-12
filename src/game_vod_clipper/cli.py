@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     sample.add_argument("--every", type=float, default=30.0, help="seconds between frames")
     sample.add_argument("-o", "--output-dir", type=Path, default=Path("runs/samples"))
 
-    sheet = subparsers.add_parser("sheet", help="create a contact sheet from JPG frames")
+    sheet = subparsers.add_parser("sheet", help="create paginated contact sheets from all JPG frames")
     sheet.add_argument("frame_dir", type=Path)
     sheet.add_argument("-o", "--output", type=Path, required=True)
     sheet.add_argument("--columns", type=int, default=5)
@@ -100,14 +100,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "sheet":
-            output = create_contact_sheet(
+            outputs = create_contact_sheet(
                 args.frame_dir,
                 args.output,
                 columns=args.columns,
                 rows=args.rows,
                 width=args.width,
             )
-            print(output)
+            for output in outputs:
+                print(output)
+            print(args.output.with_suffix(".json"))
             return 0
 
         if args.command == "clip":

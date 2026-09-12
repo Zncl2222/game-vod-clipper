@@ -33,6 +33,7 @@ class ChatContext(StrictModel):
 
 
 class ChatRequest(StrictModel):
+    effort: str | None = Field(default=None, max_length=40)
     message: str = Field(min_length=1, max_length=4000)
     model: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
     history: list[ChatMessage] = Field(default_factory=list, max_length=24)
@@ -52,7 +53,7 @@ class ChatRequest(StrictModel):
 
 
 class ChatAction(StrictModel):
-    kind: Literal["set_draft", "seek", "search", "cancel_search", "select_candidate"]
+    kind: Literal["set_draft", "seek", "search", "cancel_search", "select_candidate", "export"]
     start: float | None
     victory: float | None
     postroll: float | None
@@ -66,11 +67,20 @@ class ChatReply(StrictModel):
     action: ChatAction | None
 
 
+def resolve_effort(model: dict, effort: str | None) -> str | None:
+    if effort is None:
+        return model.get("effort")
+    if effort != model.get("effort") and effort not in model.get("supported_efforts", []):
+        raise ConnectionError("此模型不支援所選的 reasoning effort，請重新選擇。")
+    return effort
+
+
 async def chat(connection: CodexConnection, body: ChatRequest, project: dict | None):
     models = await connection.models()
     selected = next((m for m in models if m["id"] == body.model), None)
     if not selected:
         raise ConnectionError("所選模型已不在 Codex 清單中，請重新整理並選擇模型。")
+    effort = resolve_effort(selected, body.effort)
     context = None
     if body.context:
         if not project or not project.get("ready") or project["id"] != body.context.project_id:
@@ -128,8 +138,13 @@ victory or claim to have seen video. Require 0 <= start < victory and 5 <= postr
 Describe the requested change without claiming it is already applied, saved,
 reviewed or exported: the UI applies validated commands after this response.
 Do not generate commands for requests to explain/discuss settings rather than
-change them. You cannot import, encode, delete, upload or export media.
-If asked for those operations, explain that the workspace controls handle them.
+change them. When explicitly asked to cut/export the current draft, emit export
+with all time fields and candidate_id null. The UI checks the current draft has
+been reviewed and saves it before scheduling the host's FFmpeg export. Never
+claim export succeeded before a completed job exists. Do not emit export for
+questions about exporting. Search runs the repository game-vod-boss-clipper SKILL
+with FFmpeg sampling and visual review; the host provides these tools by default.
+You cannot import, delete or upload media.
 Keep answers useful and concise; do not add unsolicited clipping instructions.
 """ + json.dumps({"history": [m.model_dump() for m in body.history], "project": context,
                   "message": body.message}, ensure_ascii=False)
@@ -142,7 +157,7 @@ Keep answers useful and concise; do not add unsolicited clipping instructions.
     schema["$defs"]["ChatAction"]["properties"]["candidate_id"].pop("default", None)
     result = await connection.respond(prompt, model=body.model,
                                       schema=schema,
-                                      effort=selected.get("effort"), timeout=120)
+                                      effort=effort, timeout=None)
     try:
         reply = ChatReply.model_validate_json(result["reply"])
         if not reply.reply.strip() or len(reply.reply) > 12000:
@@ -157,7 +172,7 @@ Keep answers useful and concise; do not add unsolicited clipping instructions.
                     raise ValueError("Invalid candidate reference")
             elif action.candidate_id is not None:
                 raise ValueError("Unexpected candidate reference")
-            elif action.kind == "cancel_search":
+            elif action.kind in {"cancel_search", "export"}:
                 if any(v is not None for v in (action.start, action.end, action.victory, action.postroll, action.seconds)):
                     raise ValueError("Invalid cancellation")
             elif action.kind == "search":
