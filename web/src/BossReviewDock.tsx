@@ -30,7 +30,7 @@ export default function BossReviewDock({ jobs, segmentCount, onSearch, onReset, 
     : result?.status === "not_found" ? "這次抽樣未找到明確勝利"
     : retry ? (job?.resumable ? "搜尋已停止，已完成的檢查可保留" : "搜尋已停止，可以重新搜尋")
     : "讓 AI 找出成功的那一次";
-  return <div className="boss-review-dock assistant-shortcut" aria-label="影片 AI 助手">
+  return <div className="boss-review-dock assistant-shortcut" role="group" aria-label="影片 AI 助手">
     <div className="boss-review-top">
       <div className="boss-review-icon">{working ? <LoaderCircle size={20} className="spin" /> : complete ? <Trophy size={20} /> : <Sparkles size={20} />}</div>
       <div className="boss-review-copy"><strong role="status">{heading}</strong>

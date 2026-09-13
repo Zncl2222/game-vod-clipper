@@ -46,9 +46,21 @@ testing, and current limitations.
 
 ### Chat and control the editor
 
+The desktop workspace includes a searchable media library, an import/review/export
+step indicator, and **操作指南** with a walkthrough and keyboard shortcuts. Import
+and help stay available in the collapsed library rail. The buttons at the top of
+each sidebar collapse or expand it; visibility and expanded widths are remembered
+on this browser. Collapsing a panel preserves the working draft, playback, library
+search, and unsent conversation input for reopening it. The import dialog
+can refresh the local source list without closing; invalid URLs and
+source errors include recovery guidance. The player footer keeps draft status,
+clip length, review confirmation, and export availability visible together.
+The shared visual rules live in [the desktop design system](design-system/bosscut-studio/MASTER.md).
+
 The main view keeps the video, one range timeline, previews and export together.
 **AI 對話** opens an optional conversation panel; on smaller screens it opens a
-full-height drawer. **精確時間與手動調整** expands the numeric editing controls. Account controls live behind **帳號設定**;
+full-height drawer. Numeric editing controls stay visible in the workbench;
+**手動操作與草稿管理** expands manual shortcuts and save/restore actions. Account controls live behind **帳號設定**;
 search progress appears below the video and in the conversation; advanced Agent import/export and media job history are collapsible.
 
 - **一般聊天** supports ordinary conversation without attaching project metadata.
@@ -128,22 +140,41 @@ the host stops expanding exploration, finishes required checks and returns
 it does not approve export. Completed results explicitly report search coverage
 and a completion reason, and do not offer continuation when no work remains.
 
-The preview uses most of the editor height. The selection track is immediately
-below it in an independently scrolling area, followed by candidates and the AI
-controls, so checking more encounters does not scroll the source video away.
-Export stays visible at the bottom of the player panel. **劇院模式** temporarily
+The editor keeps layout **A**'s unified **剪輯與原片對照** workbench beneath the
+source preview, beside a full-height AI conversation. One time ruler aligns the current selection,
+AI candidates, and optional exploration/evidence tracks. The workbench scrolls
+independently, so inspecting more candidates keeps the source video visible.
+The workbench starts at a compact 260px. Drag its upper divider to resize it, use
+the adjacent **＋ / −** buttons, or focus the divider and use Up/Down (Shift for
+larger steps), Home/End. Double-click or use reset to restore the default height.
+The browser remembers the preferred height and bounds it to the available window
+while preserving space for the source and export controls. Sidebar widths remain
+independently resizable. On phones, the workbench uses natural scrolling height.
+Export stays visible below the workbench. **劇院模式** temporarily
 hides the library and chat to enlarge the preview while keeping the timeline
 editable; **返回工作區** or Escape restores the layout. The same video element
 retains its playback position, speed and volume. Mobile previews use the available
 width at 16:9 instead of a small fixed height.
 
-The compact AI bar offers search, stop/continue and **清除全部**; sampling details stay collapsed under
-**分析詳情**. Evidence markers and the currently sampled interval share the range
-track. Use **看全片** / **放大片段** to change its scale. Candidate switches, opening /
-victory / ending previews and export remain beside the player. Chat, numeric
-settings and completed exports open only when needed.
+The player has playback, frame, sound, and speed controls; source seeking uses the
+workbench filmstrip. Start/victory inputs and the independent 5–10-second postroll
+control sit directly in the workbench. **快速核對與 AI 草稿** opens the opening/victory/ending
+preview shortcuts. Search and **清除全部** remain beside review/export controls;
+the AI conversation also offers search and stop/continue.
 
-Use **重置 AI 查看進度** beside **AI 探索 · 全片** to stop the current analysis and
+The current draft's solid frame is the export range. Text labels distinguish
+**開始**, **勝利**, and **結束**; the actual end is victory plus the chosen postroll.
+Hatching belongs only to that retained ending. The adjacent AI track uses numbered
+reference cards and a light dashed draft guide on the same source-time scale;
+it does not repeat the filled selection or postroll hatching. Selecting a card
+previews it; applying it to the draft is explicit. The selected candidate reports
+the overlapping duration or no overlap. Trimming and zooming update the guide
+without changing the AI candidate. With no candidates, the filmstrip still shows
+the selection. Numeric controls sit below these two adjacent tracks.
+The **證據** button reveals aligned exploration coverage, the active sampling range,
+and evidence markers. Completed clips have their own list and player below the editor.
+
+Open **證據**, then use **重置 AI 查看進度** to stop the current analysis and
 clear viewed ranges and continuation checkpoints. Candidates, review tags, the
 current draft (including unsaved edits), source and exports remain available. The
 next search starts fresh within the selected range instead of continuing the old
@@ -163,15 +194,14 @@ select a candidate switch to load its range into the editor. Automatic candidate
 selection does not pause or seek the video. Saved/reviewed drafts are
 not automatically replaced on opening a project.
 
-Drag the start, victory and end handles to adjust the range while preserving a
-5–10-second post-victory ending.
+Drag the start and victory handles to adjust the range. Changing victory preserves
+the independently selected 5–10-second post-victory ending.
 Use **＋ / −** or the zoom slider to enlarge a long VOD down to a five-second
-visible window. **選取範圍** fits the draft; **全片** resets the view. Drag the
-overview window or use the left/right buttons to pan without changing the draft.
+visible window. **目前剪輯** fits the draft (also the initial view); **全片** resets
+the view. Use the compact pan slider or left/right buttons without changing the draft.
 Ctrl/⌘ + wheel over a track zooms around the pointed timestamp; ordinary wheel
-scrolling remains available. Candidates, draft, AI coverage and finished clips
-share the same visible time range. The overview window also supports arrow keys,
-Home and End, and touch dragging.
+scrolling remains available. Candidates, draft, and AI coverage share the same
+visible time range. The pan slider also supports arrow keys, Home and End, and touch.
 The handles also support arrow keys (Shift for one-second steps). Preview uses the
 existing source preview and stops at the selected end; no new encode is needed.
 Existing exported MP4s have inline players in the same workspace. Candidates remain

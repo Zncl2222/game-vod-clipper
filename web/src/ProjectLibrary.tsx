@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useId, useRef, useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Copy, Film, FolderOpen, Info, LoaderCircle, MoreHorizontal, Pencil, Trash2, X } from "lucide-react";
+import { Copy, Film, FolderOpen, Info, LoaderCircle, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
 import { active, api, time, type Job, type Project } from "./api";
 
 type Action = "open" | "rename" | "copy" | "info" | "delete";
@@ -27,17 +27,21 @@ function MenuItems({ kind, project, onAction }: { kind: "context" | "dropdown"; 
   </>;
 }
 
-function ProjectEntry({ project, selected, onSelect, onAction, dialogOpen }: {
-  project: Project; selected: boolean; onSelect: () => void; onAction: (action: Action) => void; dialogOpen: boolean;
+function ProjectEntry({ project, selected, onSelect, onAction, dialogOpen, jobs }: {
+  project: Project; selected: boolean; onSelect: () => void; onAction: (action: Action) => void; dialogOpen: boolean; jobs: Job[];
 }) {
+  const running = jobs.find(active);
+  const exported = jobs.some(job => job.kind === "export" && job.status === "succeeded");
+  const status = running ? ({ prepare: "準備素材中", analyze: "AI 搜尋中", export: "匯出中" }[running.kind])
+    : exported ? "已有成品" : project.ready ? (project.draft?.reviewed ? "已核對" : "待核對") : "尚未就緒";
   return <ContextMenu.Root>
     <ContextMenu.Trigger asChild>
       <div className={`project-entry ${selected ? "is-selected" : ""}`}>
         <button className={`project-card ${selected ? "selected" : ""}`} onClick={onSelect} title={project.title}
           aria-current={selected ? "page" : undefined}
           onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); onAction("rename"); } }}>
-          <span className="project-icon">{project.ready ? <Film size={18} /> : <LoaderCircle size={18} className="spin" />}</span>
-          <span><strong>{project.title}</strong><small>{project.ready ? `${time(project.duration!)} · 待人工檢查` : "準備素材中"}</small></span>
+          <span className="project-icon">{running ? <LoaderCircle size={18} className="spin" /> : <Film size={18} />}</span>
+          <span><strong>{project.title}</strong><small>{project.ready ? `${time(project.duration!)} · ${status}` : status}</small></span>
         </button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild><button className="project-more" aria-label={`${project.title} 的專案選單`} title="專案選單"><MoreHorizontal size={17} /></button></DropdownMenu.Trigger>
@@ -152,6 +156,9 @@ export default function ProjectLibrary({ projects, selected, jobs, onSelect, onR
 }) {
   const [dialog, setDialog] = useState<{ id: string; action: "rename" | "info" | "delete" } | null>(null);
   const [notice, setNotice] = useState("");
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
+  const filtered = projects.filter(project => project.title.toLocaleLowerCase().includes(deferredQuery));
   const focusedProject = projects.find(project => project.id === dialog?.id);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(""), 2500); return () => clearTimeout(timer); }, [notice]);
   async function act(project: Project, action: Action) {
@@ -169,9 +176,14 @@ export default function ProjectLibrary({ projects, selected, jobs, onSelect, onR
     setDialog({ id: project.id, action });
   }
   return <>
+    {!!projects.length && <div className="library-search"><Search size={15} aria-hidden="true" />
+      <input aria-label="搜尋素材庫" placeholder="搜尋影片…" value={query} onChange={event => setQuery(event.target.value)} />
+      {query && <button aria-label="清除素材搜尋" onClick={() => setQuery("")}><X size={14} /></button>}
+    </div>}
     <nav className="project-list" aria-label="影片專案">
-      {projects.map(project => <ProjectEntry key={project.id} project={project} selected={project.id === selected}
+      {filtered.map(project => <ProjectEntry key={project.id} project={project} selected={project.id === selected} jobs={jobs.filter(job => job.project_id === project.id)}
         onSelect={() => onSelect(project.id)} onAction={action => void act(project, action)} dialogOpen={!!dialog} />)}
+      {!!projects.length && !filtered.length && <p className="library-empty" role="status">找不到符合的影片。<br />試試其他名稱，或清除搜尋。</p>}
       {!projects.length && <p className="library-empty">你的下一場勝利，<br />就從一支影片開始。</p>}
     </nav>
     {!!notice && <div className="project-notice" role="status"><Copy size={13} />{notice}</div>}

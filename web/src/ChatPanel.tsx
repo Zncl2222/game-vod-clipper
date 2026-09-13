@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
-import { ArrowUp, Check, ChevronDown, MessageCircle, Plus, Settings2, Sparkles, Square, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, MessageCircle, PanelRightClose, PanelRightOpen, Plus, Settings2, Sparkles, Square } from "lucide-react";
 import AIConnection, { type Connection } from "./AIConnection";
 import { active, currentAnalysis, api, apiError, time, type Draft, type Job } from "./api";
 import AIActivity from "./AIActivity";
@@ -62,6 +62,14 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
   const controller = useRef<AbortController | null>(null);
   const historyEnd = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const panelToggle = useRef<HTMLButtonElement>(null);
+  const previousOpen = useRef(open);
+  useEffect(() => {
+    if (previousOpen.current !== open) {
+      (open ? composer.current : panelToggle.current)?.focus({ preventScroll: true });
+    }
+    previousOpen.current = open;
+  }, [open]);
   const account = useRef<string | undefined>(undefined);
   const currentContext = useRef(context);
   currentContext.current = context;
@@ -223,8 +231,8 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
   }
 
   return <>
-    <button className="chat-mobile-toggle" onClick={onToggle} aria-expanded={open} aria-controls="ai-chat-panel">
-      <MessageCircle size={18} />{open ? "回到工作區" : "AI 對話"}
+    <button ref={panelToggle} className="chat-mobile-toggle" onClick={onToggle} aria-expanded={open} aria-controls="ai-chat-panel" title={open ? "收合 AI 側欄" : "展開 AI 側欄"}>
+      <PanelRightOpen size={18} aria-hidden="true" />{open ? "回到工作區" : "AI 對話"}
     </button>
     <aside id="ai-chat-panel" className={`chat-panel ${open ? "is-open" : ""}`} aria-label="AI 對話">
       <header className="chat-header">
@@ -232,7 +240,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
         <div><h2>你的 AI 夥伴</h2><span><i className={connection?.available ? "online" : ""} />{connection?.available ? "已連接 · 隨時聊聊" : "連接帳號開始對話"}</span></div>
         <button className="chat-icon" title="新對話" aria-label="新對話" disabled={busy || !messages.length} onClick={() => { setMessages([]); setError(""); setInput(""); }}><Plus size={18} /></button>
         <button className="chat-icon" title="帳號設定" aria-label="帳號設定" aria-expanded={settings} onClick={() => setSettings(!settings)}><Settings2 size={18} /></button>
-        <button className="chat-close chat-icon" aria-label="關閉 AI 對話" onClick={onToggle}><X size={18} /></button>
+        <button className="chat-close chat-icon" aria-label="關閉 AI 對話" title="收合 AI 側欄" aria-expanded={open} aria-controls="ai-chat-panel" onClick={onToggle}><PanelRightClose size={18} aria-hidden="true" /></button>
       </header>
       <div className={`chat-settings ${settings ? "expanded" : ""}`} inert={!settings}>
         <AIConnection onChange={setConnection} />
@@ -241,15 +249,15 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
         <button aria-pressed={mode === "chat"} disabled={busy} onClick={() => setMode("chat")}><MessageCircle size={14} />一般聊天</button>
         <button aria-pressed={mode === "edit"} disabled={busy} onClick={() => setMode("edit")}><Sparkles size={14} />剪輯助理</button>
       </div>
-      {mode === "edit" && <div className="chat-context"><span className="tiny-dot" />{context ? `目前影片 · ${context.title}` : "請先選擇已就緒的影片"}</div>}
+      {mode === "edit" && <div className="chat-context"><span className="tiny-dot" /><span title={context?.title}>{context ? `目前影片 · ${context.title}` : "請先選擇已就緒的影片"}</span></div>}
       <div className="chat-messages" role="log" aria-label="對話紀錄" aria-live="polite">
         {!messages.length && <div className="chat-welcome">
           <div className="chat-welcome-icon"><Sparkles size={28} strokeWidth={1.4} /></div>
-          <span className="eyebrow">A LITTLE HELP, A GOOD CONVERSATION</span>
+          <span className="eyebrow">YOUR CREATIVE COMPANION</span>
           <h3>{mode === "chat" ? "想聊些什麼？" : "用一句話，調整你的剪輯。"}</h3>
-          <p>{mode === "chat" ? "聊遊戲、整理想法，或問一個好奇的問題。這裡不只聊剪輯。" : "依 Boss Fight SKILL 搜尋成功挑戰、調整片段，並用 FFmpeg 匯出已確認的草稿。"}</p>
+          <p>{mode === "chat" ? "聊遊戲、整理直播靈感，或一起想個好標題。" : "找出成功的那場挑戰、微調時間，或整理值得留下的片段。你掌握最後的剪輯決定。"}</p>
           <div className="chat-suggestions">
-            {(mode === "chat" ? ["幫我想三個有趣的直播標題", "陪我聊聊最近玩的遊戲"] : ["根據 SKILL 搜尋整部影片的 BOSS FIGHT", "把勝利後收尾改成 8 秒", "匯出目前已確認的片段"]).map((text) => <button key={text} onClick={() => { setInput(text); composer.current?.focus(); }}>{text}<ArrowUp size={13} /></button>)}
+            {(mode === "chat" ? ["幫我想三個有趣的直播標題", "陪我聊聊最近玩的遊戲"] : ["搜尋整部影片的成功挑戰", "把勝利後收尾改成 8 秒", "匯出目前已確認的片段"]).map((text) => <button key={text} onClick={() => { setInput(text); composer.current?.focus(); }}>{text}<ArrowUp size={13} /></button>)}
           </div>
           {!connection?.available && <button className="primary" onClick={() => setSettings(true)}>連接 AI 帳號</button>}
         </div>}
@@ -288,8 +296,9 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
           <details className="chat-search-options"><summary title="設定搜尋範圍">範圍 <ChevronDown size={12} /></summary>
             <div className="chat-search-popover">
               <strong>搜尋範圍 · 預設全片</strong><p>逐段搜尋，再密集檢查整場挑戰與起訖。長片可能需要較久，可隨時停止並接續。</p>
-              <div className="chat-search-fields"><label>搜尋起點（秒）<input type="number" min={0} max={context.duration} value={searchStart} disabled={busy} onChange={(e) => setSearchStart(Number(e.target.value))} /></label>
-              <label>搜尋終點（秒）<input type="number" min={0} max={context.duration} value={searchEnd} disabled={busy} onChange={(e) => setSearchEnd(Number(e.target.value))} /></label></div>
+              <div className="chat-search-fields"><label>搜尋起點（秒）<input type="number" min={0} max={context.duration} value={searchStart} disabled={busy} aria-invalid={!searchValid} aria-describedby={!searchValid ? "search-range-error" : undefined} onChange={(e) => setSearchStart(Number(e.target.value))} /></label>
+              <label>搜尋終點（秒）<input type="number" min={0} max={context.duration} value={searchEnd} disabled={busy} aria-invalid={!searchValid} aria-describedby={!searchValid ? "search-range-error" : undefined} onChange={(e) => setSearchEnd(Number(e.target.value))} /></label></div>
+              {!searchValid && <p id="search-range-error" className="inline-error" role="alert">起點必須早於終點，且介於 0 到 {context.duration} 秒之間。</p>}
               <small>與聊天使用同一模型，抽樣畫面會送交 AI。</small>
               <button type="button" className="text-button" onClick={(e) => e.currentTarget.closest("details")?.removeAttribute("open")}>完成設定</button>
             </div>

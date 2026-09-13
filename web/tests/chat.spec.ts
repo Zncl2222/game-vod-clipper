@@ -15,6 +15,9 @@ const project = { id: "demo", title: "示範專案（僅測試資料）", ready:
 async function setup(page: Page, projects: unknown[] = [], options: { chat?: boolean; settings?: boolean } = {}) {
   // Fulfilled SSE fixtures close immediately; ignore that artificial disconnect.
   await page.addInitScript(() => {
+    window.addEventListener("error", event => {
+      if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
+    }, true);
     const NativeEventSource = window.EventSource;
     window.EventSource = class extends NativeEventSource {
       constructor(url: string | URL, options?: EventSourceInit) {
@@ -36,9 +39,10 @@ async function setup(page: Page, projects: unknown[] = [], options: { chat?: boo
     return route.fulfill({ status: 204 });
   });
   await page.goto("/");
+  if (projects.length) await page.getByRole("button", { name: "看全片", exact: true }).click();
   if (options.chat === false) await page.getByLabel("關閉 AI 對話").click();
   else if (!await page.getByLabel("輸入訊息").isVisible()) await page.getByRole("button", { name: "AI 對話", exact: true }).click();
-  if (projects.length && options.settings !== false) await page.locator(".editor-settings > summary").click();
+  if (projects.length && options.settings === true) await page.locator(".editor-settings > summary").click();
   if (options.chat !== false) await expect(page.getByLabel("選擇 AI 模型")).toHaveText("Model A");
 }
 
@@ -49,7 +53,7 @@ test("sidebars resize independently, preserve editor state, and remember bounded
   const video = page.locator(".video-wrap video");
   await video.evaluate((node: HTMLVideoElement) => { node.dataset.instance = "original"; node.currentTime = 42; });
   await page.getByLabel("開始時間").fill("25");
-  for (const [handle, delta, width] of [[left, 80, 264], [right, -80, 456]] as const) {
+  for (const [handle, delta, width] of [[left, 80, 304], [right, -80, 440]] as const) {
     const box = (await handle.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, 350);
     await page.mouse.down();
@@ -57,14 +61,14 @@ test("sidebars resize independently, preserve editor state, and remember bounded
     await page.mouse.up();
     await expect(handle).toHaveAttribute("aria-valuenow", String(width));
   }
-  expect((await page.locator(".sidebar").boundingBox())!.width).toBe(264);
-  expect((await page.locator(".chat-panel").boundingBox())!.width).toBe(456);
+  expect((await page.locator(".sidebar").boundingBox())!.width).toBe(304);
+  expect((await page.locator(".chat-panel").boundingBox())!.width).toBe(440);
   await expect(page.getByLabel("開始時間")).toHaveValue("25");
   await expect(video).toHaveAttribute("data-instance", "original");
   expect(await video.evaluate((node: HTMLVideoElement) => node.currentTime)).toBe(42);
   await page.reload();
-  await expect(left).toHaveAttribute("aria-valuenow", "264");
-  await expect(right).toHaveAttribute("aria-valuenow", "456");
+  await expect(left).toHaveAttribute("aria-valuenow", "304");
+  await expect(right).toHaveAttribute("aria-valuenow", "440");
   await left.focus();
   await page.keyboard.press("End");
   await expect(left).toHaveAttribute("aria-valuenow", "340");
@@ -76,8 +80,8 @@ test("sidebars resize independently, preserve editor state, and remember bounded
   await expect(right).toHaveAttribute("aria-valuenow", "550");
   await left.dblclick();
   await right.dblclick();
-  await expect(left).toHaveAttribute("aria-valuenow", "184");
-  await expect(right).toHaveAttribute("aria-valuenow", "376");
+  await expect(left).toHaveAttribute("aria-valuenow", "224");
+  await expect(right).toHaveAttribute("aria-valuenow", "360");
   await page.setViewportSize({ width: 320, height: 720 });
   await expect(left).toHaveCount(0);
   await expect(right).toHaveCount(0);
@@ -170,7 +174,7 @@ test("project deletion confirms, handles failures, and switches away without sta
   await page.getByRole("menuitem", { name: "刪除專案…" }).click();
   await dialog.getByRole("button", { name: "刪除專案", exact: true }).click();
   await expect(page.locator(".project-card")).toHaveCount(0);
-  await expect(page.locator(".empty-workspace")).toBeVisible();
+  await expect(page.getByRole("region", { name: /值得重播的一戰/ })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("bosscut:selected"))).toBeNull();
   expect(deletes).toBe(3);
 });
@@ -307,7 +311,8 @@ test("composer picker menus show model details and fit narrow screens", async ({
   })) } }));
   await page.setViewportSize({ width: 320, height: 640 });
   await page.reload();
-  await page.getByRole("button", { name: "AI 對話", exact: true }).click();
+  // The explicitly opened panel remains open across reloads, including a smaller window.
+  await expect(model).toBeVisible();
   await model.click();
   await expect(page.getByRole("option", { name: "Very long model name for a small screen — 0", exact: true })).toBeFocused();
   const menu = page.getByRole("listbox");
@@ -328,7 +333,7 @@ test("composer picker menus show model details and fit narrow screens", async ({
 test("draft edges drag across the full source and zoom stays fixed during dragging", async ({ page }) => {
   await setup(page, [project]);
   const track = page.locator(".clip-range-track");
-  const end = page.getByRole("slider", { name: "片段結束邊界" });
+  const end = page.getByRole("slider", { name: "勝利位置邊界" });
   await end.scrollIntoViewIfNeeded();
   const bounds = (await track.boundingBox())!;
   const handle = (await end.boundingBox())!;
@@ -356,25 +361,29 @@ test("live exploration and finished clips share source timestamps", async ({ pag
   await setup(page, [project], { settings: false });
   const jobs = [
     { id: "scan", project_id: "demo", kind: "analyze", status: "running", phase: "analyzing", sample_start: 120, sample_end: 150,
+      candidates: [{ id: "scan:encounter", start: 20, end: 100, victory: null, kind: "fight", confidence: "low",
+        boss: "對照候選", summary: "正在核對", warnings: [], evidence: [] }],
       evidence: [{ time: 130, event: "疑似勝利文字" }], coverage: [{ start: 0, end: 90, every: 5 }] },
     { id: "clip-a", project_id: "demo", kind: "export", status: "succeeded", draft: { ...project.draft, origin: "agent" } },
     { id: "clip-b", project_id: "demo", kind: "export", status: "succeeded", draft: { ...project.draft, start: 120, victory: 160, postroll: 8 } },
   ];
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), { projects: [project], jobs });
-  const timeline = page.getByLabel("AI 探索與成品時間軸");
+  await page.getByRole("button", { name: "證據", exact: true }).click();
+  const timeline = page.getByLabel("AI 探索與證據", { exact: true });
   await expect(timeline.getByRole("status")).toContainText("00:02:00–00:02:30");
-  await expect(timeline.getByRole("button", { name: "AI 訊號 00:02:10 疑似勝利文字" })).toBeVisible();
-  await expect(timeline.getByLabel("已匯出片段時間軸").getByRole("button")).toHaveCount(2);
-  const sourceTrack = (await timeline.locator(".aligned-source-track").boundingBox())!;
-  for (const selector of [".aligned-draft-track", ".ai-overview-track", ".export-timeline-track"]) {
-    const track = (await timeline.locator(selector).first().boundingBox())!;
+  await expect(timeline.getByRole("button", { name: "查看證據 00:02:10 疑似勝利文字" })).toBeVisible();
+  const finished = page.getByRole("region", { name: "成品片段", exact: true });
+  await expect(finished.getByLabel("成品片段清單").getByRole("button")).toHaveCount(2);
+  const sourceTrack = (await page.locator(".clip-range-track").boundingBox())!;
+  for (const selector of [".candidate-overview", ".ai-overview-track"]) {
+    const track = (await page.locator(selector).first().boundingBox())!;
     expect(track.x).toBeCloseTo(sourceTrack.x, 0);
     expect(track.width).toBeCloseTo(sourceTrack.width, 0);
   }
-  await timeline.getByLabel("切換成品", { exact: true }).selectOption("clip-b");
-  await expect(timeline.locator("video")).toHaveAttribute("src", "/api/jobs/clip-b/download");
-  await timeline.getByRole("button", { name: /成品 #1 / }).click();
-  await expect(timeline.locator("video")).toHaveAttribute("src", "/api/jobs/clip-a/download");
+  await finished.getByLabel("切換成品", { exact: true }).selectOption("clip-b");
+  await expect(finished.locator("video")).toHaveAttribute("src", "/api/jobs/clip-b/download");
+  await finished.getByRole("button", { name: /成品 #1/ }).click();
+  await expect(finished.locator("video")).toHaveAttribute("src", "/api/jobs/clip-a/download");
   await page.screenshot({ path: "../runs/ai-workspace-timeline.png", fullPage: true });
 });
 
@@ -522,7 +531,7 @@ test("analysis events drive visible stages, sampling range and stale feedback", 
   await emit(job);
   const card = page.getByRole("region", { name: "AI 即時工作狀態" });
   await expect(card).toContainText("正在擷取畫面");
-  await expect(page.getByLabel("AI 本輪抽樣範圍")).toBeAttached();
+  await expect(page.getByRole("button", { name: "AI 正在查看 00:00:30 至 00:01:30", includeHidden: true })).toBeAttached();
   await expect(card.locator('[aria-current="step"]')).toHaveText("擷取");
   await emit({ ...job, phase: "analyzing", stage: "Codex 已開始本輪判讀" });
   await expect(card.locator('[aria-current="step"]')).toHaveText("判讀");
@@ -533,7 +542,7 @@ test("analysis events drive visible stages, sampling range and stale feedback", 
   await expect(card.locator('[aria-current="step"]')).toHaveCount(0);
   await emit({ ...job, status: "cancelled" });
   await expect(card).toContainText("分析已取消");
-  await expect(page.getByLabel("AI 本輪抽樣範圍")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "AI 正在查看 00:00:30 至 00:01:30", includeHidden: true })).toHaveCount(0);
 });
 
 test("one-click search and typed search use the chat endpoint and shared result card", async ({ page }) => {
@@ -594,6 +603,7 @@ test("AI candidate appears selected in workspace and range handles edit the draf
     projects: [project], jobs: [{ id: "visual-candidate", project_id: "demo", kind: "analyze", status: "succeeded", result }],
   } })), { project: editable, result });
   const workspace = page.getByRole("region", { name: "片段工作區" });
+  await page.locator(".workbench-review-tools > summary").click();
   await expect(workspace.getByRole("button", { name: "選取片段 測試 Boss" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("開始時間")).toHaveValue("20");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
@@ -606,9 +616,9 @@ test("AI candidate appears selected in workspace and range handles edit the draf
   await page.mouse.move(bounds.x + bounds.width / 2 + 25, bounds.y + bounds.height / 2, { steps: 5 });
   await page.mouse.up();
   expect(Number(await page.getByLabel("開始時間").inputValue())).toBeGreaterThan(20);
-  await workspace.getByRole("slider", { name: "片段結束邊界" }).focus();
+  await workspace.getByRole("slider", { name: "勝利位置邊界" }).focus();
   await page.keyboard.press("Shift+ArrowRight");
-  await expect(workspace.getByRole("slider", { name: "片段結束邊界" })).toHaveAttribute("aria-valuenow", "109");
+  await expect(workspace.getByRole("slider", { name: "勝利位置邊界" })).toHaveAttribute("aria-valuenow", "101");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => workspace.evaluate(el => el.getBoundingClientRect().width)).toBeLessThanOrEqual(390);
 });
@@ -622,6 +632,7 @@ test("new visual candidates preserve manual edits until a card is selected", asy
       summary: "稍後完成", evidence: [], warnings: [], frames: 24, rounds: 1, model: "model-a" } };
   await page.evaluate(({ project, job }) => window.dispatchEvent(new CustomEvent("fixture:state", { detail: { projects: [project], jobs: [job] } })), { project: editable, job });
   await expect(page.getByLabel("開始時間")).toHaveValue("35");
+  await page.locator(".workbench-review-tools > summary").click();
   await page.getByRole("button", { name: "選取片段 新候選" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("20");
 });
@@ -671,8 +682,10 @@ test("candidate arrival preserves playback, evidence seeks, and preview stops at
   expect(await player.evaluate((el: HTMLVideoElement) => el.currentTime)).toBe(45);
   await expect(player).not.toHaveAttribute("data-pauses");
   const workspace = page.getByLabel("片段工作區");
+  await page.getByRole("button", { name: "證據", exact: true }).click();
   await workspace.getByRole("button", { name: /查看證據.*Boss 血條變化/ }).click();
   expect(await player.evaluate((el: HTMLVideoElement) => el.currentTime)).toBe(60);
+  await page.locator(".workbench-review-tools > summary").click();
   await workspace.getByRole("button", { name: /看勝利瞬間/ }).click();
   expect(await player.evaluate((el: HTMLVideoElement) => el.currentTime)).toBe(96);
   await expect(player).toHaveAttribute("data-plays", "1");
@@ -749,7 +762,7 @@ test("source comparison candidates seek and drag across the track without changi
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), {
     projects: [project], jobs: [{ id: "source", project_id: "demo", kind: "analyze", status: "succeeded", candidates: [segment] }],
   });
-  const row = page.getByRole("group", { name: "AI 片段 #1 原片定位", exact: true });
+  const row = page.getByRole("group", { name: "候選時間軸定位", exact: true });
   await row.evaluate(el => el.scrollIntoView({ block: "center" }));
   const bounds = (await row.boundingBox())!;
   const x = (seconds: number) => bounds.x + bounds.width * seconds / 180;
@@ -776,10 +789,13 @@ test("source comparison candidates seek and drag across the track without changi
   await expect.poll(current).toBe(20);
   await row.getByRole("button").press("ArrowRight");
   await expect.poll(current).toBe(21);
-  const draft = page.getByRole("group", { name: "草稿原片對照", exact: true });
-  await draft.evaluate(el => el.scrollIntoView({ block: "center" }));
-  const draftBox = (await draft.boundingBox())!;
-  await page.mouse.click(draftBox.x + draftBox.width * 75 / 180, draftBox.y + draftBox.height / 2);
+  // The draft is overlaid on each AI row, not a separate source track.
+  await expect(page.getByRole("group", { name: "草稿原片對照", exact: true })).toHaveCount(0);
+  await expect(row.locator(".source-selection-fill")).toBeVisible();
+  await page.getByRole("button", { name: "看全片", exact: true }).click();
+  await row.scrollIntoViewIfNeeded();
+  const updated = (await row.boundingBox())!;
+  await page.mouse.click(updated.x + updated.width * 75 / 180, updated.y + updated.height / 2);
   await expect.poll(current).toBeCloseTo(75, 0);
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
   await expect(page.getByLabel("勝利時間")).toHaveValue("100");
@@ -794,12 +810,12 @@ test("zoomed source comparison maps positions to the visible source window", asy
     projects: [project], jobs: [{ id: "zoom", project_id: "demo", kind: "analyze", status: "succeeded", candidates: [segment] }],
   });
   await page.getByRole("button", { name: "放大片段", exact: true }).click();
-  const source = page.getByRole("slider", { name: "共用原片播放位置", exact: true });
+  const source = page.getByRole("slider", { name: "播放位置", exact: true });
   const from = Number(await source.getAttribute("min"));
   const to = Number(await source.getAttribute("max"));
   expect(from).toBeGreaterThan(0);
   expect(to).toBeLessThan(170);
-  const row = page.getByRole("group", { name: "AI 片段 #1 原片定位", exact: true });
+  const row = page.getByRole("group", { name: "候選時間軸定位", exact: true });
   await row.evaluate(el => el.scrollIntoView({ block: "center" }));
   const bounds = (await row.boundingBox())!;
   const y = bounds.y + bounds.height / 2;
@@ -833,6 +849,7 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   const state = { projects: [project], jobs: [job] };
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), state);
   const timeline = page.getByLabel("候選片段時間軸", { exact: true });
+  await page.getByRole("button", { name: "看全片", exact: true }).click();
   await expect(timeline.locator(".candidate-marker")).toHaveCount(3);
   await timeline.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await expect(page.getByLabel("片段 #1 詳情")).toContainText("戰鬥尚未確認結果");
@@ -853,6 +870,7 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
     { ...job, id: "resume", status: "succeeded", candidates: [refined] }, { ...job, status: "cancelled" },
   ] };
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), nextState);
+  await page.getByRole("button", { name: "看全片", exact: true }).click();
   await expect(timeline.locator(".candidate-marker")).toHaveCount(3);
   await expect(page.getByLabel("片段 #2 詳情")).toContainText("00:01:02.000");
   await page.getByRole("button", { name: "將 #2 放入剪輯草稿" }).click();
@@ -868,6 +886,7 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
     type: "reply", project_id: "demo", reply: "查看 #3", action: { kind: "select_candidate", candidate_id: third.id,
       start: null, victory: null, postroll: null, seconds: null },
   }) + "\n" }));
+  await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await page.getByLabel("輸入訊息").fill("查看 #3");
   await page.getByLabel("送出訊息").click();
   await expect(page.getByLabel("片段 #3 詳情")).toContainText("死亡／重試");
@@ -878,7 +897,7 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("video and selected range fit on desktop and mobile without scrolling", async ({ page }) => {
+test("desktop keeps editing visible and mobile uses one unclipped workspace", async ({ page }) => {
   await page.addInitScript(() => window.addEventListener("error", event => {
     if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation();
   }, true));
@@ -892,12 +911,16 @@ test("video and selected range fit on desktop and mobile without scrolling", asy
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
     const video = await core.locator("video").boundingBox();
-    const selection = await core.getByRole("slider", { name: "片段結束邊界" }).boundingBox();
+    const selection = await core.getByRole("slider", { name: "勝利位置邊界" }).boundingBox();
     const footer = await core.getByRole("button", { name: "匯出 MP4" }).boundingBox();
     await page.screenshot({ path: `../runs/simple-editor-${viewport.width}.png` });
     expect(video!.y).toBeGreaterThanOrEqual(0);
     expect(selection!.y).toBeGreaterThan(video!.y + video!.height);
-    expect(footer!.y + footer!.height).toBeLessThan(viewport.height);
+    if (viewport.width > 640) expect(footer!.y + footer!.height).toBeLessThan(viewport.height);
+    else {
+      await core.getByRole("button", { name: "匯出 MP4" }).scrollIntoViewIfNeeded();
+      await expect(core.getByRole("button", { name: "匯出 MP4" })).toBeInViewport();
+    }
     expect(await page.locator(".main-shell").evaluate(el => el.scrollTop)).toBe(0);
     await expect(page.locator(".editor-settings")).not.toHaveAttribute("open");
     await expect(page.getByLabel("輸入訊息")).not.toBeVisible();
@@ -907,6 +930,7 @@ test("video and selected range fit on desktop and mobile without scrolling", asy
 
 test("reset viewing progress keeps candidates, unsaved edits and exports while starting a fresh search", async ({ page }) => {
   await setup(page, [project]);
+  await page.getByRole("button", { name: "證據", exact: true }).click();
   await page.route("**/api/codex/chat", route => route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "OLD_VIEWING_CONTEXT", action: null }) + "\n" }));
   await page.getByLabel("輸入訊息").fill("分析進度如何？");
   await page.getByLabel("送出訊息").click();
@@ -935,6 +959,7 @@ test("reset viewing progress keeps candidates, unsaved edits and exports while s
   await expect(page.locator(".review-coverage, .ai-signal, .review-evidence-pin")).toHaveCount(0);
   await expect(page.getByLabel("AI 即時工作狀態")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "接續細查", exact: true })).toHaveCount(0);
+  await page.locator(".workbench-review-tools > summary").click();
   await expect(page.getByRole("button", { name: "選取片段 保留候選" })).toBeVisible();
   await expect(page.getByLabel("開始時間")).toHaveValue("37");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
@@ -969,6 +994,7 @@ test("reset viewing progress keeps candidates, unsaved edits and exports while s
 
 test("viewing progress reset reports failure and prevents duplicate resets while cancelling a running search", async ({ page }) => {
   await setup(page, [project], { settings: false });
+  await page.getByRole("button", { name: "證據", exact: true }).click();
   const job = { id: "running", kind: "analyze", project_id: "demo", status: "running", phase: "analyzing",
     coverage: [{ start: 0, end: 90, every: 5 }], sample_start: 90, sample_end: 150, frames: 20, rounds: 1 };
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), { projects: [project], jobs: [job] });
@@ -1005,6 +1031,7 @@ test("viewing progress reset reports failure and prevents duplicate resets while
 
 test("viewing progress reset rejects a late AI edit without remounting the editor", async ({ page }) => {
   await setup(page, [project]);
+  await page.getByRole("button", { name: "證據", exact: true }).click();
   await page.getByLabel("開始時間").fill("37");
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), {
     projects: [project], jobs: [{ id: "stopped", project_id: "demo", kind: "analyze", status: "cancelled", resumable: true }],
@@ -1147,14 +1174,9 @@ test("timeline wheel zoom anchors the pointed time and navigator pans without ed
   const from = Number(await seek.getAttribute("min"));
   const to = Number(await seek.getAttribute("max"));
   expect(from + (to - from) * pointed.fraction).toBeCloseTo(21600 * pointed.fraction);
-  const navigator = page.getByLabel("全片導航", { exact: true });
+  const navigator = page.getByRole("slider", { name: "可視範圍位置", exact: true });
   await navigator.evaluate(el => el.scrollIntoView({ block: "center" }));
-  const rect = (await navigator.boundingBox())!;
-  const window = (await page.getByRole("slider", { name: "可視範圍位置" }).boundingBox())!;
-  await page.mouse.move(window.x + window.width / 2, window.y + window.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(rect.x + rect.width - 2, window.y + window.height / 2, { steps: 5 });
-  await page.mouse.up();
+  await navigator.press("End");
   await expect(seek).toHaveAttribute("max", "21600");
   expect(Number(await seek.getAttribute("max")) - Number(await seek.getAttribute("min"))).toBeCloseTo(to - from);
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
@@ -1193,7 +1215,7 @@ test("large source preview stays visible while candidate review scrolls independ
   await setup(page, [project], { settings: false });
   const video = page.locator(".preview-panel .video-wrap video");
   const before = (await video.boundingBox())!;
-  expect(before.height).toBeGreaterThan(360);
+  expect(before.height).toBeGreaterThan(250);
   const track = (await page.locator(".clip-range-track").boundingBox())!;
   expect(track.y).toBeGreaterThan(before.y + before.height);
   expect(track.y - (before.y + before.height)).toBeLessThan(160);

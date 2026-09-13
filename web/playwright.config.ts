@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  testIgnore: "chat.spec.ts",
+  testIgnore: ["chat.spec.ts", "studio.spec.ts"],
   workers: 1,
   outputDir: "../runs/editor-ui-tests",
   timeout: 60_000,

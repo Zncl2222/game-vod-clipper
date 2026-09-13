@@ -12,8 +12,7 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.getByRole("button", { name: "建立第一個剪輯" }).click();
   await page.getByLabel("選擇影片").selectOption("downloads/synthetic.mp4");
   await page.getByRole("button", { name: "建立剪輯專案" }).click();
-  await page.locator(".editor-settings > summary").click();
-  await expect(page.getByRole("heading", { name: "剪輯設定" })).toBeVisible({
+  await expect(page.getByRole("region", { name: "剪輯設定", exact: true })).toBeVisible({
     timeout: 30_000,
   });
   await expect(page.getByRole("button", { name: "匯出 MP4" })).toBeDisabled();
@@ -25,13 +24,21 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.getByLabel("開始時間").fill("1.25");
   await page.getByLabel("勝利時間").fill("8");
   await page.getByLabel("勝利後收尾").fill("5");
-  await page.getByRole("button", { name: "播放開頭" }).click();
+  await page.getByRole("button", { name: /預覽這段/ }).click();
   await expect
     .poll(() =>
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.currentTime),
     )
     .toBeGreaterThan(1.25);
   const player = page.locator(".preview-panel .video-wrap video");
+  await expect(player).not.toHaveAttribute("controls");
+  await page.getByRole("button", { name: "暫停原片", exact: true }).click();
+  expect(await player.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+  await page.getByRole("button", { name: "將原片靜音", exact: true }).click();
+  expect(await player.evaluate((v: HTMLVideoElement) => v.muted)).toBe(true);
+  await page.getByRole("button", { name: "開啟原片聲音", exact: true }).click();
+  expect(await player.evaluate((v: HTMLVideoElement) => v.muted)).toBe(false);
+  await page.getByRole("button", { name: "播放原片", exact: true }).click();
   const playingAt = await player.evaluate((v: HTMLVideoElement) => {
     v.dataset.instance = "original-playing-video";
     return v.currentTime;
@@ -61,6 +68,10 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   const download = await downloadPromise;
   await download.saveAs(path.resolve("../runs/web-poc-browser-export.mp4"));
   expect(await download.failure()).toBeNull();
+  const finished = page.getByRole("region", { name: "成品切換播放器", exact: true });
+  await finished.scrollIntoViewIfNeeded();
+  await expect(finished.getByLabel("成品預覽 #1")).toHaveAttribute("controls", "");
+  await expect.poll(() => finished.locator("video").evaluate((v: HTMLVideoElement) => v.duration)).toBeCloseTo(11.5, 0);
   await page.reload();
   await page.locator(".editor-settings > summary").click();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
@@ -110,6 +121,8 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     .toBeGreaterThanOrEqual(2);
   await page.screenshot({ path: "../runs/web-poc-editor.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  // Sidebar visibility persists from desktop; close the mobile drawer to edit.
+  await page.getByLabel("關閉 AI 對話").click();
   await page.screenshot({ path: "../runs/web-poc-mobile.png", fullPage: true });
   expect(
     await page.evaluate(
@@ -150,7 +163,6 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     }),
   );
   await page.reload();
-  await page.locator(".editor-settings > summary").click();
   await expect(page.getByLabel("開始時間")).toHaveValue("2");
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();

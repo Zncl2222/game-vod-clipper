@@ -1,36 +1,43 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import BossReviewDock from "./BossReviewDock";
-import AIWorkspaceTimeline from "./AIWorkspaceTimeline";
-import { type TimeWindow } from "./TimelineZoom";
+import FinishedClips from "./FinishedClips";
+import { validSelection } from "./SelectionOverlay";
+import { timelineWindow, type TimeWindow } from "./TimelineZoom";
 import ClipWorkspace, { candidates } from "./ClipWorkspace";
 import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./ChatPanel";
 import ProjectLibrary from "./ProjectLibrary";
-import { usePanelLayout } from "./ResizableSidebars";
+import ImportModal from "./ImportModal";
+import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./WorkspaceGuide";
+import { usePanelLayout, usePanelVisibility } from "./ResizableSidebars";
+import { useWorkbenchSize } from "./ResizableWorkbench";
 import {
   ArrowDownToLine,
   ArrowLeft,
   ArrowRight,
   Check,
-  ChevronRight,
   CircleHelp,
-  Clapperboard,
   Clock3,
   FileJson,
   Film,
-  FolderOpen,
   HardDrive,
   LoaderCircle,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
   RotateCcw,
   Save,
   Scissors,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Trophy,
   X,
-  Youtube,
 } from "lucide-react";
 import {
   active,
@@ -42,7 +49,6 @@ import {
   type Draft,
   type Job,
   type Project,
-  type Source,
   type State,
 } from "./api";
 
@@ -53,9 +59,10 @@ export default function App() {
   );
   const [connected, setConnected] = useState(false);
   const [modal, setModal] = useState(false);
+  const [guide, setGuide] = useState(false);
   const [error, setError] = useState("");
-  const [chatOpen, setChatOpen] = useState(() => window.matchMedia("(min-width: 1200px)").matches);
-  const layout = usePanelLayout(chatOpen);
+  const { libraryOpen, chatOpen, toggleLibrary, toggleChat, openChat } = usePanelVisibility();
+  const layout = usePanelLayout(chatOpen, libraryOpen);
   const [previewExpanded, setPreviewExpanded] = useState(false);
   const [editorContext, setEditorContext] = useState<EditorContext | null>(null);
   const editorChat = useRef<EditorChatHandle>(null);
@@ -103,6 +110,9 @@ export default function App() {
   }
   const projectJobs = state.jobs.filter((j) => j.project_id === project?.id);
   const mediaJobs = projectJobs.filter((job) => job.kind !== "analyze");
+  const currentDraft = editorContext?.project_id === project?.id ? editorContext?.draft : project?.draft;
+  const exported = !!currentDraft && projectJobs.some(job => job.kind === "export" && job.status === "succeeded" &&
+    job.draft?.start === currentDraft.start && job.draft?.victory === currentDraft.victory && job.draft?.postroll === currentDraft.postroll);
   async function action(job: Job, command: "cancel" | "retry") {
     try {
       await api(`/jobs/${job.id}/${command}`, "POST");
@@ -112,15 +122,22 @@ export default function App() {
   }
 
   return (
-    <div style={layout.style} className={`app ${chatOpen ? "chat-is-open" : ""} ${project?.ready ? "has-editor" : ""} ${previewExpanded ? "preview-is-large" : ""} ${layout.resizing ? "is-resizing" : ""}`}>
+    <div style={layout.style} className={`app ${chatOpen ? "chat-is-open" : ""} ${!libraryOpen ? "library-is-collapsed" : ""} ${project?.ready ? "has-editor" : ""} ${previewExpanded ? "preview-is-large" : ""} ${layout.resizing ? "is-resizing" : ""}`}>
+      <a className="skip-link" href="#workspace-main">跳至剪輯工作區</a>
       {layout.handles}
       <aside className="sidebar" id="project-sidebar" aria-label="素材庫側欄">
+        <div className="sidebar-heading">
         <a className="brand" href="/" aria-label="BossCut 首頁">
           <span className="brand-icon">
             <Scissors size={23} />
           </span>
-          BossCut<span className="poc">POC</span>
+          <span className="brand-wordmark">BossCut<small>EDITING STUDIO</small></span>
         </a>
+        <button className="library-toggle" onClick={toggleLibrary} aria-expanded={libraryOpen} aria-controls="project-sidebar"
+          aria-label={libraryOpen ? "收合素材庫側欄" : "展開素材庫側欄"} title={libraryOpen ? "收合素材庫側欄" : "展開素材庫側欄"}>
+          {libraryOpen ? <PanelLeftClose size={18} aria-hidden="true" /> : <PanelLeftOpen size={18} aria-hidden="true" />}
+        </button>
+        </div>
         <div className="workspace-tag">
           <span className="tiny-dot" />
           個人剪輯工作區
@@ -128,10 +145,11 @@ export default function App() {
         </div>
         <button
           className="primary import-button"
+          aria-label="匯入影片" title={!libraryOpen ? "匯入影片" : undefined}
           onClick={() => setModal(true)}
         >
           <Plus size={17} />
-          匯入影片
+          <span>匯入影片</span>
         </button>
         <div className="nav-caption">
           素材庫{" "}
@@ -140,6 +158,7 @@ export default function App() {
         <ProjectLibrary projects={state.projects} selected={project?.id} jobs={state.jobs}
           onSelect={select} onRenamed={renameProject} onDeleted={deleteProject} onError={setError} />
         <div className="sidebar-bottom">
+          <button className="sidebar-guide" aria-label="使用指南與快捷鍵" title={!libraryOpen ? "使用指南與快捷鍵" : undefined} onClick={() => setGuide(true)}><CircleHelp size={17} /><span>使用指南與快捷鍵</span></button>
           <div className="local-card">
             <ShieldCheck size={19} />
             <div>
@@ -156,34 +175,20 @@ export default function App() {
       </aside>
       <div className="main-shell">
         <header className="topbar">
-          <div className="breadcrumb">
-            工作區
-            <ChevronRight size={14} />
-            <span>勝利剪輯</span>
-          </div>
+          <WorkflowSteps ready={!!project?.ready} reviewed={!!currentDraft?.reviewed} exported={exported} />
           <div className="topbar-right">
-            <span className="local-pill">
-              <HardDrive size={13} />
-              LOCAL FIRST
-            </span>
-            <span className="avatar">YOU</span>
+            <button className="topbar-help" onClick={() => setGuide(true)}><CircleHelp size={16} />操作指南</button>
           </div>
         </header>
-        <main>
+        <main id="workspace-main" tabIndex={-1}>
+          {project?.ready && <h1 className="sr-only">{project.title} · 剪輯工作區</h1>}
           <div className="page-title">
             <div>
-              <div className="eyebrow">MAKE THE WIN YOURS</div>
+              <div className="eyebrow">YOUR PERSONAL EDITING ROOM</div>
               <h1>
-                每一次勝利，都值得留下<span>。</span>
+                你的剪輯工作區<span>。</span>
               </h1>
-              <p>找到成功的那一次，保留完整戰鬥與勝利時刻。</p>
-            </div>
-            <div className="step-indicator">
-              <span className="done">1</span>匯入
-              <i />
-              <span className={project?.ready ? "done" : ""}>2</span>調整
-              <i />
-              <span>3</span>匯出
+              <p>讓每一次勝利，都有自己的精彩片段。</p>
             </div>
           </div>
           {error && (
@@ -200,43 +205,7 @@ export default function App() {
             </div>
           )}
           {!project ? (
-            <div className="empty-workspace">
-              <div className="empty-art">
-                <div className="film-line" />
-                <div className="empty-play">
-                  <Clapperboard size={42} strokeWidth={1.4} />
-                </div>
-                <div className="film-line" />
-                <span className="win-tag">
-                  <Trophy size={14} /> YOUR NEXT VICTORY
-                </span>
-              </div>
-              <span className="eyebrow">A CLEAN CUT. A COMPLETE FIGHT.</span>
-              <h2>把漫長實況，變成值得重播的一戰。</h2>
-              <p>
-                匯入本機影片或 YouTube 網址，
-                <br />
-                預覽、調整時間，再把勝利帶走。
-              </p>
-              <button className="primary" onClick={() => setModal(true)}>
-                <Plus size={17} />
-                建立第一個剪輯
-              </button>
-              <div className="empty-features">
-                <span>
-                  <Film size={16} />
-                  流暢預覽
-                </span>
-                <span>
-                  <Scissors size={16} />
-                  精細調整
-                </span>
-                <span>
-                  <ShieldCheck size={16} />
-                  本機匯出
-                </span>
-              </div>
-            </div>
+            <WelcomeScreen onImport={() => setModal(true)} onGuide={() => setGuide(true)} />
           ) : project.ready ? (
             <Editor
               key={`${project.id}:${project.editor_generation ?? project.analysis_generation ?? 0}`}
@@ -261,14 +230,11 @@ export default function App() {
               onError={setError}
             />
           ) : (
-            <div className="preparing">
-              <LoaderCircle
-                className={projectJobs.some(active) ? "spin" : ""}
-                size={36}
-              />
+            <div className="preparing" role="status">
+              {projectJobs.some(active) ? <LoaderCircle className="spin" size={36} /> : <CircleHelp size={36} />}
               <h2>{project.title}</h2>
-              <p>準備可拖曳的預覽影片與時間軸縮圖。</p>
-              <small>長影片需要較多時間，可以離開此頁，稍後回來查看。</small>
+              <p>{projectJobs.some(active) ? "正在準備影片預覽與時間軸縮圖。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>
+              <small>{projectJobs.some(active) ? "準備完成後會自動開啟剪輯。你可以先處理其他專案。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
             </div>
           )}
           {mediaJobs.length > 0 && (
@@ -358,9 +324,9 @@ export default function App() {
       <ChatPanel
         jobs={projectJobs}
         searchRef={aiChat}
-        onSearchError={(message) => { setError(message); setChatOpen(true); }}
+        onSearchError={(message) => { setError(message); openChat(); }}
         open={chatOpen}
-        onToggle={() => setChatOpen((value) => !value)}
+        onToggle={toggleChat}
         context={project?.ready ? (editorContext?.project_id === project.id && (editorContext.analysis_generation ?? 0) === (project.analysis_generation ?? 0)
           ? editorContext : { project_id: project.id, title: project.title, duration: project.duration!, draft: project.draft!, analysis_generation: project.analysis_generation ?? 0 }) : null}
         onAction={(action, expected) => editorChat.current?.apply(action, expected) ?? "影片已切換，未套用操作。"}
@@ -374,143 +340,8 @@ export default function App() {
           }}
         />
       )}
+      {guide && <WorkspaceGuide onClose={() => setGuide(false)} />}
     </div>
-  );
-}
-
-function ImportModal({
-  onClose,
-  onImport,
-}: {
-  onClose: () => void;
-  onImport: (id: string) => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [kind, setKind] = useState<"local" | "youtube">("local");
-  const [sources, setSources] = useState<Source[]>([]);
-  const [source, setSource] = useState("");
-  const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    dialog.current?.showModal();
-    api<Source[]>("/sources")
-      .then(setSources)
-      .catch((e) => setError(e.message));
-  }, []);
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api<{ project: Project }>("/projects", "POST", {
-        kind,
-        source: kind === "local" ? source : url,
-      });
-      onImport(result.project.id);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <dialog ref={dialog} onCancel={onClose} className="import-modal">
-      <form onSubmit={submit}>
-        <div className="modal-heading">
-          <div className="modal-icon">
-            <FolderOpen size={23} />
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            aria-label="關閉匯入視窗"
-            onClick={onClose}
-          >
-            <X size={20} />
-          </button>
-        </div>
-        <h2>帶入你的下一場勝利</h2>
-        <p>選擇來源，我們會在本機準備預覽。</p>
-        <div className="tabs">
-          <button
-            type="button"
-            className={kind === "local" ? "tab active" : "tab"}
-            onClick={() => setKind("local")}
-          >
-            <HardDrive size={16} />
-            本機影片
-          </button>
-          <button
-            type="button"
-            className={kind === "youtube" ? "tab active" : "tab"}
-            onClick={() => setKind("youtube")}
-          >
-            <Youtube size={17} />
-            YouTube 網址
-          </button>
-        </div>
-        {kind === "local" ? (
-          <>
-            <label htmlFor="source">選擇影片</label>
-            <select
-              id="source"
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              required
-            >
-              <option value="">選擇本機素材…</option>
-              {sources.map((s) => (
-                <option value={s.path} key={s.path}>
-                  {s.name} · {(s.size / 1024 / 1024).toFixed(0)} MB
-                </option>
-              ))}
-            </select>
-            <p className="field-help">
-              顯示專案 downloads/ 與 clips/ 內的影片。將新影片放入 downloads/
-              後重新開啟此視窗，無需上傳。
-            </p>
-          </>
-        ) : (
-          <>
-            <label htmlFor="youtube">公開影片網址</label>
-            <input
-              id="youtube"
-              type="url"
-              placeholder="https://www.youtube.com/watch?v=…"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              required
-            />
-            <p className="field-help">
-              請使用有權處理且平台允許取得的來源。下載受平台限制，若無法取得，請改用本機原始錄影。POC
-              不支援正在直播或需登入的影片。
-            </p>
-          </>
-        )}
-        <label htmlFor="mode">工作模式</label>
-        <select id="mode">
-          <option>人工／Codex CLI 輔助剪輯</option>
-        </select>
-        <div className="subtle-note">
-          <Sparkles size={16} />
-          <span>匯入後可啟動 Codex 分析，或帶入外部 Agent 的時間點。</span>
-        </div>
-        {error && (
-          <p role="alert" className="inline-error">
-            {error}
-          </p>
-        )}
-        <button disabled={busy} className="primary modal-submit" type="submit">
-          {busy ? (
-            <LoaderCircle size={16} className="spin" />
-          ) : (
-            <Plus size={16} />
-          )}
-          {busy ? "建立任務中…" : "建立剪輯專案"}
-        </button>
-      </form>
-    </dialog>
   );
 }
 
@@ -538,7 +369,6 @@ function Editor({
   onContext: (context: EditorContext) => void;
 }) {
   const duration = project.duration!;
-  const [timelineView, setTimelineView] = useState<TimeWindow>({ from: 0, to: duration });
   const [draft, setDraft] = useState<Draft>(() => {
     try {
       const saved = JSON.parse(
@@ -551,6 +381,12 @@ function Editor({
       return project.draft!;
     }
   });
+  const [timelineView, setTimelineView] = useState<TimeWindow>(() => validSelection(draft, duration)
+    ? timelineWindow(draft.start - 5, draft.victory + draft.postroll - draft.start + 10, duration)
+    : { from: 0, to: duration });
+  const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const initialSourceTime = useRef(validSelection(draft, duration) ? draft.start : 0);
   const [selectedClip, setSelectedClip] = useState<string | null>(() => draft.origin === "agent"
     ? candidates(project, jobs).find(j => j.result!.start === draft.start && j.result!.victory === draft.victory && j.result!.postroll === draft.postroll)?.id ?? null : null);
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
@@ -572,6 +408,7 @@ function Editor({
   const [savedMessage, setSavedMessage] = useState("");
   const video = useRef<HTMLVideoElement>(null);
   const previewPanel = useRef<HTMLElement>(null);
+  const workbenchSize = useWorkbenchSize(previewPanel, previewExpanded);
   useEffect(() => {
     if (previewExpanded) previewPanel.current?.scrollIntoView({ block: "start" });
   }, [previewExpanded]);
@@ -649,7 +486,8 @@ function Editor({
   function seek(seconds: number) {
     if (video.current) {
       stopAt.current = null;
-      video.current.currentTime = Math.max(0, Math.min(duration, seconds));
+      initialSourceTime.current = Math.max(0, Math.min(duration, seconds));
+      video.current.currentTime = initialSourceTime.current;
       setCurrent(video.current.currentTime);
     }
   }
@@ -664,8 +502,9 @@ function Editor({
     function keydown(e: KeyboardEvent) {
       if (
         (e.target as HTMLElement).closest(
-          "input, textarea, select, button, a, video",
+          "input, textarea, select, button, a, video, [contenteditable], [role=slider], [role=separator], [role=group], dialog",
         ) ||
+        document.querySelector("dialog[open]") ||
         e.metaKey ||
         e.ctrlKey ||
         e.altKey
@@ -755,13 +594,15 @@ function Editor({
     setDraft(d => ({ ...d, start: result.start!, victory: result.victory!, postroll: result.postroll, origin: "agent", reviewed: false }));
     setSelectedClip(job.id);
     setSavedMessage("");
+    setTimelineView(timelineWindow(result.start! - 5, result.victory! + result.postroll - result.start! + 10, duration));
     if (navigate) seek(result.start!);
     markAI("候選片段已放入時間軸，可直接預覽與拖曳調整。", ["start", "victory", "postroll"]);
   }
-  function selectSegment(segment: NumberedCandidate, seconds = segment.start) {
+  function selectSegment(segment: NumberedCandidate, seconds?: number) {
     video.current?.pause();
     setSelectedSegment(segment.id);
-    seek(seconds);
+    if (seconds === undefined) setTimelineView(timelineWindow(segment.start - 5, segment.end - segment.start + 10, duration));
+    seek(seconds ?? segment.start);
   }
   useEffect(() => {
     const candidate = candidates(project, jobs)[0];
@@ -773,7 +614,7 @@ function Editor({
     <>
       {aiFeedback && <div className="ai-editor-feedback" role="status" key={aiFeedback.id}><Sparkles size={14} />{aiFeedback.text}</div>}
       <div className="editor-grid">
-        <section ref={previewPanel} aria-label="影片與選取範圍" className={`preview-panel ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
+        <section ref={previewPanel} style={workbenchSize.style} aria-label="影片與選取範圍" className={`preview-panel ${workbenchSize.dragging ? "is-adjusting-height" : ""} ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
           <div className="preview-stage">
           <div className="panel-heading">
             <span>
@@ -781,7 +622,7 @@ function Editor({
               <strong title={project.title}>{project.title}</strong>
             </span>
             <div className="preview-display-controls">
-              <span className="resolution">{project.width} × {project.height}</span>
+              {project.width && project.height && <span className="resolution">{project.width} × {project.height}</span>}
               <button type="button" className="preview-expand" aria-pressed={previewExpanded}
                 onClick={onTogglePreview} title={previewExpanded ? "退出劇院模式（Esc）" : "放大影片並保留剪輯拉條"}>
                 {previewExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
@@ -798,7 +639,12 @@ function Editor({
                   ? media(project, project.thumbnails[0].file)
                   : undefined
               }
-              controls
+              aria-label="原片預覽"
+              muted={muted}
+              onLoadedMetadata={() => seek(initialSourceTime.current)}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onEnded={() => setPlaying(false)}
               playsInline
               preload="metadata"
               onError={() => onError("預覽影片載入失敗，請確認服務仍在運作。")}
@@ -814,9 +660,13 @@ function Editor({
                 }
               }}
             />
-            <span className="preview-badge">720P PREVIEW</span>
+            <span className="preview-badge">來源預覽</span>
           </div>
           <div className="transport">
+            <button className="icon-button transport-play" aria-label={playing ? "暫停原片" : "播放原片"}
+              onClick={() => { if (playing) video.current?.pause(); else void video.current?.play().catch(() => onError("無法播放預覽，請確認瀏覽器支援此影片。")); }}>
+              {playing ? <Pause size={17} /> : <Play size={17} />}
+            </button>
             <div className="frame-controls">
               <button
                 className="icon-button"
@@ -838,6 +688,12 @@ function Editor({
                 <ArrowRight size={16} />
               </button>
             </div>
+            {!previewExpanded && <button className="text-button precision-button" onClick={() => {
+              previewPanel.current?.querySelector<HTMLInputElement>("#start")?.focus();
+            }}><SlidersHorizontal size={14} />精確調整</button>}
+            <button className="icon-button" aria-label={muted ? "開啟原片聲音" : "將原片靜音"} onClick={() => setMuted(value => !value)}>
+              {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            </button>
             <select
               aria-label="播放速度"
               defaultValue="1"
@@ -853,14 +709,21 @@ function Editor({
             </select>
           </div>
           </div>
-          <div className="preview-editing" aria-label="剪輯與候選檢查區" tabIndex={0}>
+          {workbenchSize.divider}
+          <div id="clip-workbench-panel" className="preview-editing" role="region" aria-label="剪輯與候選檢查區" tabIndex={0}>
           <ClipWorkspace project={project} jobs={jobs} draft={draft} selected={selectedClip}
             view={timelineView} onViewChange={setTimelineView}
             selectedSegment={selectedSegment} onSelectSegment={selectSegment} onError={onError}
-            onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current} />
-          <BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />
+            onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current}
+            onResetProgress={() => reset(true)} resetting={resetting} highlightedFields={aiFeedback?.fields} />
           </div>
-          <div className="compact-export">            <label className="review-checkbox">
+          <div className="compact-export">
+            <div className="export-review">
+            <div className="draft-status" role="status"><span className={`tiny-dot ${draft.reviewed ? "is-reviewed" : ""}`} />
+              {savedMessage || (dirty ? "修改已暫存於此瀏覽器" : "草稿已儲存")}
+              <span className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</span>
+            </div>
+            <label className="review-checkbox">
               <input
                 type="checkbox"
                 checked={draft.reviewed}
@@ -872,8 +735,12 @@ function Editor({
                 我已完整看過：只有成功挑戰，包含勝利。
               </span>
             </label>
+            </div>
+            <BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />
+            <div className="export-action-group">
             <button
               className="primary export-button"
+              aria-describedby="export-help"
               disabled={
                 !valid ||
                 !draft.reviewed ||
@@ -887,13 +754,13 @@ function Editor({
               ) : (
                 <ArrowDownToLine size={16} />
               )}
-              匯出 MP4
+              {busy ? "正在提交…" : jobs.some(j => j.kind === "export" && active(j)) ? "正在匯出…" : "匯出 MP4"}
             </button>
-            <p className="export-help">原片重新編碼 · 保留原始音訊內容</p>
+            <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : !draft.reviewed ? "看完片段並勾選確認即可匯出" : "MP4 影片 · 含原片音訊"}</p>
+            </div>
           </div>
         </section>
-        <AIWorkspaceTimeline project={project} jobs={jobs} draft={draft} current={current} onSeek={seek} view={timelineView} onResetProgress={() => reset(true)} resetting={resetting} />
-        <details className="editor-settings workspace-details"><summary>精確時間與手動調整</summary>
+        <details className="editor-settings workspace-details"><summary>手動操作與草稿管理</summary>
           <div className="quick-actions">
             <button
               onClick={() =>
@@ -927,93 +794,7 @@ function Editor({
               播放結尾
             </button>
           </div>
-        <aside className="inspector">
-          <div className="inspector-heading">
-            <Scissors size={17} />
-            <h2>剪輯設定</h2>
-            <span className="badge">
-              {draft.origin === "agent" ? "AGENT" : "MANUAL"}
-            </span>
-          </div>
-          <div className="inspector-body">
-            <div className="clip-name">
-              <span className="clip-icon">
-                <Trophy size={18} />
-              </span>
-              <div>
-                <strong>成功挑戰片段</strong>
-                <small>保留一場完整且連續的勝利</small>
-              </div>
-            </div>
-            <label className="time-label" htmlFor="start">
-              <span className="marker start" />
-              開始時間<span>{time(draft.start)}</span>
-            </label>
-            <div className="number-field">
-              <input
-                id="start"
-                className={aiFeedback?.fields.includes("start") ? "ai-target" : undefined}
-                type="number"
-                min="0"
-                max={duration}
-                step="0.001"
-                value={draft.start}
-                onChange={(e) => change({ start: Number(e.target.value) })}
-              />
-              <span>秒</span>
-              <button onClick={() => seek(draft.start)} aria-label="跳到開始">
-                <ChevronRight size={17} />
-              </button>
-            </div>
-            <label className="time-label" htmlFor="victory">
-              <span className="marker victory" />
-              勝利時間<span>{time(draft.victory)}</span>
-            </label>
-            <div className="number-field">
-              <input
-                id="victory"
-                className={aiFeedback?.fields.includes("victory") ? "ai-target" : undefined}
-                type="number"
-                min="0"
-                max={duration}
-                step="0.001"
-                value={draft.victory}
-                onChange={(e) => change({ victory: Number(e.target.value) })}
-              />
-              <span>秒</span>
-              <button onClick={() => seek(draft.victory)} aria-label="跳到勝利">
-                <ChevronRight size={17} />
-              </button>
-            </div>
-            <label className="time-label" htmlFor="postroll">
-              勝利後收尾<span>{draft.postroll} 秒</span>
-            </label>
-            <input
-              id="postroll"
-              className={`postroll ${aiFeedback?.fields.includes("postroll") ? "ai-target" : ""}`}
-              type="range"
-              min="5"
-              max="10"
-              step="1"
-              value={draft.postroll}
-              onChange={(e) => change({ postroll: Number(e.target.value) })}
-            />
-            <div className="range-labels">
-              <span>5 秒</span>
-              <span>10 秒</span>
-            </div>
-            <div className="duration-summary">
-              <span>預計片段長度</span>
-              <strong>{time(Math.max(0, end - draft.start))}</strong>
-              <small>結束於 {time(end)}</small>
-            </div>
-            {!valid && (
-              <p role="alert" className="inline-error">
-                請讓開始早於勝利，並確保收尾未超出原片。
-              </p>
-            )}
-          </div>
-        </aside>
+
           <div className="timeline-footer">
             <span>
               <span className="tiny-dot" />
@@ -1041,6 +822,7 @@ function Editor({
             </button>
           </div>
         </details>
+        <FinishedClips project={project} jobs={jobs} onSeek={seek} />
       </div>
       <details className="workspace-details">
       <summary><FileJson size={16} /> 進階 Agent 匯入／匯出</summary>

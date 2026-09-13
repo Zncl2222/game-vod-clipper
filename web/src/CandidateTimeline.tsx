@@ -1,21 +1,21 @@
-import { useEffect, useRef, useState } from "react";
-import TimeRuler from "./TimeRuler";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import SelectionOverlay, { validSelection } from "./SelectionOverlay";
 import { type TimeWindow } from "./TimelineZoom";
-import { Play, Tag } from "lucide-react";
+import { Play, Sparkles, Tag } from "lucide-react";
 import { api, time, type CandidateReview, type Draft, type NumberedCandidate, type Project } from "./api";
 
 const kinds = { possible_win: "疑似勝利", fight: "戰鬥", death_retry: "死亡／重試", unknown: "待釐清" };
 const confidence = { low: "低", medium: "中", high: "高" };
 const reviews = { pending: "待核對", keep: "保留", reject: "排除" };
 
-export default function CandidateTimeline({ project, segments, selected, current, onSelect, onSeek, onPlay, onApply, onError, view }: {
+export default function CandidateTimeline({ project, segments, selected, current, onSelect, onSeek, onPlay, onApply, onError, view, draft, children }: {
   project: Project; segments: NumberedCandidate[]; selected: string | null; current: number;
   onSelect: (segment: NumberedCandidate, seconds?: number) => void; onSeek: (seconds: number) => void; onPlay: (start: number, end: number) => void;
   onApply: (draft: Partial<Draft>) => void; onError: (message: string) => void;
-  view: TimeWindow;
+  view: TimeWindow; draft: Draft; children?: ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
-  const drag = useRef<{ pointer: number; left: number; width: number } | null>(null);
+  const drag = useRef<{ pointer: number; left: number; width: number; from: number; span: number } | null>(null);
   const [savedReviews, setSavedReviews] = useState<Record<string, CandidateReview>>({});
   useEffect(() => {
     setSavedReviews(previous => {
@@ -27,8 +27,8 @@ export default function CandidateTimeline({ project, segments, selected, current
   const duration = project.duration!;
   const { from, to } = view;
   const span = to - from;
-  const position = (x: number, bounds: { left: number; width: number }) =>
-    from + Math.max(0, Math.min(1, (x - bounds.left) / Math.max(1, bounds.width))) * span;
+  const position = (x: number, bounds: { left: number; width: number; from: number; span: number }) =>
+    bounds.from + Math.max(0, Math.min(1, (x - bounds.left) / Math.max(1, bounds.width))) * bounds.span;
   const index = segments.findIndex(c => c.id === selected);
   const candidate = segments[index];
   const lanes: number[] = [];
@@ -57,9 +57,7 @@ export default function CandidateTimeline({ project, segments, selected, current
   }
 
   return <section className="candidate-review" aria-label="候選片段時間軸">
-    <div className="candidate-heading"><strong>候選片段 <span>{segments.length}</span></strong>
-      <span>點選或拖曳時間軸，同步查看影片</span></div>
-    <div className="candidate-legend">{Object.entries(kinds).map(([kind, label]) => <span key={kind} className={kind}><i />{label}</span>)}</div>
+    <div className="workbench-lane-label candidate-lane-label"><strong><Sparkles size={14} aria-hidden="true" />AI 候選 <span>{segments.length}</span></strong><small>參考片段 · 點選預覽</small></div>
     <div className="candidate-overview" role="group" aria-label="候選時間軸定位" tabIndex={0}
       onPointerDown={e => {
         if (!e.isPrimary || e.button !== 0) return;
@@ -67,8 +65,9 @@ export default function CandidateTimeline({ project, segments, selected, current
         // Leave the native vertical scrollbar draggable; only the track scrubs.
         if (e.clientX >= rect.left + e.currentTarget.clientWidth) return;
         e.preventDefault();
-        const bounds = { left: rect.left, width: e.currentTarget.clientWidth };
-        drag.current = { pointer: e.pointerId, left: bounds.left, width: bounds.width };
+        const bounds = { left: rect.left, width: e.currentTarget.clientWidth, from, span };
+        drag.current = { pointer: e.pointerId, ...bounds };
+        e.currentTarget.dataset.scrubbing = "true";
         const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-candidate-id]");
         const segment = segments.find(s => s.id === button?.dataset.candidateId);
         const seconds = position(e.clientX, bounds);
@@ -83,25 +82,27 @@ export default function CandidateTimeline({ project, segments, selected, current
         if (drag.current?.pointer !== e.pointerId) return;
         onSeek(position(e.clientX, drag.current));
         drag.current = null;
+        delete e.currentTarget.dataset.scrubbing;
         if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
       }}
-      onPointerCancel={() => { drag.current = null; }}
-      onLostPointerCapture={() => { drag.current = null; }}
+      onPointerCancel={e => { drag.current = null; delete e.currentTarget.dataset.scrubbing; }}
+      onLostPointerCapture={e => { drag.current = null; delete e.currentTarget.dataset.scrubbing; }}
       onKeyDown={e => {
         if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
         e.preventDefault(); e.stopPropagation();
         onSeek(e.key === "Home" ? from : e.key === "End" ? to :
           Math.max(from, Math.min(to, current + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1))));
       }}>
-      <div className="candidate-track" style={{ height: Math.max(40, lanes.length * 30 + 8) }}>
+      <div className="candidate-track" style={{ height: Math.max(44, lanes.length * 40 + 8) }}>
+      {!!segments.length && <SelectionOverlay draft={draft} duration={duration} view={view} reference />}
       {markers.map(({ segment, left, width, lane }) => <button key={segment.id}
         className={`candidate-marker ${segment.kind} ${selected === segment.id ? "selected" : ""} ${review(segment) === "reject" ? "rejected" : ""}`}
-        style={{ left: `${left}%`, width: `${width}%`, top: lane * 30 + 4 }}
+        style={{ left: `${left}%`, width: `${width}%`, top: lane * 40 + 4 }}
         aria-label={`時間軸片段 #${segment.number} ${kinds[segment.kind]} ${time(segment.start)} 至 ${time(segment.end)}`}
         data-candidate-id={segment.id}
         aria-pressed={selected === segment.id} onClick={e => { if (e.detail === 0) onSelect(segment); }}
         title={`#${segment.number} ${segment.boss} · ${kinds[segment.kind]} · ${time(segment.start)}–${time(segment.end)}`}>
-        <b>#{segment.number}</b><span> {kinds[segment.kind]}</span>
+        <b>AI #{segment.number}</b><span> {kinds[segment.kind]}</span>
         <i className="candidate-duration" aria-hidden="true" style={{
           left: `${((Math.max(from, segment.start) - from) / span * 100 - left) / width * 100}%`,
           width: `${(Math.min(to, segment.end) - Math.max(from, segment.start)) / span * 100 / width * 100}%`,
@@ -110,19 +111,23 @@ export default function CandidateTimeline({ project, segments, selected, current
       {current >= from && current <= to && <span className="candidate-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
       </div>
     </div>
-    <TimeRuler start={from} end={to} />
+    {children && <div className="workbench-inline-controls">{children}</div>}
+    <p className="candidate-reference-note">AI 候選供核對；放入剪輯草稿後才會成為匯出範圍。<span>虛線僅對齊目前剪輯。</span></p>
+    <div className="candidate-legend">{Object.entries(kinds).map(([kind, label]) => <span key={kind} className={kind}><i />{label}</span>)}</div>
     {!segments.length && <p className="candidate-empty">AI 找到可疑片段後會陸續標在這裡；尚未確認勝利的片段也能點選預覽。</p>}
-    {!!segments.length && <details className="candidate-list-disclosure"><summary>片段清單 · {segments.length} 個候選</summary><div className="candidate-list" aria-label="候選片段清單">
+    {!!segments.length && <details className="candidate-list-disclosure"><summary>片段清單 · {segments.length} 個候選</summary><div className="candidate-list" role="group" aria-label="候選片段清單">
       {segments.map(segment => <button key={segment.id} aria-pressed={selected === segment.id}
         className={selected === segment.id ? "selected" : ""} onClick={() => onSelect(segment)}>
         <strong>#{segment.number} {segment.boss || kinds[segment.kind]}</strong>
         <span>{time(segment.start)}–{time(segment.end)}</span><small>{kinds[segment.kind]} · {reviews[review(segment)]}</small>
       </button>)}
     </div></details>}
-    {candidate && <div className="candidate-detail" aria-label={`片段 #${candidate.number} 詳情`}>
+    {candidate && <div className="candidate-detail" role="group" aria-label={`片段 #${candidate.number} 詳情`}>
       <div className="candidate-heading"><strong>#{candidate.number} {candidate.boss || kinds[candidate.kind]}</strong>
         <span>{kinds[candidate.kind]} · 信心{confidence[candidate.confidence]} · {reviews[review(candidate)]}</span></div>
       <p>{time(candidate.start, true)}–{time(candidate.end, true)} · {candidate.summary}</p>
+      <p className="source-candidate-overlap">{!validSelection(draft, duration) ? "區間無效，無法對照" : Math.min(draft.victory + draft.postroll, candidate.end) > Math.max(draft.start, candidate.start)
+        ? `與目前剪輯重疊 ${time(Math.min(draft.victory + draft.postroll, candidate.end) - Math.max(draft.start, candidate.start), true)}` : "與目前剪輯未重疊"}</p>
       {candidate.warnings.map((warning, i) => <p className="candidate-warning" key={i}>{warning}</p>)}
       <div className="candidate-actions">
         <button disabled={index <= 0} onClick={() => onSelect(segments[index - 1])}>上一段</button>
