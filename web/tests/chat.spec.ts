@@ -42,7 +42,7 @@ async function setup(page: Page, projects: unknown[] = [], options: { chat?: boo
   if (projects.length) await page.getByRole("button", { name: "看全片", exact: true }).click();
   if (options.chat === false) await page.getByLabel("關閉 AI 對話").click();
   else if (!await page.getByLabel("輸入訊息").isVisible()) await page.getByRole("button", { name: "AI 對話", exact: true }).click();
-  if (projects.length && options.settings === true) await page.locator(".editor-settings > summary").click();
+  if (projects.length && options.settings === true) await page.getByRole("button", { name: "更多工具", exact: true }).click();
   if (options.chat !== false) await expect(page.getByLabel("選擇 AI 模型")).toHaveText("Model A");
 }
 
@@ -214,12 +214,14 @@ test("canonical candidates replace raw legacy duplicates and long timelines rema
     projects: [{ ...project, review_candidates: distinct }], jobs: [],
   });
   await expect(track.locator(".candidate-marker")).toHaveCount(20);
-  expect((await track.boundingBox())!.height).toBeLessThanOrEqual(262);
   const dimensions = await track.evaluate(el => ({ height: el.clientHeight, scroll: el.scrollHeight }));
-  expect(dimensions.scroll).toBeGreaterThan(dimensions.height);
+  expect(dimensions.scroll).toBe(dimensions.height);
+  expect(dimensions.height).toBeGreaterThan(700);
+  const bench = page.getByLabel("剪輯與候選檢查區", { exact: true });
   await track.locator(".candidate-marker").last().scrollIntoViewIfNeeded();
   await expect(track.locator(".candidate-marker").last()).toBeInViewport();
-  expect((await track.locator(".candidate-playhead").boundingBox())!.height).toBeGreaterThan(dimensions.height);
+  expect(await bench.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+  expect(await track.evaluate(el => el.scrollTop)).toBe(0);
   await page.screenshot({ path: "../runs/candidate-canonical-scroll.png", fullPage: true });
 });
 
@@ -372,6 +374,7 @@ test("live exploration and finished clips share source timestamps", async ({ pag
   const timeline = page.getByLabel("AI 探索與證據", { exact: true });
   await expect(timeline.getByRole("status")).toContainText("00:02:00–00:02:30");
   await expect(timeline.getByRole("button", { name: "查看證據 00:02:10 疑似勝利文字" })).toBeVisible();
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   const finished = page.getByRole("region", { name: "成品片段", exact: true });
   await expect(finished.getByLabel("成品片段清單").getByRole("button")).toHaveCount(2);
   const sourceTrack = (await page.locator(".clip-range-track").boundingBox())!;
@@ -642,6 +645,7 @@ test("completed exports have inline players in the workspace without starting ne
   await page.evaluate(project => window.dispatchEvent(new CustomEvent("fixture:state", { detail: {
     projects: [project], jobs: [{ id: "finished-export", project_id: "demo", kind: "export", status: "succeeded", draft: project.draft }],
   } })), project);
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   const player = page.getByRole("region", { name: "成品切換播放器" }).locator("video");
   await expect(player).toHaveAttribute("src", "/api/jobs/finished-export/download");
   await expect(player).toHaveAttribute("preload", "metadata");
@@ -922,7 +926,7 @@ test("desktop keeps editing visible and mobile uses one unclipped workspace", as
       await expect(core.getByRole("button", { name: "匯出 MP4" })).toBeInViewport();
     }
     expect(await page.locator(".main-shell").evaluate(el => el.scrollTop)).toBe(0);
-    await expect(page.locator(".editor-settings")).not.toHaveAttribute("open");
+    await expect(page.getByRole("dialog", { name: "更多工具", exact: true })).not.toBeVisible();
     await expect(page.getByLabel("輸入訊息")).not.toBeVisible();
     await page.screenshot({ path: `../runs/simple-editor-${viewport.width}.png` });
   }
@@ -970,7 +974,7 @@ test("reset viewing progress keeps candidates, unsaved edits and exports while s
   // Persistence must preserve the local edit as well as clear the old task UI.
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify(nextState)}\n\n` }));
   await page.reload();
-  await page.locator(".editor-settings > summary").click();
+  await page.getByRole("button", { name: "精確調整", exact: true }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("37");
   await expect(page.getByRole("button", { name: "接續細查", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("AI 全片抽樣進度").locator(".ai-coverage")).toHaveCount(0);
@@ -1203,6 +1207,7 @@ test("model settings stay readable on mobile and exported file location is disco
   await page.evaluate(project => window.dispatchEvent(new CustomEvent("fixture:state", { detail: {
     projects: [project], jobs: [{ id: "finished-export", project_id: "demo", kind: "export", status: "succeeded", draft: project.draft }],
   } })), project);
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   await page.getByText("檔案儲存位置", { exact: true }).click();
   await expect(page.locator(".export-location code")).toHaveText("clips/web/demo/finished-export.mp4");
   await expect(page.getByRole("link", { name: "下載 MP4", exact: true })).toHaveAttribute("href", "/api/jobs/finished-export/download");
@@ -1277,9 +1282,11 @@ test("theater mode enlarges the same video, keeps trimming available and restore
   await page.setViewportSize({ width: 844, height: 390 });
   await page.getByRole("button", { name: "劇院模式", exact: true }).click();
   const landscape = (await video.boundingBox())!;
-  expect(landscape.height).toBeGreaterThan(200);
+  expect(landscape.height).toBeGreaterThan(160);
   const editing = (await page.getByLabel("剪輯與候選檢查區").boundingBox())!;
-  expect(editing.x).toBeGreaterThanOrEqual(landscape.x + landscape.width);
+  expect(editing.y).toBeGreaterThanOrEqual(landscape.y + landscape.height);
+  await expect(page.getByLabel("剪輯與候選檢查區")).toHaveCSS("overflow-y", "visible");
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).scrollIntoViewIfNeeded();
   await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "../runs/large-preview-landscape.png", fullPage: true });

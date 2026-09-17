@@ -132,7 +132,6 @@ test("guide prevents editor shortcuts from changing a draft and reduced motion i
   await page.keyboard.press("i");
   await page.keyboard.press("o");
   await page.keyboard.press("Escape");
-  await page.locator(".editor-settings > summary").click();
   await expect(page.getByLabel("開始時間")).toHaveValue("120");
   await expect(page.getByLabel("勝利時間")).toHaveValue("320");
   expect(await page.getByRole("button", { name: "匯出 MP4", exact: true }).evaluate(element => getComputedStyle(element).transitionDuration)).toBe("0s");
@@ -365,11 +364,9 @@ test("desktop workspace, import and guide meet automated accessibility checks", 
   await check();
   await page.getByRole("button", { name: /時間軸片段 #1/ }).click();
   await check();
-  await page.getByRole("region", { name: "成品切換播放器" }).scrollIntoViewIfNeeded();
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   await check();
-  await page.locator(".editor-settings > summary").click();
-  await page.locator(".editor-settings").scrollIntoViewIfNeeded();
-  await check();
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "匯入影片", exact: true }).click();
   await check();
   await page.keyboard.press("Escape");
@@ -451,4 +448,146 @@ test("workbench resizes without changing edits or playback, remembers height and
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(divider).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+const crowdedProject = { ...project, review_candidates: Array.from({ length: 20 }, (_, index) => ({
+  id: `overlap:${index}`, number: index + 1, start: 120 + index, end: 320, victory: null,
+  kind: "fight", confidence: "low", boss: `挑戰 ${index + 1}`, summary: "等待核對", warnings: [], evidence: [], review: "pending",
+})) };
+
+test("wheel over crowded candidates scrolls only the workbench and keeps the player and export fixed", async ({ page }) => {
+  await workspace(page, [crowdedProject]);
+  const bench = page.getByLabel("剪輯與候選檢查區", { exact: true });
+  const candidates = page.getByLabel("候選時間軸定位", { exact: true });
+  const player = page.locator(".preview-stage");
+  const original = await player.boundingBox();
+  await expect(page.getByLabel("開始時間")).toBeInViewport();
+  const timing = (await page.getByRole("region", { name: "剪輯設定", exact: true }).boundingBox())!;
+  expect(timing.y + timing.height).toBeLessThan((await candidates.boundingBox())!.y);
+  await candidates.locator(".candidate-marker").first().hover();
+  const before = await bench.evaluate(element => element.scrollTop);
+  await page.mouse.wheel(0, 200);
+  await expect.poll(() => bench.evaluate(element => element.scrollTop)).toBeGreaterThan(before);
+  expect(await candidates.evaluate(element => element.scrollTop)).toBe(0);
+  expect(await page.locator(".main-shell").evaluate(element => element.scrollTop)).toBe(0);
+  expect(await page.locator(".main-shell").evaluate(element => element.scrollHeight - element.clientHeight)).toBe(0);
+  expect(await player.boundingBox()).toEqual(original);
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
+  await candidates.locator(".candidate-marker").last().focus();
+  await expect(candidates.locator(".candidate-marker").last()).toBeInViewport();
+  expect(await candidates.evaluate(element => element.scrollTop)).toBe(0);
+  await page.screenshot({ path: "../runs/single-scroll-candidates.png" });
+});
+
+test("more tools keeps history accessible, contains focus and restores the editor without moving it", async ({ page }) => {
+  const jobs = Array.from({ length: 16 }, (_, index) => ({ id: `export:${index}`, project_id: project.id,
+    kind: "export", status: "failed", error: "測試匯出失敗，可重試", draft: { ...project.draft, revision: index } }));
+  await workspace(page, [project], jobs);
+  await page.getByLabel("開始時間").fill("125");
+  const player = page.locator(".video-wrap video");
+  await player.evaluate((video: HTMLVideoElement) => { video.dataset.instance = "tools-player"; video.currentTime = 160; video.playbackRate = 1.5; });
+  const trigger = page.getByRole("button", { name: "更多工具", exact: true });
+  const bench = page.getByLabel("剪輯與候選檢查區", { exact: true });
+  const before = await bench.evaluate(element => element.scrollTop);
+  await expect(trigger).toContainText("需處理");
+  await expect(trigger).toHaveAccessibleDescription("需處理");
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "更多工具", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.locator(".jobs-details > summary").click();
+  await dialog.getByRole("button", { name: "重試", exact: true }).last().focus();
+  await expect(dialog.getByRole("button", { name: "重試", exact: true }).last()).toBeInViewport();
+  expect(await dialog.locator(".editor-tools-content").evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await page.route("**/jobs/**/retry", route => route.fulfill({ status: 500, json: { detail: "重試失敗，請稍後再試" } }));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await dialog.getByRole("button", { name: "重試", exact: true }).last().click();
+    await expect(dialog.getByRole("alert")).toContainText("重試失敗，請稍後再試");
+    await expect(dialog.getByRole("alert")).toBeInViewport();
+    await expect(dialog.getByRole("alert")).toBeFocused();
+  }
+  await page.route("**/jobs/**/retry", route => route.fulfill({ json: {} }));
+  await dialog.getByRole("button", { name: "重試", exact: true }).last().click();
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByRole("button", { name: "重試", exact: true }).last().focus();
+  await page.keyboard.press("Tab");
+  // Native dialogs can pass through browser chrome before starting another Tab cycle.
+  if (await page.evaluate(() => document.activeElement === document.body)) await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "關閉更多工具", exact: true })).toBeFocused();
+  await page.keyboard.press("i");
+  await page.keyboard.press("o");
+  await dialog.locator(".editor-tools-content").evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: "../runs/single-scroll-tools.png" });
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  expect(await bench.evaluate(element => element.scrollTop)).toBe(before);
+  await expect(player).toHaveAttribute("data-instance", "tools-player");
+  expect(await player.evaluate((video: HTMLVideoElement) => [video.currentTime, video.playbackRate])).toEqual([160, 1.5]);
+  await expect(page.getByLabel("開始時間")).toHaveValue("125");
+});
+
+test("short windows and phones scroll the page through candidates without an inner scroll trap", async ({ page }) => {
+  await workspace(page, [crowdedProject]);
+  await page.getByLabel("關閉 AI 對話").click();
+  const bench = page.getByLabel("剪輯與候選檢查區", { exact: true });
+  for (const [width, height] of [[1280, 600], [375, 812], [844, 390]]) {
+    await page.setViewportSize({ width, height });
+    await expect(page.getByRole("separator", { name: "調整剪輯區高度", exact: true })).toHaveCount(0);
+    const scroller = page.locator(width <= 640 ? ".app" : ".main-shell");
+    const first = page.locator(".candidate-marker").first();
+    await first.hover();
+    const before = await scroller.evaluate(element => element.scrollTop);
+    await page.mouse.wheel(0, 180);
+    await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(before);
+    expect(await bench.evaluate(element => element.scrollTop)).toBe(0);
+    expect(await page.locator(".candidate-overview").evaluate(element => element.scrollTop)).toBe(0);
+    await page.getByRole("button", { name: "匯出 MP4", exact: true }).scrollIntoViewIfNeeded();
+    await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await scroller.evaluate(element => { element.scrollTop = 0; });
+    await page.getByRole("button", { name: "更多工具", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "更多工具", exact: true })).toBeInViewport();
+    await page.keyboard.press("Escape");
+    await page.screenshot({ path: `../runs/single-scroll-${width}x${height}.png` });
+  }
+});
+
+test.describe("touch candidate navigation", () => {
+  test.use({ hasTouch: true });
+
+  test("vertical swipes scroll without selecting or seeking; taps and horizontal drags still seek", async ({ page }) => {
+    await workspace(page, [crowdedProject]);
+    const marker = page.locator(".candidate-marker").first();
+    const bench = page.getByLabel("剪輯與候選檢查區", { exact: true });
+    const player = page.locator(".video-wrap video");
+    await marker.scrollIntoViewIfNeeded();
+    await player.evaluate((video: HTMLVideoElement) => { video.currentTime = 160; });
+    const box = (await marker.boundingBox())!;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const before = await bench.evaluate(element => element.scrollTop);
+    const touch = await page.context().newCDPSession(page);
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    for (const offset of [15, 40, 80, 120]) {
+      await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y - offset }] });
+    }
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await expect.poll(() => bench.evaluate(element => element.scrollTop)).toBeGreaterThan(before);
+    await expect(marker).toHaveAttribute("aria-pressed", "false");
+    expect(await player.evaluate((video: HTMLVideoElement) => video.currentTime)).toBe(160);
+
+    await marker.tap();
+    await expect(marker).toHaveAttribute("aria-pressed", "true");
+    const tapped = await player.evaluate((video: HTMLVideoElement) => video.currentTime);
+    expect(tapped).toBeGreaterThan(160);
+    const position = (await marker.boundingBox())!;
+    const dragX = position.x + position.width / 2;
+    const dragY = position.y + position.height / 2;
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: dragX, y: dragY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: dragX + 40, y: dragY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    expect(await player.evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(tapped);
+    await expect(page.getByLabel("開始時間")).toHaveValue("120");
+    await touch.detach();
+  });
 });

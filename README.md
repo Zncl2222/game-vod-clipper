@@ -59,9 +59,10 @@ The shared visual rules live in [the desktop design system](design-system/bosscu
 
 The main view keeps the video, one range timeline, previews and export together.
 **AI 對話** opens an optional conversation panel; on smaller screens it opens a
-full-height drawer. Numeric editing controls stay visible in the workbench;
-**手動操作與草稿管理** expands manual shortcuts and save/restore actions. Account controls live behind **帳號設定**;
-search progress appears below the video and in the conversation; advanced Agent import/export and media job history are collapsible.
+full-height drawer. Numeric editing controls appear before AI candidates in the workbench.
+**更多工具** opens manual shortcuts, draft save/restore, advanced Agent import/export,
+completed clips, and media job history without moving the editor. Account controls live behind **帳號設定**;
+search progress appears below the video and in the conversation.
 
 - **一般聊天** supports ordinary conversation without attaching project metadata.
 - **剪輯助理** attaches the selected project's title, duration, and current draft
@@ -130,7 +131,8 @@ timestamps also appear as provisional annotations.
 Candidate identities are assigned by the host, not generated job prefixes. Updates
 reuse the same encounter, and explicit replacement retires old hypotheses. Exact
 legacy duplicates are consolidated for both the UI and chat without deleting old
-analysis artifacts or review tags. Long candidate overviews scroll within the panel.
+analysis artifacts or review tags. Long candidate overviews expand within the shared
+workbench scroll area, without a nested scrollbar.
 Sampling requests are deduplicated against both completed and queued coverage, and
 checked again immediately before execution. Refinement uses fixed density levels
 and completes a requested pass before opening another. After three extra passes
@@ -142,15 +144,18 @@ and a completion reason, and do not offer continuation when no work remains.
 
 The editor keeps layout **A**'s unified **剪輯與原片對照** workbench beneath the
 source preview, beside a full-height AI conversation. One time ruler aligns the current selection,
-AI candidates, and optional exploration/evidence tracks. The workbench scrolls
-independently, so inspecting more candidates keeps the source video visible.
+AI candidates, and optional exploration/evidence tracks. On desktop, the workspace fits
+the viewport and only the workbench scrolls; inspecting more candidates keeps the source
+video and export visible. Start/victory/postroll controls precede candidates. Candidates
+and evidence share that same scroll area, including when many candidate rows overlap.
 The workbench starts at a compact 260px. Drag its upper divider to resize it, use
 the adjacent **＋ / −** buttons, or focus the divider and use Up/Down (Shift for
 larger steps), Home/End. Double-click or use reset to restore the default height.
 The browser remembers the preferred height and bounds it to the available window
 while preserving space for the source and export controls. Sidebar widths remain
-independently resizable. On phones, the workbench uses natural scrolling height.
-Export stays visible below the workbench. **劇院模式** temporarily
+independently resizable. On phones (up to 640px wide) or short windows (up to 700px
+high), the player, workbench and export use one natural page scroll instead; the
+height divider is hidden. This fallback also applies in theater mode. **劇院模式** temporarily
 hides the library and chat to enlarge the preview while keeping the timeline
 editable; **返回工作區** or Escape restores the layout. The same video element
 retains its playback position, speed and volume. Mobile previews use the available

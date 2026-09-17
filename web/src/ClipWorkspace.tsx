@@ -131,8 +131,6 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     </div>
     {valid && !selectionInView && <p className="workbench-outside">目前剪輯區間在可視範圍外
       <button className="text-button" onClick={() => onViewChange(timelineWindow(draft.start - 5, finish - draft.start + 10, duration))}>回到目前剪輯</button></p>}
-    <CandidateTimeline project={project} draft={draft} segments={reviewCandidates(project, jobs)} selected={selectedSegment} view={view}
-      current={current} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onApply={apply} onError={onError}>
     <section className="workbench-timing" aria-label="剪輯設定">
       <h2 className="sr-only">剪輯設定</h2>
       {(["start", "victory"] as const).map(edge => <div className="workbench-time-field" key={edge}>
@@ -155,7 +153,8 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
       <span><i className="source-legend-selection" aria-hidden="true" />實框：匯出範圍</span>
       <span><i className="source-legend-postroll" aria-hidden="true" />斜線：收尾，仍會匯出</span>
     </div>
-    </CandidateTimeline>
+    <CandidateTimeline project={project} draft={draft} segments={reviewCandidates(project, jobs)} selected={selectedSegment} view={view}
+      current={current} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onApply={apply} onError={onError} />
     <div id="workbench-evidence" hidden={!showEvidence}>
       <AIWorkspaceTimeline project={project} jobs={jobs} view={view} current={current} onSeek={onSeek} onResetProgress={onResetProgress} resetting={resetting} />
     </div>

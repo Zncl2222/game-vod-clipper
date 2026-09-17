@@ -418,12 +418,6 @@ kbd { border: 1px solid var(--control-border); background: var(--surface); color
   .precision-button { margin-inline: 4px; font-size: 11px; }
   .precision-button svg { display: none; }
 }
-@media (max-height: 500px) and (min-width: 641px) {
-  .app.preview-is-large .compact-export { padding-block: 8px; }
-  .app.preview-is-large .draft-status { margin-bottom: 2px; }
-  .app.preview-is-large .draft-duration { width: auto; padding-left: 0; }
-  .app.preview-is-large .export-help { display: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

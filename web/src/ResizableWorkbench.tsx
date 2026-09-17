@@ -4,6 +4,7 @@ import { Minus, Plus, RotateCcw } from "lucide-react";
 const STORAGE = "bosscut:workbench-height";
 const DEFAULT_HEIGHT = 260;
 const MIN_HEIGHT = 160;
+const canResize = () => window.matchMedia("(min-width: 641px) and (min-height: 701px)").matches;
 const clamp = (value: number, max: number) => Math.max(MIN_HEIGHT, Math.min(max, value));
 
 export function useWorkbenchSize(panel: RefObject<HTMLElement | null>, theater: boolean) {
@@ -14,7 +15,7 @@ export function useWorkbenchSize(panel: RefObject<HTMLElement | null>, theater: 
     } catch { return null; }
   });
   const [max, setMax] = useState(500);
-  const [enabled, setEnabled] = useState(window.innerWidth > 640 && !(theater && window.innerHeight <= 500));
+  const [enabled, setEnabled] = useState(canResize);
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{ pointer: number; y: number; height: number } | null>(null);
   const height = clamp(preferred ?? DEFAULT_HEIGHT, max);
@@ -25,7 +26,7 @@ export function useWorkbenchSize(panel: RefObject<HTMLElement | null>, theater: 
     const footer = element.querySelector<HTMLElement>(".compact-export");
     const divider = element.querySelector<HTMLElement>(".workbench-size-bar");
     const measure = () => {
-      setEnabled(window.innerWidth > 640 && !(theater && window.innerHeight <= 500));
+      setEnabled(canResize());
       // Keep the source and export controls usable even at the largest saved size.
       setMax(Math.max(MIN_HEIGHT, Math.floor(element.clientHeight - (footer?.offsetHeight ?? 84) - (divider?.offsetHeight ?? 28) - 240)));
     };

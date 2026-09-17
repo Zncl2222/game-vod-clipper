@@ -43,18 +43,24 @@ may use 10–11px. Numeric values use tabular figures. Use a 4/8px spacing rhyth
 ## Workspace hierarchy
 
 - Library: brand, import, searchable projects, help, local storage/connection status.
-- Header: actual import/review/export stage plus help.
-- Editor (revised layout A): preview above one independently scrolling workbench;
+- Header: actual import/review/export stage, **更多工具**, and help.
+- Editor (revised layout A): the desktop shell fits the viewport without scrolling,
+  with the preview above one independently scrolling workbench;
   the AI conversation keeps its full-height right column. A single ruler aligns selection,
   candidates and optional evidence. The workbench defaults to 260px, with a draggable
   divider, size buttons and a saved, window-bounded preferred height.
-  Start/victory fields and independent postroll are inline; draft/review/export stays
-  visible below. Never remount the player for layout changes.
+  Start/victory fields and independent postroll precede AI candidates. Candidate rows
+  expand naturally and share the workbench scroll; never nest a vertical candidate
+  scrollbar inside it. Draft/review/export stays visible below. At widths up to 640px
+  or heights up to 700px, use a single natural page scroll and hide the height divider,
+  including in theater mode. Never remount the player for layout changes.
 - AI: connection, conversation mode, current project, conversation/tasks, search,
   composer/model controls. Technical implementation details belong in advanced help.
-- Secondary details: evidence and exploration (workbench toggle), preview shortcuts,
-  manual actions and draft management, completed clips, external Agent handoff,
-  and processing history.
+- Secondary details: evidence and exploration (workbench toggle) and preview shortcuts.
+  Manual actions, draft management, completed clips, external Agent handoff, and processing history live
+  in the **更多工具** dialog. Keep its header fixed, scroll only its content, preserve
+  editor state, and restore focus on close. Processing history remains inline while
+  a source is being prepared; active/failed jobs are indicated on the tools button.
 
 The source player has transport controls without a second native seek bar. Default
 to the current draft's time range, with full-source, zoom and pan controls in the

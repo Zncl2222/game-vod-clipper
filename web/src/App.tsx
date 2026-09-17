@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import BossReviewDock from "./BossReviewDock";
 import FinishedClips from "./FinishedClips";
+import EditorTools from "./EditorTools";
 import { validSelection } from "./SelectionOverlay";
 import { timelineWindow, type TimeWindow } from "./TimelineZoom";
 import ClipWorkspace, { candidates } from "./ClipWorkspace";
@@ -60,6 +61,7 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [modal, setModal] = useState(false);
   const [guide, setGuide] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const [error, setError] = useState("");
   const { libraryOpen, chatOpen, toggleLibrary, toggleChat, openChat } = usePanelVisibility();
   const layout = usePanelLayout(chatOpen, libraryOpen);
@@ -81,11 +83,11 @@ export default function App() {
   }, []);
   const project =
     state.projects.find((p) => p.id === selected) ?? state.projects[0];
-  useEffect(() => { setPreviewExpanded(false); }, [project?.id]);
+  useEffect(() => { setPreviewExpanded(false); setToolsOpen(false); }, [project?.id]);
   useEffect(() => {
     if (!previewExpanded) return;
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); setPreviewExpanded(false); }
+      if (event.key === "Escape" && !document.querySelector("dialog[open]")) { event.preventDefault(); setPreviewExpanded(false); }
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
@@ -110,10 +112,13 @@ export default function App() {
   }
   const projectJobs = state.jobs.filter((j) => j.project_id === project?.id);
   const mediaJobs = projectJobs.filter((job) => job.kind !== "analyze");
+  const mediaJobStatus = mediaJobs.some(active) ? "處理中"
+    : mediaJobs.some(job => ["failed", "interrupted"].includes(job.status) && !(job.kind === "prepare" && project?.ready)) ? "需處理" : "";
   const currentDraft = editorContext?.project_id === project?.id ? editorContext?.draft : project?.draft;
   const exported = !!currentDraft && projectJobs.some(job => job.kind === "export" && job.status === "succeeded" &&
     job.draft?.start === currentDraft.start && job.draft?.victory === currentDraft.victory && job.draft?.postroll === currentDraft.postroll);
   async function action(job: Job, command: "cancel" | "retry") {
+    setError("");
     try {
       await api(`/jobs/${job.id}/${command}`, "POST");
     } catch (e) {
@@ -177,6 +182,11 @@ export default function App() {
         <header className="topbar">
           <WorkflowSteps ready={!!project?.ready} reviewed={!!currentDraft?.reviewed} exported={exported} />
           <div className="topbar-right">
+            {project?.ready && <button type="button" className="topbar-tools" aria-label="更多工具" aria-haspopup="dialog"
+              aria-controls="editor-tools" aria-describedby={mediaJobStatus ? "tools-job-status" : undefined} onClick={() => setToolsOpen(true)}>
+              <SlidersHorizontal size={16} aria-hidden="true" />更多工具
+              {mediaJobStatus && <span id="tools-job-status" className="tools-job-status">{mediaJobStatus}</span>}
+            </button>}
             <button className="topbar-help" onClick={() => setGuide(true)}><CircleHelp size={16} />操作指南</button>
           </div>
         </header>
@@ -191,7 +201,7 @@ export default function App() {
               <p>讓每一次勝利，都有自己的精彩片段。</p>
             </div>
           </div>
-          {error && (
+          {error && !toolsOpen && (
             <div role="alert" className="notice error">
               {error}
               <button onClick={() => setError("")} aria-label="關閉錯誤">
@@ -224,6 +234,10 @@ export default function App() {
               }}
               project={project}
               jobs={projectJobs}
+              toolsOpen={toolsOpen}
+              onCloseTools={() => setToolsOpen(false)}
+              toolError={error}
+              onJobAction={action}
               chatRef={editorChat}
               onSearch={async () => { await aiChat.current?.search(); }}
               onContext={setEditorContext}
@@ -237,84 +251,7 @@ export default function App() {
               <small>{projectJobs.some(active) ? "準備完成後會自動開啟剪輯。你可以先處理其他專案。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
             </div>
           )}
-          {mediaJobs.length > 0 && (
-            <details className="workspace-details jobs-details" open={mediaJobs.some(active) || undefined}>
-            <summary><Clock3 size={16} /> 處理紀錄 <span>{mediaJobs.length} 項</span></summary>
-            <section className="jobs-panel">
-              <div className="section-title">
-                <Clock3 size={16} />
-                <h2>處理紀錄</h2>
-                <span>關閉分頁後，背景工作仍會繼續</span>
-              </div>
-              {mediaJobs.map((job) => (
-                <div key={job.id} className="job-row">
-                  <div
-                    className={`job-symbol ${job.status === "succeeded" ? "success" : ""}`}
-                  >
-                    {active(job) ? (
-                      <LoaderCircle size={17} className="spin" />
-                    ) : job.status === "succeeded" ? (
-                      <Check size={17} />
-                    ) : (
-                      <CircleHelp size={17} />
-                    )}
-                  </div>
-                  <div className="job-info">
-                    <strong>
-                      {job.kind === "prepare"
-                        ? "準備預覽"
-                        : `匯出剪輯 · 版本 ${job.draft?.revision}`}
-                    </strong>
-                    <small>
-                      {job.error ||
-                        ({
-                          succeeded: "已完成",
-                          failed: "處理失敗",
-                          cancelled: "已取消",
-                          interrupted: "服務曾中斷，請重試",
-                        }[job.status] ??
-                          job.stage)}
-                    </small>
-                  </div>
-                  {active(job) && (
-                    <>
-                      <div className={`progress-track ${job.kind === "analyze" ? "analysis-track is-running" : ""}`}>
-                        <div style={job.kind === "analyze" ? undefined : { width: `${job.progress}%` }} />
-                      </div>
-                      <button
-                        className="text-button"
-                        onClick={() => action(job, "cancel")}
-                      >
-                        取消
-                      </button>
-                    </>
-                  )}
-                  {["failed", "cancelled", "interrupted"].includes(
-                    job.status,
-                  ) &&
-                    !(job.kind === "prepare" && project?.ready) && (
-                      <button
-                        className="secondary"
-                        onClick={() => action(job, "retry")}
-                      >
-                        <RotateCcw size={14} />
-                        重試
-                      </button>
-                    )}
-                  {job.kind === "export" && job.status === "succeeded" && (
-                    <a
-                      className="secondary"
-                      href={`/api/jobs/${job.id}/download`}
-                    >
-                      <ArrowDownToLine size={14} />
-                      下載 MP4
-                    </a>
-                  )}
-                </div>
-              ))}
-            </section>
-            </details>
-          )}
+          {!project?.ready && mediaJobs.length > 0 && <ProcessingHistory jobs={mediaJobs} ready={false} onAction={action} />}
           <footer>
             為完整的 Boss 勝利而設計。
             <span>搜尋與聊天共用 AI · 候選結果仍需人工確認</span>
@@ -345,6 +282,36 @@ export default function App() {
   );
 }
 
+function ProcessingHistory({ jobs, ready, onAction }: {
+  jobs: Job[]; ready: boolean; onAction: (job: Job, command: "cancel" | "retry") => Promise<void>;
+}) {
+  if (!jobs.length) return <p className="editor-tools-empty">尚無處理紀錄。</p>;
+  return <details className="workspace-details jobs-details" open={jobs.some(active) || undefined}>
+    <summary><Clock3 size={16} aria-hidden="true" />處理紀錄 <span>{jobs.length} 項</span></summary>
+    <section className="jobs-panel">
+      <div className="section-title"><Clock3 size={16} aria-hidden="true" /><h2>處理紀錄</h2><span>關閉分頁後，背景工作仍會繼續</span></div>
+      {jobs.map(job => <div key={job.id} className="job-row">
+        <div className={`job-symbol ${job.status === "succeeded" ? "success" : ""}`}>
+          {active(job) ? <LoaderCircle size={17} className="spin" aria-hidden="true" />
+            : job.status === "succeeded" ? <Check size={17} aria-hidden="true" /> : <CircleHelp size={17} aria-hidden="true" />}
+        </div>
+        <div className="job-info">
+          <strong>{job.kind === "prepare" ? "準備預覽" : `匯出剪輯 · 版本 ${job.draft?.revision}`}</strong>
+          <small>{job.error || ({ succeeded: "已完成", failed: "處理失敗", cancelled: "已取消", interrupted: "服務曾中斷，請重試" }[job.status] ?? job.stage)}</small>
+        </div>
+        {active(job) && <>
+          <div className="progress-track"><div style={{ width: `${job.progress}%` }} /></div>
+          <button className="text-button" onClick={() => onAction(job, "cancel")}>取消</button>
+        </>}
+        {["failed", "cancelled", "interrupted"].includes(job.status) && !(job.kind === "prepare" && ready) &&
+          <button className="secondary" onClick={() => onAction(job, "retry")}><RotateCcw size={14} aria-hidden="true" />重試</button>}
+        {job.kind === "export" && job.status === "succeeded" &&
+          <a className="secondary" href={`/api/jobs/${job.id}/download`}><ArrowDownToLine size={14} aria-hidden="true" />下載 MP4</a>}
+      </div>)}
+    </section>
+  </details>;
+}
+
 function Editor({
   project,
   jobs,
@@ -356,6 +323,10 @@ function Editor({
   onResetProgress,
   previewExpanded,
   onTogglePreview,
+  toolsOpen,
+  onCloseTools,
+  toolError,
+  onJobAction,
 }: {
   project: Project;
   jobs: Job[];
@@ -365,6 +336,10 @@ function Editor({
   onReset: () => Promise<void>;
   onResetProgress: () => Promise<void>;
   previewExpanded: boolean;
+  toolsOpen: boolean;
+  onCloseTools: () => void;
+  toolError: string;
+  onJobAction: (job: Job, command: "cancel" | "retry") => Promise<void>;
   onTogglePreview: () => void;
   onContext: (context: EditorContext) => void;
 }) {
@@ -555,6 +530,7 @@ function Editor({
   }
   async function importAgent(file?: File) {
     if (!file) return;
+    onError("");
     try {
       if (file.size > 100_000) throw new Error("Agent JSON 檔案過大。");
       const data = JSON.parse(await file.text());
@@ -760,7 +736,9 @@ function Editor({
             </div>
           </div>
         </section>
-        <details className="editor-settings workspace-details"><summary>手動操作與草稿管理</summary>
+      </div>
+      <EditorTools open={toolsOpen} onClose={onCloseTools} error={toolError} onClearError={() => onError("")}>
+        <details className="editor-settings workspace-details" open><summary>手動操作與草稿管理</summary>
           <div className="quick-actions">
             <button
               onClick={() =>
@@ -781,15 +759,13 @@ function Editor({
             <span />
             <button
               disabled={!valid}
-              onClick={() =>
-                playRange(draft.start, Math.min(end, draft.start + 10))
-              }
+              onClick={() => { onCloseTools(); playRange(draft.start, Math.min(end, draft.start + 10)); }}
             >
               播放開頭
             </button>
             <button
               disabled={!valid}
-              onClick={() => playRange(Math.max(draft.start, end - 10), end)}
+              onClick={() => { onCloseTools(); playRange(Math.max(draft.start, end - 10), end); }}
             >
               播放結尾
             </button>
@@ -823,7 +799,6 @@ function Editor({
           </div>
         </details>
         <FinishedClips project={project} jobs={jobs} onSeek={seek} />
-      </div>
       <details className="workspace-details">
       <summary><FileJson size={16} /> 進階 Agent 匯入／匯出</summary>
       <div className="agent-strip">
@@ -863,6 +838,8 @@ function Editor({
         />
       </div>
       </details>
+      <ProcessingHistory jobs={jobs.filter(job => job.kind !== "analyze")} ready={project.ready} onAction={onJobAction} />
+      </EditorTools>
     </>
   );
 }

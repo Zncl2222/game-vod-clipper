@@ -61,6 +61,7 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeAttached({
     timeout: 30_000,
   });
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   await page.locator(".jobs-details > summary").click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
@@ -72,8 +73,12 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await finished.scrollIntoViewIfNeeded();
   await expect(finished.getByLabel("成品預覽 #1")).toHaveAttribute("controls", "");
   await expect.poll(() => finished.locator("video").evaluate((v: HTMLVideoElement) => v.duration)).toBeCloseTo(11.5, 0);
+  await finished.locator("video").evaluate((video: HTMLVideoElement) => video.play());
+  expect(await finished.locator("video").evaluate((video: HTMLVideoElement) => video.paused)).toBe(false);
+  await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
+  await expect.poll(() => page.locator(".finished-clip-player video").evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
   await page.reload();
-  await page.locator(".editor-settings > summary").click();
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
   await page.locator(".jobs-details > summary").click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
@@ -94,7 +99,6 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     ),
   });
   await expect(page.getByRole("alert")).toContainText("project_id");
-  await page.getByRole("button", { name: "關閉錯誤" }).click();
   await page.getByLabel("匯入 Agent JSON").setInputFiles({
     name: "agent-result.json",
     mimeType: "application/json",
@@ -108,11 +112,13 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     ),
   });
   await expect(page.getByLabel("開始時間")).toHaveValue("2");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("checkbox", { includeHidden: true })).not.toBeChecked();
   await page.getByRole("button", { name: "儲存草稿" }).click();
   await expect(
-    page.getByText("草稿已儲存", { exact: false }).first(),
+    page.getByRole("dialog", { name: "更多工具", exact: true }).getByText("草稿已儲存", { exact: false }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
   await page.getByRole("button", { name: "跳到開始", exact: true }).click();
   await expect
     .poll(() =>

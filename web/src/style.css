@@ -2157,9 +2157,8 @@ footer > span {
 .candidate-marker.rejected { border-style: dashed; opacity: .65; }
 .candidate-marker:focus-visible { outline: 3px solid #283e28; outline-offset: 1px; }
 .candidate-overview { touch-action: pan-y; user-select: none; cursor: crosshair; }
-.candidate-overview { max-height: 260px; overflow-y: auto; overscroll-behavior: contain; }
 .candidate-track { position: relative; }
-.candidate-marker { touch-action: none; cursor: ew-resize; }
+.candidate-marker { touch-action: pan-y; cursor: ew-resize; }
 .candidate-overview:focus-visible { outline: 2px solid #597d3d; outline-offset: 2px; }
 .candidate-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #30432b; pointer-events: none; z-index: 3; }
 .candidate-scale { display: flex; justify-content: space-between; font-size: 9px; color: #6d7865; margin-top: 4px; }
@@ -2311,12 +2310,4 @@ footer > span {
   .app.preview-is-large .main-shell main { padding: 0; }
   .app.preview-is-large .preview-panel { height: 100dvh; min-height: 0; border: 0; border-radius: 0; }
   .app.preview-is-large .preview-stage { justify-content: center; }
-}
-@media (max-height: 500px) and (min-width: 641px) {
-  .app.preview-is-large .preview-panel { min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 32%); grid-template-rows: minmax(0, 1fr) auto; }
-  .app.preview-is-large .preview-stage { grid-column: 1; grid-row: 1; }
-  .app.preview-is-large .preview-editing { grid-column: 2; grid-row: 1; min-width: 0; border-top: 0; border-left: 1px solid var(--line); }
-  .app.preview-is-large .compact-export { grid-column: 1 / -1; grid-row: 2; }
-  .app.preview-is-large .preview-editing .source-time-ruler > span:nth-child(2),
-  .app.preview-is-large .preview-editing .source-time-ruler > span:nth-child(4) { display: none; }
 }

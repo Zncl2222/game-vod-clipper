@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import SelectionOverlay, { validSelection } from "./SelectionOverlay";
 import { type TimeWindow } from "./TimelineZoom";
 import { Play, Sparkles, Tag } from "lucide-react";
@@ -8,14 +8,15 @@ const kinds = { possible_win: "疑似勝利", fight: "戰鬥", death_retry: "死
 const confidence = { low: "低", medium: "中", high: "高" };
 const reviews = { pending: "待核對", keep: "保留", reject: "排除" };
 
-export default function CandidateTimeline({ project, segments, selected, current, onSelect, onSeek, onPlay, onApply, onError, view, draft, children }: {
+export default function CandidateTimeline({ project, segments, selected, current, onSelect, onSeek, onPlay, onApply, onError, view, draft }: {
   project: Project; segments: NumberedCandidate[]; selected: string | null; current: number;
   onSelect: (segment: NumberedCandidate, seconds?: number) => void; onSeek: (seconds: number) => void; onPlay: (start: number, end: number) => void;
   onApply: (draft: Partial<Draft>) => void; onError: (message: string) => void;
-  view: TimeWindow; draft: Draft; children?: ReactNode;
+  view: TimeWindow; draft: Draft;
 }) {
   const [busy, setBusy] = useState(false);
-  const drag = useRef<{ pointer: number; left: number; width: number; from: number; span: number } | null>(null);
+  const drag = useRef<{ pointer: number; left: number; width: number; from: number; span: number;
+    x: number; y: number; started: boolean; target: HTMLElement; segment?: NumberedCandidate } | null>(null);
   const [savedReviews, setSavedReviews] = useState<Record<string, CandidateReview>>({});
   useEffect(() => {
     setSavedReviews(previous => {
@@ -45,6 +46,18 @@ export default function CandidateTimeline({ project, segments, selected, current
   const canApply = candidate?.kind === "possible_win" && candidate.victory !== null
     && Number.isFinite(candidate.victory) && candidate.start < candidate.victory && candidate.victory <= candidate.end && postroll >= 5;
 
+  function scrub(x: number) {
+    const gesture = drag.current;
+    if (!gesture) return;
+    const seconds = position(x, gesture);
+    if (!gesture.started) {
+      gesture.started = true;
+      gesture.target.focus({ preventScroll: true });
+      if (gesture.segment) { onSelect(gesture.segment, seconds); return; }
+    }
+    onSeek(seconds);
+  }
+
   async function tag(value: CandidateReview) {
     if (!candidate) return;
     setBusy(true);
@@ -60,27 +73,32 @@ export default function CandidateTimeline({ project, segments, selected, current
     <div className="workbench-lane-label candidate-lane-label"><strong><Sparkles size={14} aria-hidden="true" />AI 候選 <span>{segments.length}</span></strong><small>參考片段 · 點選預覽</small></div>
     <div className="candidate-overview" role="group" aria-label="候選時間軸定位" tabIndex={0}
       onPointerDown={e => {
-        if (!e.isPrimary || e.button !== 0) return;
+        if (!e.isPrimary || e.button !== 0 || drag.current) return;
         const rect = e.currentTarget.getBoundingClientRect();
-        // Leave the native vertical scrollbar draggable; only the track scrubs.
-        if (e.clientX >= rect.left + e.currentTarget.clientWidth) return;
         e.preventDefault();
         const bounds = { left: rect.left, width: e.currentTarget.clientWidth, from, span };
-        drag.current = { pointer: e.pointerId, ...bounds };
-        e.currentTarget.dataset.scrubbing = "true";
         const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-candidate-id]");
         const segment = segments.find(s => s.id === button?.dataset.candidateId);
-        const seconds = position(e.clientX, bounds);
-        if (segment) { button?.focus({ preventScroll: true }); onSelect(segment, seconds); }
-        else { e.currentTarget.focus({ preventScroll: true }); onSeek(seconds); }
+        drag.current = { pointer: e.pointerId, ...bounds, x: e.clientX, y: e.clientY,
+          started: false, target: button ?? e.currentTarget, segment };
+        e.currentTarget.dataset.scrubbing = "true";
+        // Touch may become a vertical scroll; wait for a tap or horizontal movement.
+        if (e.pointerType !== "touch") scrub(e.clientX);
         e.currentTarget.setPointerCapture(e.pointerId);
       }}
       onPointerMove={e => {
-        if (drag.current?.pointer === e.pointerId) onSeek(position(e.clientX, drag.current));
+        const gesture = drag.current;
+        if (gesture?.pointer !== e.pointerId) return;
+        if (!gesture.started) {
+          const dx = Math.abs(e.clientX - gesture.x), dy = Math.abs(e.clientY - gesture.y);
+          if (dx < 8 || dx <= dy) return;
+        }
+        scrub(e.clientX);
       }}
       onPointerUp={e => {
-        if (drag.current?.pointer !== e.pointerId) return;
-        onSeek(position(e.clientX, drag.current));
+        const gesture = drag.current;
+        if (gesture?.pointer !== e.pointerId) return;
+        if (gesture.started || Math.hypot(e.clientX - gesture.x, e.clientY - gesture.y) < 8) scrub(e.clientX);
         drag.current = null;
         delete e.currentTarget.dataset.scrubbing;
         if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
@@ -111,7 +129,6 @@ export default function CandidateTimeline({ project, segments, selected, current
       {current >= from && current <= to && <span className="candidate-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
       </div>
     </div>
-    {children && <div className="workbench-inline-controls">{children}</div>}
     <p className="candidate-reference-note">AI 候選供核對；放入剪輯草稿後才會成為匯出範圍。<span>虛線僅對齊目前剪輯。</span></p>
     <div className="candidate-legend">{Object.entries(kinds).map(([kind, label]) => <span key={kind} className={kind}><i />{label}</span>)}</div>
     {!segments.length && <p className="candidate-empty">AI 找到可疑片段後會陸續標在這裡；尚未確認勝利的片段也能點選預覽。</p>}
