@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 test("import, preview, trim, review, export, restore and mobile layout", async ({
   page,
@@ -69,17 +70,19 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   const download = await downloadPromise;
   await download.saveAs(path.resolve("../runs/web-poc-browser-export.mp4"));
   expect(await download.failure()).toBeNull();
-  const finished = page.getByRole("region", { name: "成品切換播放器", exact: true });
-  await finished.scrollIntoViewIfNeeded();
-  await expect(finished.getByLabel("成品預覽 #1")).toHaveAttribute("controls", "");
-  await expect.poll(() => finished.locator("video").evaluate((v: HTMLVideoElement) => v.duration)).toBeCloseTo(11.5, 0);
-  await finished.locator("video").evaluate((video: HTMLVideoElement) => video.play());
-  expect(await finished.locator("video").evaluate((video: HTMLVideoElement) => video.paused)).toBe(false);
+  const metadata = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_format", "-of", "json", path.resolve("../runs/web-poc-browser-export.mp4")], { encoding: "utf8" }));
+  expect(Number(metadata.format.duration)).toBeCloseTo(11.5, 0);
   await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
-  await expect.poll(() => page.locator(".finished-clip-player video").evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
-  await page.reload();
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
+  await expect(player).toHaveAttribute("data-instance", "original-playing-video");
+  await page.getByLabel("開始時間").fill("1.75");
+  await page.getByRole("button", { name: "回到原片", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
+  await page.reload();
+  await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
+  await page.getByRole("button", { name: "更多工具", exact: true }).click();
   await page.locator(".jobs-details > summary").click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
   const projectId = await page.evaluate(async () => {

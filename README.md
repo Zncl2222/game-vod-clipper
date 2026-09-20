@@ -41,8 +41,23 @@ backend workspace (`GAME_VOD_ROOT` if configured). The finished clip's
 **檔案儲存位置** disclosure shows its path. **下載 MP4** saves another copy through
 your browser's download location.
 
+The right-hand **成品** tab shows each project's completed clips. Click a clip to
+edit its source range directly; **回到原片** restores the original editable
+workspace. Source and clip drafts are kept separately. **另存新成品** exports a
+new MP4 after review without overwriting the existing clip.
+
 See [the POC guide](docs/web-poc.md) for development, the Agent JSON contract,
 testing, and current limitations.
+
+### Your YouTube channel
+
+**我的 YouTube** connects your own Google OAuth client and channel, lists completed
+livestreams, and imports public/unlisted archives with optional automatic AI review.
+An opt-in watcher imports new completed streams while the backend is running.
+After reviewing and exporting a clip, use **上傳 YouTube** in **成品** to confirm its
+metadata and upload it privately by default. Upload progress, pause/resume and
+duplicate prevention persist locally. Only reviewed clip exports can be uploaded;
+source VODs cannot. See the [YouTube setup and workflow guide](docs/youtube-workflow.md).
 
 ### Chat and control the editor
 
@@ -61,17 +76,19 @@ The main view keeps the video, one range timeline, previews and export together.
 **AI 對話** opens an optional conversation panel; on smaller screens it opens a
 full-height drawer. Numeric editing controls appear before AI candidates in the workbench.
 **更多工具** opens manual shortcuts, draft save/restore, advanced Agent import/export,
-completed clips, and media job history without moving the editor. Account controls live behind **帳號設定**;
+and media job history without moving the editor. Account controls live behind **帳號設定**;
 search progress appears below the video and in the conversation.
 
-- **一般聊天** supports ordinary conversation without attaching project metadata.
-- **剪輯助理** attaches the selected project's title, duration, and current draft
-  timestamps. For example, type `把勝利後收尾改成 8 秒` or `跳到 1 分 30 秒`.
-  Valid commands update the local draft or seek the preview. Changes invalidate
-  manual review; saving and exporting still use the workspace controls. Explicit
-  requests such as `搜尋前 10 分鐘的成功挑戰` schedule a bounded visual search.
-  Ordinary conversation does not start media work. Selecting a project defaults
-  to editing mode; you can switch back to general chat at any time.
+- **AI 助理** is one conversation for ordinary chat and editing requests. Ask
+  questions, brainstorm titles, or say `把勝利後收尾改成 8 秒` or `跳到 1 分 30 秒`
+  in the same input. The assistant chooses validated editor tools when needed to
+  fulfill the request; selecting a video alone does not start media work.
+- The selected project's title, duration, current draft and analysis results are
+  attached automatically. Ordinary chat also works without a selected video or
+  with incomplete timing fields. Search and preview tools remain available with
+  an incomplete draft; export requires valid timing and manual review. Timing
+  changes invalidate review. Project-specific history sent to the model is scoped
+  to the current project and analysis; context-free conversation remains available.
 - The model picker uses official App Server `model/list` results. Your selection
   applies to the next message and search task. Searches require image support and
   retain their selected model when retried. There is no silent model fallback.
@@ -80,20 +97,39 @@ search progress appears below the video and in the conversation.
   application appear in conversation task cards. Follow-up questions receive the
   latest project search result; explicit cancellation can also be requested in chat.
 - Chat supports follow-up questions, **新對話**, and **停止回應**. Recent messages
-  remain in the current browser tab's session storage; the last 24 messages within
-  a 24,000-character budget are included in each request. Messages are sent to the
-  selected model under the connected account. Chat does not save transcripts in
-  the project store. Switching accounts clears the current transcript.
+  and unsent input remain in the current browser tab's session storage; the last
+  24 messages from the current conversation within a 24,000-character budget are
+  included in each request. The browser retains up to 120 recent messages and
+  migrates both former conversation histories and unsent inputs into one thread.
+  Search shortcuts preserve unsent input. Messages are sent to the selected model
+  under the connected account. Chat does not save transcripts in the project store.
+  Switching accounts clears the conversation and unsent input.
 - Replies proposing editor commands are validated against the source duration.
   A reply cannot overwrite a draft edited during generation or target a different
-  project after switching. No command can mark footage as reviewed or export it.
+  project after switching. No command can mark footage as reviewed; export tools
+  require a reviewed draft and use the existing save/export queue.
 
 The chat endpoint sends newline-delimited status and final-response events;
 responses appear when the model has completed its structured answer. Chat calls
-have a 120-second limit. Stopping a reply cancels its subprocess; an already queued
+have no response deadline. Stopping a reply cancels its subprocess; an already queued
 search is cancelled through its task card or an explicit chat request. Chat and
 visual review use the same `codex_runtime.py` executor with isolated invocations.
 The legacy analyze endpoint remains a compatibility wrapper around the same queue.
+
+Open **用量與額度** in the AI sidebar to see cumulative tokens for this local
+workspace and the selected video, with input/output and cached/reasoning details.
+New analysis, chat and connection-test turns are recorded as soon as Codex reports
+usage. Older analysis totals are imported without counting continuation history
+twice. Resetting analysis or deleting a project retains its usage ledger.
+
+The same panel reads the connected account's official subscription percentages
+and reset times, displaying only the quota windows Codex actually returns.
+New analysis jobs record before/after snapshots and show the change in percentage
+points as an **estimate**: concurrent Codex activity and reporting delays affect
+the account-wide difference. Resets or account/plan changes invalidate comparisons.
+Token totals cannot be converted directly to subscription percentages. Historical
+chat, calls that never reported usage, and old quota snapshots cannot be recovered.
+See [usage implementation details](docs/web-poc.md#usage-and-subscription-allowance).
 
 Run the lightweight tests without the video fixtures:
 
@@ -101,6 +137,7 @@ Run the lightweight tests without the video fixtures:
 python -m unittest discover -s tests -p test_codex_connection.py -v
 python -m unittest discover -s tests -p test_codex_chat.py -v
 python -m unittest discover -s tests -p test_ai_dispatch.py -v
+python -m unittest discover -s tests -p test_usage.py -v
 PYTHONPATH=tests python -m unittest test_codex_analysis.CodexStreamingTest -v
 cd web
 npm run test:chat
@@ -256,22 +293,55 @@ Official references: [App Server](https://learn.chatgpt.com/docs/app-server),
 
 When ready, import a video and use **一鍵搜尋成功挑戰** below the player.
 The default search covers the full VOD; the conversation panel allows a narrower
-range. After coarse discovery, Python schedules whole-candidate inspection at
-2-second then 0.5-second intervals, plus 60 samples/second around boundaries and
-model-identified suspicious transitions. Detail windows over 12 seconds first
+range. After coarse discovery, Python prioritizes the preferred attempt's start
+and victory boundaries, then whole-candidate inspection at 0.5-second intervals;
+this denser coverage also satisfies the 2-second continuity requirement.
+Boundaries first receive 0.1-second sampling; only unresolved, localized transitions
+escalate to native frames. Clear entries stay stable rather than moving to each
+packet's first frame.
+Detail windows over 4 seconds first
 receive 0.5-second localization; the model then identifies short transitions for
 frame-level review. The model can request additional ranges at fixed density levels.
-Analysis and chat have no application-imposed model response timeout. Analysis
+Each analysis packet has a 180-second watchdog shared by its calls and retry waits; an unresponsive call stops
+with its checkpoint retained. Chat has no application-imposed response timeout. Analysis
 continues without fixed session time, call-count or total-frame budgets until the
 review completes, exhausts useful refinement, fails, or you cancel it. The
-no-progress guard counts completed extra passes, not packets of a long scan, and
-does not skip mandatory coverage. Select reasoning effort beside the model;
-the available choices come from that model's Codex capabilities. Unfinished results
+no-progress guard counts completed passes separately for each encounter, including
+suspicious-window checks. After three passes without a new outcome, that local
+investigation ends as uncertain. Unrelated findings and timestamp changes cannot
+reset it. The host prioritizes a compact plausible encounter's outcome before
+whole-fight review and finishes when the preferred attempt passes its checks. Other
+annotations remain available for review. Mandatory candidate coverage still runs; failures outside the preferred
+attempt remain visible without blocking its acceptance. Before fine boundary checks,
+the host locates the last successful entry by searching backward from victory in
+2-second samples. A mid-fight opening cannot pass the explicit entry check.
+Victory also requires explicit actor/outcome evidence: a surviving player, a
+defeated opponent, and rewards/completion or actual post-fight progression.
+Dialogue and loading screens alone cannot pass. An unsupported ending receives
+a localized outcome check before whole-fight inspection; rejected encounters give
+way to the next plausible candidate.
+Select reasoning effort beside the model;
+the available choices come from that model's Codex capabilities. Search defaults
+to adaptive effort: `xhigh`/`max` selections use `high` for ordinary discovery and
+localization, then the selected effort for suspicious or overlapping ambiguous
+transitions. The progress message shows the effort actually used. Lower selections
+are unchanged; the API supports `effort_policy: "fixed"` to use the selected effort
+for every packet. Chat always uses the selected effort. Unfinished results
 remain uncertain. **接續細查** reuses completed observations
 and continues the saved queue with the original model. Source changes invalidate
 the checkpoint. Sampled images are sent to OpenAI; the source stays local.
+The visual worker receives a compact task-local prompt and decisive prior evidence,
+not repeated setup/export instructions. Byte-identical frames share one image while
+preserving all sampled timestamps; small visual changes are never removed by a
+similarity threshold. Each packet records extraction/model timing and prompt size.
 Dense sampling improves the evidence but does not guarantee no missed frames or
 CLI-equivalent judgment. Preview and manual review remain required before export.
+
+Temporary model capacity, rate-limit and network/service failures retry the same
+packet at most twice, reusing its extracted images and the selected model/effort.
+The progress panel reports the cause and retry. Login, permission and quota errors
+stop immediately with a specific message. Failed attempts retain their logs and
+checkpoint so **接續細查** can continue later.
 
 Run only the lightweight connection tests with:
 

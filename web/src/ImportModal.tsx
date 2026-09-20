@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, X, Youtube } from "lucide-react";
 import { api, type Project, type Source } from "./api";
 
-export default function ImportModal({ onClose, onImport }: { onClose: () => void; onImport: (id: string) => void }) {
+export default function ImportModal({ onClose, onImport, onYouTube }: { onClose: () => void; onImport: (id: string) => void; onYouTube?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const errorSummary = useRef<HTMLParagraphElement>(null);
   const [kind, setKind] = useState<"local" | "youtube">("local");
@@ -79,6 +79,7 @@ export default function ImportModal({ onClose, onImport }: { onClose: () => void
         <input id="youtube" type="url" value={url} disabled={busy} placeholder="https://www.youtube.com/watch?v=…" autoComplete="off"
           aria-describedby="youtube-help import-field-error" aria-invalid={!!fieldError} onChange={event => { setUrl(event.target.value); setFieldError(""); }} />
         <p id="youtube-help" className="field-help">支援已結束的公開影片。若來源需要登入或無法下載，可以改用本機錄影。</p>
+        {onYouTube && <button type="button" className="import-youtube-account" disabled={busy} onClick={onYouTube}><Youtube size={18} aria-hidden="true" />從我的 YouTube 選直播<ArrowRight size={16} aria-hidden="true" /></button>}
       </>}
       <p id="import-field-error" className="inline-error" role={fieldError ? "alert" : undefined}>{fieldError}</p>
       <div className="subtle-note"><ShieldCheck aria-hidden="true" size={17} /><span>原片保留在本機。匯入後可自行剪輯，或請 AI 協助尋找成功挑戰。</span></div>

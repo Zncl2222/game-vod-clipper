@@ -32,6 +32,7 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   const track = useRef<HTMLDivElement>(null);
   const drag = useRef<{ edge: "start" | "victory"; pointer: number; left: number; width: number; from: number; span: number; draft: Draft } | null>(null);
   const [showEvidence, setShowEvidence] = useState(false);
+  const [trackWidth, setTrackWidth] = useState(0);
   const duration = project.duration!;
   const finish = draft.victory + draft.postroll;
   const valid = validSelection(draft, duration);
@@ -43,6 +44,15 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   const working = searches.find(active);
   const thumbnails = project.thumbnails.filter(t => t.time >= from && t.time <= to).slice(0, 14);
   const selectionInView = valid && draft.start < to && finish > from;
+  const crowdedMarkers = trackWidth > 0 && (draft.victory - draft.start) / span * trackWidth < 96;
+
+  useEffect(() => {
+    const element = track.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setTrackWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const element = workspace.current;
@@ -84,14 +94,14 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
       <div className="workbench-ruler"><span>原片時間</span><TimeRuler start={from} end={to} /></div>
       <div className="workbench-trim-row">
         <div className="workbench-lane-label clip-lane-label"><strong><Film size={14} aria-hidden="true" />目前剪輯</strong><small>匯出範圍 · 可調整</small></div>
-        <div className="clip-range-track" ref={track}>
+        <div className="clip-range-track" data-crowded-markers={crowdedMarkers || undefined} ref={track}>
           <div className="review-thumbnail-strip">{thumbnails.map(t => <img key={t.file} src={media(project, t.file)} alt={`來源縮圖 ${time(t.time)}`} loading="lazy" />)}</div>
           <SelectionOverlay draft={draft} duration={duration} view={view} />
           <input className="compact-seek" type="range" aria-label="播放位置" min={from} max={to} step={1 / 30}
             aria-valuetext={time(Math.max(from, Math.min(to, current)), true)} value={Math.max(from, Math.min(to, current))} onChange={e => onSeek(Number(e.target.value))} />
           {current >= from && current <= to && <span className="review-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
           {valid && (["start", "victory"] as const).filter(edge => draft[edge] >= from && draft[edge] <= to).map(edge =>
-            <button key={edge} className={`clip-range-handle ${edge === "victory" ? "victory-handle" : ""}`} role="slider"
+            <button key={edge} className="clip-range-handle" data-edge={edge} role="slider"
               aria-label={edge === "start" ? "片段開始邊界" : "勝利位置邊界"}
               aria-valuemin={edge === "start" ? 0 : draft.start + 1 / 30} aria-valuemax={edge === "start" ? draft.victory - 1 / 30 : duration - draft.postroll}
               aria-valuenow={draft[edge]} aria-valuetext={time(draft[edge], true)}
@@ -151,7 +161,7 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     </section>
     <div className="source-comparison-legend" role="group" aria-label="原片對照圖例">
       <span><i className="source-legend-selection" aria-hidden="true" />實框：匯出範圍</span>
-      <span><i className="source-legend-postroll" aria-hidden="true" />斜線：收尾，仍會匯出</span>
+      <span><i className="source-legend-postroll" aria-hidden="true" />淡色區：收尾，仍會匯出</span>
     </div>
     <CandidateTimeline project={project} draft={draft} segments={reviewCandidates(project, jobs)} selected={selectedSegment} view={view}
       current={current} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onApply={apply} onError={onError} />

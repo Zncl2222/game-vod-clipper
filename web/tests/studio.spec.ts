@@ -26,6 +26,46 @@ async function workspace(page: Page, projects: unknown[] = [], jobs: unknown[] =
   await expect(page.getByText("工作區已連線")).toBeVisible();
 }
 
+test("candidate verification remains visible and rejected ranges load only for manual correction", async ({ page }) => {
+  const base = { kind: "possible_win", confidence: "high", summary: "完整成功嘗試", warnings: [], evidence: [], review: "pending" };
+  const candidates = [
+    { ...base, id: "review:one", number: 1, start: 20, end: 60, victory: 52, boss: "粗查片段", verification: "unverified" },
+    { ...base, id: "review:two", number: 2, start: 80, end: 130, victory: 122, boss: "含失敗畫面", verification: "blocked",
+      warnings: ["仍與死亡／重試片段重疊"] },
+    { ...base, id: "review:three", number: 3, start: 150, end: 196, victory: 190, boss: "通過檢查", verification: "verified", postroll: 6 },
+  ];
+  await workspace(page, [{ ...project, duration: 400, draft: { ...project.draft, reviewed: true }, review_candidates: candidates }]);
+  await page.getByRole("button", { name: "看全片", exact: true }).click();
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  await expect(page.getByLabel("片段 #1 詳情")).toContainText("尚未驗證");
+  await expect(page.getByLabel("片段 #1 詳情").getByRole("status")).toContainText("可能包含失敗／重試");
+  await expect(page.getByRole("button", { name: "將 #1 放入剪輯草稿" })).toHaveCount(0);
+  await page.getByRole("button", { name: "下一段", exact: true }).click();
+  const blocked = page.getByLabel("片段 #2 詳情");
+  await expect(blocked).toContainText("未通過驗證");
+  await expect(blocked).toContainText("仍與死亡／重試片段重疊");
+  await expect(blocked.getByRole("button", { name: "預覽 #2", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "將 #2 放入剪輯草稿" })).toHaveCount(0);
+  await blocked.getByRole("button", { name: "載入 #2 手動修正" }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("80");
+  await expect(page.getByRole("checkbox")).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeDisabled();
+  await blocked.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "../runs/candidate-verification-desktop.png" });
+  await page.getByLabel("關閉 AI 對話").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await blocked.scrollIntoViewIfNeeded();
+  await expect(blocked.getByRole("status")).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "../runs/candidate-verification-mobile.png" });
+  await blocked.getByRole("button", { name: "下一段", exact: true }).click();
+  await expect(page.getByLabel("片段 #3 詳情")).toContainText("已通過 AI 檢查");
+  await page.getByRole("button", { name: "將 #3 放入剪輯草稿" }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("150");
+  await expect(page.getByLabel("勝利後收尾")).toHaveValue("6");
+  await expect(page.getByRole("checkbox")).not.toBeChecked();
+});
+
 test("desktop onboarding and guide support keyboard dismissal and restore focus", async ({ page }) => {
   await workspace(page);
   await expect(page.getByRole("list", { name: "剪輯流程" }).locator('[aria-current="step"]')).toHaveText("1匯入素材");
@@ -363,6 +403,9 @@ test("desktop workspace, import and guide meet automated accessibility checks", 
   };
   await check();
   await page.getByRole("button", { name: /時間軸片段 #1/ }).click();
+  await check();
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await check();
   await page.getByRole("button", { name: "更多工具", exact: true }).click();
   await check();

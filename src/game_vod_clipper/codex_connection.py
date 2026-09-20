@@ -7,12 +7,16 @@ raw CLI diagnostics (which can contain account information) to the browser.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import shutil
 import tempfile
 import threading
+import time
 
 from .codex_runtime import execute
+from .usage import quota_buckets, record_usage
+from .web_store import Store
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlparse
@@ -25,8 +29,9 @@ class ConnectionError(RuntimeError):
 
 
 class CodexConnection:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, store: Store | None = None):
         self.root = root
+        self.store = store or Store(root)
         self.process = None
         self.reader = None
         self.pending: dict[int, asyncio.Future] = {}
@@ -154,6 +159,28 @@ class CodexConnection:
                 self.login = {"status": "succeeded" if self.completed_login.get("success") else "failed"}
             return self.login
 
+    async def rate_limits(self):
+        """Read official ChatGPT quotas without starting a model turn."""
+        status = await self.status()
+        result = {"available": False, "fetched_at": time.time(), "buckets": [],
+                  "plan": status.get("plan"), "account_key": None}
+        if not status.get("available"):
+            return {**result, "detail": status["detail"]}
+        if status.get("auth_mode") != "chatgpt":
+            return {**result, "detail": "API Key 依 API 用量計費，沒有 ChatGPT 訂閱額度。"}
+        try:
+            data = await self.rpc("account/rateLimits/read")
+        except ConnectionError:
+            return {**result, "detail": "暫時無法讀取訂閱額度，請稍後重新整理；若持續失敗，請更新 Codex CLI。"}
+        buckets = quota_buckets(data)
+        # Compare only snapshots from the same known account and plan. No
+        # credentials or raw provider diagnostics are stored in the ledger.
+        identity = [status.get("auth_mode"), status.get("email"), status.get("plan")]
+        key = hashlib.sha256(json.dumps(identity).encode()).hexdigest() if status.get("email") else None
+        return {**result, "available": bool(buckets), "fetched_at": time.time(),
+                "account_key": key, "buckets": buckets,
+                "detail": "" if buckets else "官方目前未提供可顯示的訂閱額度。"}
+
     async def cancel_login(self):
         async with self.busy:
             if self.login and self.login.get("status") == "pending":
@@ -195,11 +222,12 @@ class CodexConnection:
         return await self.respond(
             "This is a text-only connection check. Do not use any tools, read files, "
             "or process media. Reply in Traditional Chinese with exactly: AI 連線成功。",
-            timeout=60,
+            timeout=60, usage_kind="connection_test",
         )
 
     async def respond(self, prompt: str, *, model: str = MODEL,
-                      schema: dict | None = None, effort: str | None = "low", timeout: int | None = None):
+                      schema: dict | None = None, effort: str | None = "low", timeout: int | None = None,
+                      project_id: str | None = None, usage_kind: str = "chat"):
         if self.busy.locked():
             raise ConnectionError("AI 連線操作進行中，請等候完成。")
         async with self.busy:
@@ -215,6 +243,8 @@ class CodexConnection:
                 task = asyncio.create_task(asyncio.to_thread(
                     execute, Path(directory), [], prompt, timeout,
                     model=model, schema=schema, effort=effort, cancel=cancel,
+                    on_usage=lambda value: record_usage(self.store, value, kind=usage_kind,
+                                                       model=model, project_id=project_id),
                 ))
                 try:
                     result = await asyncio.shield(task)

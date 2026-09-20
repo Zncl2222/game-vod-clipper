@@ -11,6 +11,8 @@ Find useful encounters, verify the successful attempt, and finish with a clip or
 clear evidence-limited result. The CLI handles media; you provide visual judgment.
 In the interactive editor the host handles extraction, checkpoints and export;
 return observations instead of running the CLI setup or downloading again.
+The editor sends a compact visual-worker prompt from `review_prompt.py`; setup,
+download and export instructions need not be repeated in each image request.
 
 ## Core Rules
 
@@ -26,6 +28,11 @@ return observations instead of running the CLI setup or downloading again.
 - A boss HP bar disappearing and returning with higher health requires checking
   for retry versus a same-attempt phase change. Unresolved resets block acceptance.
 - Include visible victory and 5-10 seconds after it; both must fit the source.
+- Identify who falls and who remains standing before interpreting dialogue. A
+  defeat-sounding subtitle cannot override a prone player and standing opponent.
+  Loading/tip screens do not establish a post-fight state, however long they last.
+  Confirm player survival plus rewards/completion, or enemy defeat/surrender and
+  actual story/world progression. The editor records these as `outcome` states.
 - Keep generated media under `downloads/`, `runs/`, or `clips/`.
 - Do not upload, redistribute, or expose the source video.
 - Prefer accurate re-encoded cuts; use stream copy only if the user requests speed.
@@ -36,6 +43,9 @@ Keep one review ledger under `runs/` (or use the editor's checkpoint). Record th
 source and requested bounds, viewed pages/packets with interval and timestamps,
 encounters with stable IDs, unresolved questions, and pending checks. Extracting a
 page does not mean it has been viewed: open every page before recording it as seen.
+The editor may show one representative for byte-identical images, retaining every
+timestamp in the manifest. Similar-looking frames with any byte difference are
+not discarded, so HUD/reward changes remain available.
 Read existing coverage before extracting anything else. Reuse it after resuming.
 
 Every additional inspection must answer a named missing fact: which encounter,
@@ -48,15 +58,28 @@ continuity, then short targeted detail checks. Use intervals such as 30/60/90,
 5/10/15, 2, 0.5 seconds, then 0.1 seconds or native frames for a specific transition.
 Do not repeatedly shave tiny amounts off an interval or split already seen frames
 into new packets. Do not request an entire fight or VOD at native frame density.
-For detail windows longer than 12 seconds, first localize the event at 0.5 seconds,
+For detail windows longer than 4 seconds, first localize the event at 0.5 seconds,
 then inspect the relevant short transition. At native density there are no extra
 frames to discover by sampling more densely.
 
-Complete each requested refinement pass before opening another. If three completed
-extra passes change no encounter, victory/failure decision, or meaningful boundary,
-stop adding exploratory work. Finish the pending pass and required checks, retain
-useful candidates, and conclude uncertain. Do not impose a whole-VOD round cap that
-silently leaves the end unsearched; coarse and required checks are useful progress.
+After coarse discovery, prioritize the preferred attempt's opening, victory and
+whole-range continuity before unrelated investigations. Reuse denser observations
+to satisfy coarser checks. Preserve known failures outside that attempt without
+micro-inspecting every death; they cannot be included in a winning clip.
+Once the preferred attempt passes its checks, finish with the other discovered
+encounters retained as provisional review annotations. Do not require every
+encounter in a long VOD to pass frame-level verification for one usable result.
+
+Complete each encounter's requested pass before extending its scope. Count both
+additional sampling and suspicious-window review. After three completed local
+passes without a new encounter or victory/failure decision, close that investigation
+as uncertain. Timestamp changes, renamed hypotheses and discoveries in other
+encounters do not restart it. Finish necessary checks for the preferred candidate;
+retain exhausted questions and warnings. Do not impose a whole-VOD round cap that
+silently leaves the end unsearched.
+If repeated local checks still cannot establish stable start/victory boundaries,
+conclude uncertain. Ending that investigation does not waive coverage requirements
+or make its candidate acceptable.
 
 Finish when all of these hold:
 
@@ -163,12 +186,19 @@ request; preserve other useful encounters in the report/editor.
 Choose the winning attempt's clean arena entry, fog crossing, boss reveal or brief
 readying moment before combat. Exclude all earlier failure/runback context. If the
 candidate begins mid-fight, inspect earlier context once to find the real start.
+Locate the last entry backward from victory in useful context (e.g. one-minute
+windows at 2-second intervals), including the last retry when present. Do not
+creep backward through tiny boundary windows or relabel each packet's first frame
+as the entry. The editor requires `entry_status=clean` from observed entry/reset
+context; `unknown` or `mid_fight` remains unverified.
 If the available source begins mid-fight, disclose that limitation.
 
 Inspect the whole proposed attempt including postroll at 2-second intervals, then
 fill missing coverage at 0.5 seconds. Inspect short windows around the start and
-victory (roughly two seconds on either side) and each suspicious transition at
-native or near-native frame density (about `--every 0.0167` for 60 FPS footage).
+victory (roughly two seconds on either side) at 0.1-second intervals first.
+Escalate a localized, unresolved transition to native frame density when needed
+(about `--every 0.0167` for 60 FPS footage). Do not automatically turn every
+red flash or already-clear entry into hundreds of near-identical frames.
 A completed denser pass covers the coarser requirement; reuse those observations.
 This is sampling, not proof that every source frame is clean. Unresolved failure
 signals prevent accepting the candidate even when coverage is complete.

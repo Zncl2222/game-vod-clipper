@@ -4,6 +4,38 @@ import math
 from .candidate_registry import same_event
 
 
+def candidate_verification(segment: dict, job: dict, duration: float) -> dict:
+    """Project host validation onto an annotation without trusting worker confidence."""
+    value = dict(segment, verification="unverified", warnings=list(segment.get("warnings", [])))
+    if segment.get("kind") != "possible_win":
+        return value
+    result = job.get("result") or {}
+    matches = (segment.get("victory") is not None
+               and segment["start"] == result.get("start")
+               and segment["victory"] == result.get("victory"))
+    if matches:
+        value["warnings"] += result.get("warnings", [])
+        postroll = result.get("postroll", 8)
+        value["postroll"] = postroll
+        checks = result.get("checks") or {}
+        verified = (job.get("status") == "succeeded" and result.get("status") == "candidate"
+                    and result.get("review_complete") is True and not result.get("can_continue")
+                    and all(checks.get(k) is True for k in
+                            ("search", "entry", "outcome", "boundaries", "dense", "continuity"))
+                    and all(checks.values())
+                    and 5 <= postroll <= 10 and segment["victory"] + postroll <= duration)
+        if verified:
+            value["verification"] = "verified"
+        elif result.get("status") != "candidate":
+            value["verification"] = "blocked"
+            if not value["warnings"]:
+                value["warnings"].append("此區間未通過成功挑戰驗證，需修正或釐清後才能作為成功剪輯。")
+    if value["verification"] == "unverified":
+        value["warnings"].append("此為初步遭遇標註，尚未驗證完整成功嘗試；區間可能包含失敗或重試。")
+    value["warnings"] = list(dict.fromkeys(value["warnings"]))
+    return value
+
+
 def project_candidates(project: dict, jobs: list[dict]) -> list[dict]:
     # Store returns newest first. First discovery establishes the display number;
     # resumed jobs refine the same id without moving it or creating another item.
@@ -25,7 +57,7 @@ def project_candidates(project: dict, jobs: list[dict]) -> list[dict]:
             a, b = segment.get("start"), segment.get("end")
             if (isinstance(a, (int, float)) and isinstance(b, (int, float))
                     and math.isfinite(a) and math.isfinite(b) and 0 <= a < b <= project["duration"]):
-                found[segment["id"]] = segment
+                found[segment["id"]] = candidate_verification(segment, job, project["duration"])
     retired = {key for job in jobs if job.get("project_id") == project["id"]
                for key in job.get("superseded_candidates", [])}
     reviews = project.get("candidate_reviews", {})
@@ -44,6 +76,16 @@ def project_candidates(project: dict, jobs: list[dict]) -> list[dict]:
             stable_id = existing["id"]
             existing.update(segment, id=stable_id, aliases=aliases)
     for index, segment in enumerate(consolidated, 1):
+        if segment["kind"] == "possible_win":
+            finish = (segment["victory"] + segment.get("postroll", 8)
+                      if segment.get("victory") is not None else segment["end"])
+            if segment["verification"] != "blocked" and any(
+                    c["kind"] == "death_retry" and c["confidence"] == "high"
+                    and c["start"] <= finish and segment["start"] <= c["end"] for c in consolidated):
+                segment["verification"] = "blocked"
+                segment["warnings"] = list(dict.fromkeys(segment["warnings"] +
+                    ["此區間與死亡／重試標註重疊，尚不能作為成功剪輯。請修正起點或釐清該標註。"]
+                ))
         tags = {reviews[key] for key in segment["aliases"] if key in reviews}
         segment.update(number=index, review=reviews.get(segment["id"], next(iter(tags)) if len(tags) == 1 else "pending"))
     return consolidated

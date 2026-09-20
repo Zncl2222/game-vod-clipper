@@ -7,6 +7,7 @@ export type Draft = {
   origin: "manual" | "agent";
 };
 export type Project = {
+  youtube_analysis_error?: string | null;
   review_candidates?: NumberedCandidate[];
   candidate_reviews?: Record<string, CandidateReview>;
   analysis_generation?: number;
@@ -21,6 +22,9 @@ export type Project = {
   draft?: Draft;
 };
 export type Job = {
+  quota_change?: QuotaChange;
+  edit_draft?: Draft;
+  source_job_id?: string | null;
   progress_reset?: boolean;
   candidates?: CandidateSegment[];
   model?: string;
@@ -74,9 +78,40 @@ export type AnalysisResult = {
   rounds: number;
 };
 export type State = { projects: Project[]; jobs: Job[] };
+
+export type TokenUsage = {
+  input_tokens: number; output_tokens: number; total_tokens: number;
+  cached_input_tokens: number; reasoning_output_tokens: number; records: number;
+};
+export type QuotaChange = {
+  status: "pending" | "estimated" | "unavailable" | "account_changed";
+  windows: { bucket_id: string; bucket_name: string; window_minutes: number | null;
+    status: "estimated" | "reset" | "unavailable"; percentage_points: number | null }[];
+};
+export type UsageSummary = {
+  total: TokenUsage; project: TokenUsage | null;
+  latest_analysis: { id: string; status: string; tokens: TokenUsage; quota_change: QuotaChange | null } | null;
+};
+export type RateLimits = {
+  available: boolean; fetched_at: number; plan: string | null; detail: string;
+  buckets: { id: string; name: string; windows: {
+    id: string; used_percent: number; window_minutes: number | null; resets_at: number | null;
+  }[] }[];
+};
+
+export function finishedClips(projectId: string, jobs: Job[]) {
+  return jobs.filter(job => job.project_id === projectId && job.kind === "export" && job.status === "succeeded" && job.draft)
+    .sort((a, b) => (a.created ?? 0) - (b.created ?? 0) || a.id.localeCompare(b.id));
+}
+
+export function editableClipDraft(job: Job): Draft {
+  return job.edit_draft ?? { ...job.draft!, revision: 0, reviewed: false };
+}
 export type CandidateReview = "pending" | "keep" | "reject";
 export type CandidateSegment = {
   id: string; start: number; end: number; victory: number | null;
+  verification?: "unverified" | "blocked" | "verified";
+  postroll?: number;
   kind: "possible_win" | "fight" | "death_retry" | "unknown";
   confidence: "low" | "medium" | "high";
   boss: string; summary: string; warnings: string[];
@@ -98,8 +133,13 @@ export function reviewCandidates(project: Project, jobs: Job[]): NumberedCandida
         warnings: r.warnings, evidence: r.evidence }];
     }
     for (const segment of segments) {
-      if ([segment.start, segment.end].every(Number.isFinite) && segment.start >= 0 && segment.start < segment.end && segment.end <= project.duration!)
-        found.set(segment.id, segment);
+      if ([segment.start, segment.end].every(Number.isFinite) && segment.start >= 0 && segment.start < segment.end && segment.end <= project.duration!) {
+        // Older servers have no host-verified projection. Keep their annotations
+        // provisional and retain a matching result's rejection warnings.
+        const matches = segment.victory !== null && segment.start === r?.start && segment.victory === r?.victory;
+        found.set(segment.id, { ...segment, verification: matches && r.status !== "candidate" ? "blocked" : "unverified",
+          warnings: [...new Set([...segment.warnings, ...(matches ? r.warnings : [])])] });
+      }
     }
   }
   return [...found.values()].map((segment, i) => ({ ...segment, number: i + 1, review: project.candidate_reviews?.[segment.id] ?? "pending" }));
@@ -111,6 +151,13 @@ export function apiError(path: string, status: number, detail?: unknown): string
     return "目前連接的後端沒有這個 AI 功能。請重新啟動 BossCut 後端，再重新整理頁面；若仍出現此訊息，請確認前端連到正確的後端位址。";
   }
   return typeof detail === "string" ? detail : "服務回應異常，請檢查後端連線與輸入內容。";
+}
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
 export async function api<T>(
@@ -125,7 +172,8 @@ export async function api<T>(
   });
   const data = await response.json().catch(() => null);
   if (!response.ok)
-    throw new Error(apiError(path, response.status, data?.detail));
+    throw new ApiError(apiError(path, response.status, data?.detail), response.status,
+      typeof data?.code === "string" ? data.code : undefined);
   if (data === null) throw new Error("服務未傳回有效資料，請檢查後端連線。");
   return data;
 }

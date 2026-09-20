@@ -1817,9 +1817,6 @@ footer > span {
 .chat-settings h2 { font-size: 13px; }
 .chat-settings p, .chat-settings button, .chat-settings a { font-size: 11px; line-height: 1.7; }
 .chat-settings .codex-heading p { display: none; }
-.chat-mode { display: flex; flex-shrink: 0; padding: 4px; margin: 4px 18px 12px; border-radius: 9px; background: #eef1e9; }
-.chat-mode button { display: flex; flex: 1; justify-content: center; align-items: center; gap: 6px; padding: 8px; font-size: 11px; color: #7f8b75; }
-.chat-mode button[aria-pressed='true'] { background: #fff; color: #344b29; box-shadow: 0 1px 4px #23361712; }
 .chat-context { display: flex; flex-shrink: 0; align-items: center; gap: 7px; margin: 0 18px 10px; border: 1px solid #e5ebdc; padding: 8px 10px; border-radius: 7px; font-size: 10px; color: #7a8b69; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .chat-messages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 20px; scrollbar-width: thin; }
 .chat-welcome { padding: 12vh 3px 24px; }
@@ -2075,7 +2072,6 @@ footer > span {
 .review-thumbnail-strip { display: flex; position: absolute; inset: 0; overflow: hidden; opacity: .6; border-radius: inherit; }
 .review-thumbnail-strip img { flex: 1; min-width: 0; object-fit: cover; }
 .clip-range-track { height: 64px; }
-.clip-range-handle.victory-handle { background: #b4963b; width: 13px; top: 8px; bottom: 8px; }
 .review-nudges { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .review-nudges button { border: 1px solid #dfe6d5; background: white; border-radius: 5px; padding: 6px 9px; font-size: 10px; }
 .review-nudges span { font-size: 10px; color: #7b8870; }
@@ -2215,7 +2211,6 @@ footer > span {
 .clip-workspace .candidate-legend { margin-top: 6px; }
 .clip-trimmer .clip-range-track { margin-top: 5px; }
 .clip-range-track { margin-left: 0; margin-right: 0; }
-.clip-range-handle.victory-handle { top: 24px; bottom: -8px; z-index: 5; }
 .clip-range-handle { top: -5px; bottom: 15px; user-select: none; }
 .clip-victory-tick, .review-playhead { pointer-events: none; }
 .aligned-source-track, .aligned-draft-track { position: relative; height: 24px; background: #e8edde; border-radius: 4px; margin: 8px 0 14px; }

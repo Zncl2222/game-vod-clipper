@@ -286,10 +286,7 @@ footer { color: var(--muted); font-size: 12px; padding-block: 24px; line-height:
 .chat-header > div:nth-child(2) { min-width: 0; }
 .chat-mark { background: var(--surface-active); color: var(--accent); border-color: var(--line); flex-shrink: 0; }
 .chat-icon { width: 30px; height: 32px; flex-shrink: 0; color: var(--muted); }
-.chat-mode { margin: 16px 16px 12px; background: var(--canvas); padding: 4px; }
-.chat-mode button { min-height: 34px; color: var(--muted); font-size: 12px; }
-.chat-mode button[aria-pressed="true"] { color: var(--ink); box-shadow: 0 1px 5px #20342c14; }
-.chat-context { margin: 0 16px 4px; padding: 8px 10px; background: var(--surface-subtle); font-size: 12px; color: var(--muted); border-color: var(--line); }
+.chat-context { margin: 16px 16px 4px; padding: 8px 10px; background: var(--surface-subtle); font-size: 12px; color: var(--muted); border-color: var(--line); }
 .chat-context > span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .chat-messages { padding: 20px 18px; }
 .chat-welcome { padding: clamp(24px, 7dvh, 64px) 2px 20px; }

@@ -165,6 +165,20 @@ class WebTest(unittest.TestCase):
                 float(metadata["format"]["duration"]), 11.75, delta=0.1
             )
             self.assertTrue(output.with_suffix(".json").is_file())
+            # The publishing boundary accepts the actual worker's reviewed receipt.
+            _, publishable = app.state.youtube.uploads.validate_export(job["id"])
+            self.assertEqual(publishable, output)
+            original_bytes = output.read_bytes()
+            clip_url = f"/api/projects/{project_id}/clips/{job['id']}/draft"
+            edited = client.put(clip_url, json=job["draft"] | {"start": 2, "revision": 0, "reviewed": True}).json()
+            second = client.post(export_url, json={"revision": edited["revision"], "source_job_id": job["id"]}).json()
+            second = self.wait_job(client, second["id"])
+            self.assertEqual(second["status"], "succeeded", second)
+            second_path = self.root / "clips" / "web" / project_id / f"{second['id']}.mp4"
+            info = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_format", "-of", "json", str(second_path)]))
+            self.assertAlmostEqual(float(info["format"]["duration"]), 11, delta=0.1)
+            self.assertEqual(output.read_bytes(), original_bytes)
+            self.assertEqual(second["source_job_id"], job["id"])
         with TestClient(create_app(self.root)) as client:
             project = next(
                 p

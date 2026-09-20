@@ -1,8 +1,8 @@
 import { useDeferredValue, useEffect, useId, useRef, useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { Copy, Film, FolderOpen, Info, LoaderCircle, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
-import { active, api, time, type Job, type Project } from "./api";
+import { Copy, FolderOpen, Info, LoaderCircle, MoreHorizontal, Pencil, Search, Trash2, X } from "lucide-react";
+import { active, api, finishedClips, time, type Job, type Project } from "./api";
 
 type Action = "open" | "rename" | "copy" | "info" | "delete";
 type Details = Project & { source?: string | null; url?: string | null; created?: number };
@@ -31,7 +31,8 @@ function ProjectEntry({ project, selected, onSelect, onAction, dialogOpen, jobs 
   project: Project; selected: boolean; onSelect: () => void; onAction: (action: Action) => void; dialogOpen: boolean; jobs: Job[];
 }) {
   const running = jobs.find(active);
-  const exported = jobs.some(job => job.kind === "export" && job.status === "succeeded");
+  const clipCount = finishedClips(project.id, jobs).length;
+  const exported = clipCount > 0;
   const status = running ? ({ prepare: "準備素材中", analyze: "AI 搜尋中", export: "匯出中" }[running.kind])
     : exported ? "已有成品" : project.ready ? (project.draft?.reviewed ? "已核對" : "待核對") : "尚未就緒";
   return <ContextMenu.Root>
@@ -40,8 +41,8 @@ function ProjectEntry({ project, selected, onSelect, onAction, dialogOpen, jobs 
         <button className={`project-card ${selected ? "selected" : ""}`} onClick={onSelect} title={project.title}
           aria-current={selected ? "page" : undefined}
           onKeyDown={event => { if (event.key === "F2") { event.preventDefault(); onAction("rename"); } }}>
-          <span className="project-icon">{running ? <LoaderCircle size={18} className="spin" /> : <Film size={18} />}</span>
-          <span><strong>{project.title}</strong><small>{project.ready ? `${time(project.duration!)} · ${status}` : status}</small></span>
+          <span className="project-icon">{running ? <LoaderCircle size={18} className="spin" /> : <FolderOpen size={18} />}</span>
+          <span><strong>{project.title}</strong><small>{project.ready ? `${time(project.duration!)} · ${clipCount} 個成品${running ? ` · ${status}` : ""}` : status}</small></span>
         </button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild><button className="project-more" aria-label={`${project.title} 的專案選單`} title="專案選單"><MoreHorizontal size={17} /></button></DropdownMenu.Trigger>

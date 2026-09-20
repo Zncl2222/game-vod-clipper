@@ -29,6 +29,9 @@ from .web_store import Store
 from .codex_connection import CodexConnection, ConnectionError, MODEL
 from .codex_chat import ChatRequest, chat, resolve_effort
 from .candidates import project_candidates
+from .youtube_routes import YouTubeWorkspace
+from .youtube_account import YouTubeError
+from .usage import quota_change, usage_summary
 
 ACTIVE = {"queued", "running"}
 EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
@@ -57,6 +60,7 @@ class Draft(BaseModel):
 
 class ExportRequest(BaseModel):
     revision: int = Field(ge=0)
+    source_job_id: str | None = Field(default=None, min_length=1, max_length=100)
 
 
 class CandidateReviewRequest(BaseModel):
@@ -72,10 +76,25 @@ class CodexLoginRequest(BaseModel):
 
 class AnalysisRequest(BaseModel):
     effort: str | None = Field(default=None, max_length=40)
+    effort_policy: Literal["adaptive", "fixed"] = "adaptive"
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
     start: float = Field(ge=0)
     end: float = Field(gt=0)
     model: str = Field(default=MODEL, min_length=1, max_length=120)
+
+
+def http_origin(value: str):
+    """Compare browser origins including scheme and effective port, not just host."""
+    try:
+        parsed = urlparse(value)
+        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+                or parsed.username or parsed.password or parsed.path not in {"", "/"}
+                or parsed.query or parsed.fragment):
+            return None
+        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+        return parsed.scheme, parsed.hostname, port
+    except ValueError:
+        return None
 
 
 def youtube_url(value: str) -> str:
@@ -113,8 +132,9 @@ def local_source(root: Path, source: str) -> Path:
 
 
 class Jobs:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, codex: CodexConnection | None = None):
         self.store = store
+        self.codex = codex
         self.limit = asyncio.Semaphore(1)
         self.tasks: dict[str, asyncio.Task] = {}
 
@@ -124,6 +144,7 @@ class Jobs:
         kind: str,
         draft: dict | None = None,
         analysis: dict | None = None,
+        source_job_id: str | None = None,
     ) -> dict:
         job = {
             "id": uuid4().hex,
@@ -135,6 +156,7 @@ class Jobs:
             "created": time.time(),
             "draft": draft,
             "analysis": analysis,
+            "source_job_id": source_job_id,
             "model": analysis.get("model", MODEL) if analysis else None,
             "error": None,
         }
@@ -145,33 +167,54 @@ class Jobs:
         return job
 
     async def execute(self, job_id: str):
+        try:
+            async with self.limit:
+                job = self.store.get("jobs", job_id)
+                before = None
+                if job["kind"] == "analyze" and self.codex:
+                    before = await self.codex.rate_limits()
+                    self.store.patch("jobs", job_id, quota_before=before,
+                                     quota_change={"status": "pending", "windows": []})
+                try:
+                    await self.run(job_id)
+                finally:
+                    if before is not None:
+                        after = await self.codex.rate_limits()
+                        self.store.patch("jobs", job_id, quota_after=after,
+                                         quota_change=quota_change(before, after))
+        except asyncio.CancelledError:
+            # Cancellation during the trailing metadata read must not turn a
+            # completed analysis into a cancelled result.
+            current = self.store.get("jobs", job_id)
+            if current and current["status"] in ACTIVE:
+                self.store.patch("jobs", job_id, status="cancelled", stage="已取消", finished_at=time.time())
+            if current and (current.get("quota_change") or {}).get("status") == "pending":
+                self.store.patch("jobs", job_id, quota_change={"status": "unavailable", "windows": []})
+
+    async def run(self, job_id: str):
         process = None
         log = self.store.root / "runs" / "web" / f"{job_id}.log"
         try:
-            async with self.limit:
-                self.store.patch("jobs", job_id, status="running", started_at=time.time())
-                with log.open("wb") as output:
-                    process = await asyncio.create_subprocess_exec(
-                        sys.executable,
-                        "-m",
-                        "game_vod_clipper.web_worker",
-                        str(self.store.root),
-                        job_id,
-                        stdout=output,
-                        stderr=output,
-                        start_new_session=os.name == "posix",
-                    )
-                    code = await process.wait()
-                job = self.store.get("jobs", job_id)
-                self.store.patch(
-                    "jobs",
+            self.store.patch("jobs", job_id, status="running", started_at=time.time())
+            with log.open("wb") as output:
+                process = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "game_vod_clipper.web_worker",
+                    str(self.store.root),
                     job_id,
-                    status="succeeded" if code == 0 else "failed",
-                    finished_at=time.time(),
-                    error=job.get("error")
-                    if code == 0 or job.get("error")
-                    else "處理失敗，請查看 runs/web/ 下的任務日誌。",
+                    stdout=output,
+                    stderr=output,
+                    start_new_session=os.name == "posix",
                 )
+                code = await process.wait()
+            job = self.store.get("jobs", job_id)
+            self.store.patch(
+                "jobs", job_id, status="succeeded" if code == 0 else "failed",
+                finished_at=time.time(), error=job.get("error")
+                if code == 0 or job.get("error")
+                else "處理失敗，請查看 runs/web/ 下的任務日誌。",
+            )
         except asyncio.CancelledError:
             if process and process.returncode is None:
                 try:
@@ -236,8 +279,8 @@ class LocalServer(uvicorn.Server):
 def create_app(root: Path | None = None) -> FastAPI:
     root = (root or Path(os.environ.get("GAME_VOD_ROOT", "."))).resolve()
     store = Store(root)
-    jobs = Jobs(store)
-    codex = CodexConnection(root)
+    codex = CodexConnection(root, store)
+    jobs = Jobs(store, codex)
     analysis_lock = asyncio.Lock()
     deleting_projects: set[str] = set()
     shutting_down = asyncio.Event()
@@ -250,15 +293,20 @@ def create_app(root: Path | None = None) -> FastAPI:
                 store.patch(
                     "jobs", job["id"], status="interrupted", stage="服務重啟，請重試", finished_at=time.time()
                 )
+            if (job.get("quota_change") or {}).get("status") == "pending":
+                store.patch("jobs", job["id"], quota_change={"status": "unavailable", "windows": []})
+        youtube.start()
         try:
             yield
         finally:
             shutting_down.set()
+            await youtube.close()
             await jobs.close()
             await codex.close()
 
     app = FastAPI(title="BossCut local POC", lifespan=lifespan)
     app.state.store = store
+    app.state.jobs = jobs
     app.state.codex = codex
     app.state.shutting_down = shutting_down
 
@@ -273,11 +321,13 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.middleware("http")
     async def local_origin(request: Request, call_next):
         origin = request.headers.get("origin")
-        if origin and urlparse(origin).hostname not in hosts:
+        oauth_callback = request.method == "GET" and request.url.path == "/api/youtube/callback"
+        source_origin = http_origin(origin) if origin else None
+        if origin and (source_origin is None or source_origin != http_origin(str(request.base_url))) and not oauth_callback:
             return JSONResponse(
                 {"detail": "不允許此來源存取本機工作區。"}, status_code=403
             )
-        if request.headers.get("sec-fetch-site") == "cross-site":
+        if request.headers.get("sec-fetch-site") == "cross-site" and not oauth_callback:
             return JSONResponse({"detail": "不允許跨站存取。"}, status_code=403)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
@@ -313,6 +363,16 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def codex_status():
         return await codex.status()
 
+    @app.get("/api/codex/usage")
+    async def codex_usage(project_id: str | None = None):
+        if project_id:
+            get("projects", project_id)
+        return usage_summary(store, project_id)
+
+    @app.get("/api/codex/rate-limits")
+    async def codex_rate_limits():
+        return await codex.rate_limits()
+
     @app.post("/api/codex/login")
     async def codex_login(body: CodexLoginRequest):
         return await codex.begin_login(body.method)
@@ -343,6 +403,9 @@ def create_app(root: Path | None = None) -> FastAPI:
         if not selected or "image" not in selected.get("input_modalities", []):
             raise ConnectionError("所選模型不支援畫面判讀，請在同一模型選單選擇支援影像的模型。")
         effort = resume_job["analysis"].get("effort") if resume_job else resolve_effort(selected, body.effort)
+        effort_policy = resume_job["analysis"].get("effort_policy", body.effort_policy) if resume_job else body.effort_policy
+        if "high" not in selected.get("supported_efforts", []) and selected.get("effort") != "high":
+            effort_policy = "fixed"
         async with analysis_lock:
             if get("projects", project_id).get("analysis_generation", 0) != generation:
                 raise HTTPException(409, "影片分析已重置，請重新搜尋。")
@@ -359,9 +422,13 @@ def create_app(root: Path | None = None) -> FastAPI:
                 raise HTTPException(409, "此影片已有搜尋任務，請先等待完成或取消。")
             if sum(j["status"] in ACTIVE for j in current) >= 8:
                 raise HTTPException(429, "任務佇列已滿。")
-            return jobs.submit(project_id, "analyze", analysis={**body.model_dump(),
+            submitted = jobs.submit(project_id, "analyze", analysis={**body.model_dump(),
                 "effort": effort,
+                "effort_policy": effort_policy,
                 "request_id": request_id, **({"resume_from": resume_job["id"]} if resume_job else {})})
+            if project.get("youtube_analysis_error"):
+                store.patch("projects", project_id, youtube_analysis_error=None)
+            return submitted
 
     @app.post("/api/codex/chat")
     async def codex_chat(body: ChatRequest):
@@ -510,10 +577,15 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     @app.delete("/api/projects/{project_id}")
     async def delete_project(project_id: str):
-        async with analysis_lock:
+        # Serialize with upload start/resume/restart, including their hash await.
+        # Once deletion starts, no new uploader may slip past the cancellation.
+        async with youtube.lock, analysis_lock:
             get("projects", project_id)
             deleting_projects.add(project_id)
             try:
+                for upload in youtube.uploads.all().values():
+                    if upload["project_id"] == project_id:
+                        await youtube.uploads.pause(upload["id"])
                 related = [job for job in store.all("jobs") if job["project_id"] == project_id]
                 tasks = [jobs.tasks[job["id"]] for job in related if job["id"] in jobs.tasks]
                 for task in tasks:
@@ -538,13 +610,20 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(409, str(error)) from None
         return {"candidate_id": body.candidate_id, "review": body.review}
 
-    @app.put("/api/projects/{project_id}/draft")
-    async def save_draft(project_id: str, body: Draft):
-        project = get("projects", project_id)
+    def clip_for_edit(project_id: str, job_id: str):
+        job = get("jobs", job_id)
+        if (job["project_id"] != project_id or job["kind"] != "export"
+                or job["status"] != "succeeded" or not job.get("draft")):
+            raise HTTPException(404, "找不到這個專案的已完成片段。")
+        return job
+
+    def editable_clip_draft(job: dict):
+        # Editing never changes the immutable range used by an existing MP4.
+        return job.get("edit_draft") or {**job["draft"], "revision": 0, "reviewed": False}
+
+    def validate_draft(project: dict, body: Draft):
         if not project["ready"]:
             raise HTTPException(409, "預覽尚未完成。")
-        if body.revision != project["draft"]["revision"]:
-            raise HTTPException(409, "草稿已更新，請重新載入專案。")
         if (
             not body.start < body.victory
             or body.victory + body.postroll > project["duration"]
@@ -552,6 +631,24 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(
                 422, "開始必須早於勝利，且勝利後須保留完整 5–10 秒，不可超出原片。"
             )
+
+    @app.put("/api/projects/{project_id}/clips/{job_id}/draft")
+    async def save_clip_draft(project_id: str, job_id: str, body: Draft):
+        project = get("projects", project_id)
+        job = clip_for_edit(project_id, job_id)
+        validate_draft(project, body)
+        if body.revision != editable_clip_draft(job)["revision"]:
+            raise HTTPException(409, "片段草稿已更新，請重新載入專案。")
+        draft = body.model_dump() | {"revision": body.revision + 1}
+        store.patch("jobs", job_id, edit_draft=draft)
+        return draft
+
+    @app.put("/api/projects/{project_id}/draft")
+    async def save_draft(project_id: str, body: Draft):
+        project = get("projects", project_id)
+        validate_draft(project, body)
+        if body.revision != project["draft"]["revision"]:
+            raise HTTPException(409, "草稿已更新，請重新載入專案。")
         draft = body.model_dump() | {"revision": body.revision + 1}
         store.patch("projects", project_id, draft=draft)
         return draft
@@ -559,7 +656,8 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/exports", status_code=202)
     async def export(project_id: str, body: ExportRequest):
         project = get("projects", project_id)
-        draft = project.get("draft")
+        draft = (editable_clip_draft(clip_for_edit(project_id, body.source_job_id))
+                 if body.source_job_id else project.get("draft"))
         if not draft or draft["revision"] != body.revision:
             raise HTTPException(409, "請先儲存目前草稿。")
         if not draft["reviewed"]:
@@ -570,13 +668,14 @@ def create_app(root: Path | None = None) -> FastAPI:
             if (
                 job["project_id"] == project_id
                 and job["kind"] == "export"
+                and job.get("source_job_id") == body.source_job_id
                 and job.get("draft", {}).get("revision") == body.revision
                 and job["status"] in ACTIVE | {"succeeded"}
             ):
                 return public_job(job)
         if len([j for j in store.all("jobs") if j["status"] in ACTIVE]) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
-        return jobs.submit(project_id, "export", draft)
+        return jobs.submit(project_id, "export", draft, source_job_id=body.source_job_id)
 
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel(job_id: str):
@@ -617,7 +716,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         if len([j for j in store.all("jobs") if j["status"] in ACTIVE]) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
         return jobs.submit(
-            job["project_id"], job["kind"], job.get("draft"), job.get("analysis")
+            job["project_id"], job["kind"], job.get("draft"), job.get("analysis"), job.get("source_job_id")
         )
 
     async def clear_analysis(project_id: str, *, progress_only: bool = False):
@@ -689,6 +788,33 @@ def create_app(root: Path | None = None) -> FastAPI:
             "instruction": "Follow skills/game-vod-boss-clipper/SKILL.md. Return start, victory, postroll as seconds. Visual review is required; timeline thumbnails alone are insufficient.",
             "draft": project["draft"],
         }
+
+    async def youtube_import(video_id: str):
+        return await import_project(ImportRequest(kind="youtube", source=f"https://www.youtube.com/watch?v={video_id}"))
+
+    async def youtube_check_model(model: str):
+        if not model:
+            raise YouTubeError("請選擇 AI 模型，或取消匯入後自動找片段。", 422)
+        status = await codex.status()
+        if not status["available"]:
+            raise YouTubeError("請先連接 AI 帳號，或取消匯入後自動找片段。", 422)
+        selected = next((m for m in await codex.models() if m["id"] == model), None)
+        if not selected or "image" not in selected.get("input_modalities", []):
+            raise YouTubeError("請選擇支援畫面判讀的 AI 模型。", 422)
+        return selected
+
+    async def youtube_analyze(project: dict, model: str, request_id: str):
+        selected = await youtube_check_model(model)
+        # This entry point has no effort picker. Use the visual-review policy,
+        # rather than silently inheriting the model's general chat default.
+        supported = set(selected.get("supported_efforts", [])) | {selected.get("effort")}
+        effort = next((value for value in ("xhigh", "high") if value in supported), selected.get("effort"))
+        return await enqueue_analysis(project["id"], AnalysisRequest(
+            start=0, end=project["duration"], model=model, effort=effort), request_id)
+
+    youtube = YouTubeWorkspace(store, youtube_import, youtube_analyze, youtube_check_model)
+    youtube.mount(app)
+    app.state.youtube = youtube
 
     # State updates use SSE. Reject unsupported WebSocket upgrades before the
     # catch-all static mount, whose ASGI application only accepts HTTP scopes.

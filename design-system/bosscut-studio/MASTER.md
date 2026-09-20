@@ -54,10 +54,22 @@ may use 10–11px. Numeric values use tabular figures. Use a 4/8px spacing rhyth
   scrollbar inside it. Draft/review/export stays visible below. At widths up to 640px
   or heights up to 700px, use a single natural page scroll and hide the height divider,
   including in theater mode. Never remount the player for layout changes.
-- AI: connection, conversation mode, current project, conversation/tasks, search,
-  composer/model controls. Technical implementation details belong in advanced help.
+- Right drawer: AI / completed clips tabs share the existing column. Keep the AI
+  mounted when browsing clips, preserving unsent input and ongoing work. Clicking
+  a clip directly loads its source range into the same editor. The upper source
+  button returns to the fully editable source workspace, not a read-only preview.
+  Connection, conversation/tasks, search and composer/model controls stay in AI.
+  One assistant handles ordinary conversation and requested editor tools in the
+  same transcript and composer. Attach the selected video automatically; keep
+  ordinary chat available without a video or valid draft. Show a compact current
+  video label and its search tasks. Browsing completed clips preserves pending
+  replies and unsent input without stealing focus. Search shortcuts preserve input.
+  A collapsed **用量與額度** row shows local tokens and the reported weekly usage.
+  Expanding it exposes per-video counts, account quota windows/reset times, and
+  explicitly estimated analysis-period changes. Keep local totals visible when
+  quota lookup fails; unavailable allowance is never represented as zero percent.
 - Secondary details: evidence and exploration (workbench toggle) and preview shortcuts.
-  Manual actions, draft management, completed clips, external Agent handoff, and processing history live
+  Manual actions, draft management, external Agent handoff, and processing history live
   in the **更多工具** dialog. Keep its header fixed, scroll only its content, preserve
   editor state, and restore focus on close. Processing history remains inline while
   a source is being prepared; active/failed jobs are indicated on the tools button.
@@ -66,10 +78,14 @@ The source player has transport controls without a second native seek bar. Defau
 to the current draft's time range, with full-source, zoom and pan controls in the
 workbench. Put the current clip directly above AI reference cards. Use a solid export
 frame with explicit start/victory/end labels; the victory marker is an internal point,
-and the end follows the independent postroll. Only the export track uses postroll
-hatching. Candidate cards have numbered text and a light dashed range guide, without
+and the end follows the independent postroll. Start and victory use matching slim
+grips and solid guides, with consistent labels for all three points. Only the export
+track uses a subtle solid tint for postroll. Candidate cards have numbered text and a light dashed range guide, without
 duplicating the filled draft overlay. Show candidate overlap as text. Completed exports use a list
-with source timestamps and a separate player. Layout rules live in `workbench.css`.
+with source timestamps, direct editing, download and file location; no second player.
+Retain separate source/clip drafts, viewport and playhead on workspace switches.
+Keep the source-return button below the sticky header (including after scrolling).
+Layout rules live in `workbench.css` and `clip-library.css`.
 
 The current draft's review state drives the workflow header. Any timing edit clears
 review. An export action explains its disabled state next to the button. Local

@@ -1,0 +1,48 @@
+/* The shared AI / finished-clips drawer keeps the editor and player mounted. */
+.ai-drawer-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.clips-drawer-content { flex: 1; min-height: 0; overflow: auto; }
+.ai-drawer-content[hidden], .clips-drawer-content[hidden] { display: none; }
+.workspace-drawer-tabs { display: flex; flex-shrink: 0; padding-inline: 16px; border-bottom: 1px solid var(--line); }
+.workspace-drawer-tabs button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: var(--surface); color: var(--muted); font-size: 13px; }
+.workspace-drawer-tabs button[aria-selected="true"] { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+.workspace-drawer-tabs button:hover { background: var(--surface-subtle); }
+.workspace-drawer-tabs button span { padding: 1px 6px; border-radius: 4px; background: var(--surface-active); color: var(--accent); font-variant-numeric: tabular-nums; }
+.source-workspace-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 9px; min-height: 34px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); color: var(--accent); font-size: 12px; white-space: nowrap; }
+.source-workspace-button[aria-pressed="true"] { background: var(--surface-active); }
+.source-workspace-button:hover { background: var(--surface-active); }
+.preview-panel .panel-heading { height: auto; min-height: 44px; padding-block: 5px; flex-wrap: wrap; row-gap: 8px; }
+.app:not(.preview-is-large) .preview-panel { scroll-margin-top: 80px; }
+.preview-panel .panel-heading > span { flex: 1; min-width: 100px; }
+.preview-display-controls { margin-left: auto; flex-wrap: wrap; }
+.clip-drawer { padding: 18px 14px; border: 0; border-radius: 0; margin: 0; }
+.clip-drawer-heading { display: flex; align-items: center; gap: 8px; }
+.clip-drawer-heading h2 { font-size: 15px; }
+.clip-drawer-heading > span { margin-left: auto; color: var(--accent); font-size: 12px; white-space: nowrap; }
+.clip-drawer-hint { margin: 10px 0 16px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.clip-encoding { padding: 8px; background: var(--surface-active); color: var(--accent); font-size: 12px; border-radius: var(--radius-sm); }
+.clip-search { display: flex; gap: 7px; align-items: center; padding: 7px 9px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); color: var(--muted); }
+.clip-search input { width: 100%; min-width: 0; border: 0; padding: 3px 0; color: var(--ink); background: var(--surface); font-size: 12px; }
+.clip-drawer .finished-clip-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 16px; }
+.finished-clip-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.finished-clip-card.is-selected { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+.clip-drawer .finished-clip-open { width: 100%; display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 12px; border: 0; border-radius: 0; background: var(--surface); text-align: left; }
+.clip-drawer .finished-clip-open:hover, .clip-drawer .finished-clip-open[aria-pressed="true"] { background: var(--surface-active); }
+.clip-drawer .finished-clip-open:focus-visible { outline-offset: -3px; }
+.clip-drawer .finished-clip-thumb { display: grid; place-items: center; flex: 0 0 64px; width: 64px; height: 46px; overflow: hidden; border-radius: 5px; background: var(--sidebar-surface); color: var(--sidebar-muted); }
+.finished-clip-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.clip-drawer .finished-clip-copy { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-family: inherit; }
+.finished-clip-copy strong { color: var(--ink); font-size: 13px; font-weight: 600; line-height: 1.4; }
+.clip-drawer .finished-clip-copy span, .finished-clip-copy small { color: var(--muted); font-family: inherit; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.clip-drawer .export-location { margin: 0; padding: 0 12px 10px; font-size: 11px; color: var(--muted); }
+.clip-drawer .export-location code { display: block; overflow-wrap: anywhere; padding-top: 8px; }
+.finished-clip-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 10px; color: var(--muted); font-size: 11px; }
+.finished-clip-actions a { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 4px 7px; color: var(--accent); border-radius: var(--radius-sm); font-size: 12px; }
+.finished-clip-actions a:hover { background: var(--surface-active); }
+.clip-empty { padding: 36px 14px; text-align: center; color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-subtle); }
+.clip-empty strong { display: block; margin-top: 12px; color: var(--ink); font-size: 14px; }
+.clip-empty p { font-size: 12px; line-height: 1.8; }
+@media (max-width: 700px) {
+  .source-workspace-button { min-height: 40px; }
+  .finished-clip-actions a { min-height: 40px; }
+  .preview-panel .panel-heading > span { width: 100%; }
+}

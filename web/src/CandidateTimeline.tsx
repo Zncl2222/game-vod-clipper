@@ -7,6 +7,7 @@ import { api, time, type CandidateReview, type Draft, type NumberedCandidate, ty
 const kinds = { possible_win: "疑似勝利", fight: "戰鬥", death_retry: "死亡／重試", unknown: "待釐清" };
 const confidence = { low: "低", medium: "中", high: "高" };
 const reviews = { pending: "待核對", keep: "保留", reject: "排除" };
+const verificationLabels = { unverified: "尚未驗證", blocked: "未通過驗證", verified: "已通過 AI 檢查" };
 
 export default function CandidateTimeline({ project, segments, selected, current, onSelect, onSeek, onPlay, onApply, onError, view, draft }: {
   project: Project; segments: NumberedCandidate[]; selected: string | null; current: number;
@@ -42,7 +43,8 @@ export default function CandidateTimeline({ project, segments, selected, current
     return { segment, left, width, lane };
   });
   const review = (segment: NumberedCandidate) => savedReviews[segment.id] ?? segment.review;
-  const postroll = candidate?.victory == null ? 0 : Math.min(8, duration - candidate.victory);
+  const verification = candidate?.verification ?? "unverified";
+  const postroll = candidate?.victory == null ? 0 : Math.min(candidate.postroll ?? 8, duration - candidate.victory);
   const canApply = candidate?.kind === "possible_win" && candidate.victory !== null
     && Number.isFinite(candidate.victory) && candidate.start < candidate.victory && candidate.victory <= candidate.end && postroll >= 5;
 
@@ -136,12 +138,15 @@ export default function CandidateTimeline({ project, segments, selected, current
       {segments.map(segment => <button key={segment.id} aria-pressed={selected === segment.id}
         className={selected === segment.id ? "selected" : ""} onClick={() => onSelect(segment)}>
         <strong>#{segment.number} {segment.boss || kinds[segment.kind]}</strong>
-        <span>{time(segment.start)}–{time(segment.end)}</span><small>{kinds[segment.kind]} · {reviews[review(segment)]}</small>
+        <span>{time(segment.start)}–{time(segment.end)}</span><small>{kinds[segment.kind]} · {verificationLabels[segment.verification ?? "unverified"]} · {reviews[review(segment)]}</small>
       </button>)}
     </div></details>}
     {candidate && <div className="candidate-detail" role="group" aria-label={`片段 #${candidate.number} 詳情`}>
       <div className="candidate-heading"><strong>#{candidate.number} {candidate.boss || kinds[candidate.kind]}</strong>
-        <span>{kinds[candidate.kind]} · 信心{confidence[candidate.confidence]} · {reviews[review(candidate)]}</span></div>
+        <span>{kinds[candidate.kind]} · {verificationLabels[verification]} · 辨識信心{confidence[candidate.confidence]} · {reviews[review(candidate)]}</span></div>
+      {candidate.kind === "possible_win" && verification !== "verified" && <p className="candidate-warning" role="status">
+        {verification === "blocked" ? "這段未通過成功挑戰驗證，請先核對失敗／重試畫面並修正區間。" : "這是初步標註，尚未確認完整成功嘗試，可能包含失敗／重試。"}
+      </p>}
       <p>{time(candidate.start, true)}–{time(candidate.end, true)} · {candidate.summary}</p>
       <p className="source-candidate-overlap">{!validSelection(draft, duration) ? "區間無效，無法對照" : Math.min(draft.victory + draft.postroll, candidate.end) > Math.max(draft.start, candidate.start)
         ? `與目前剪輯重疊 ${time(Math.min(draft.victory + draft.postroll, candidate.end) - Math.max(draft.start, candidate.start), true)}` : "與目前剪輯未重疊"}</p>
@@ -154,7 +159,10 @@ export default function CandidateTimeline({ project, segments, selected, current
           value={review(candidate)} onChange={e => void tag(e.target.value as CandidateReview)}>
           {Object.entries(reviews).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
-        {canApply && <button className="secondary" onClick={() => onApply({ start: candidate.start, victory: candidate.victory!, postroll, origin: "agent" })}>將 #{candidate.number} 放入剪輯草稿</button>}
+        {canApply && <button className="secondary" onClick={() => onApply({ start: candidate.start, victory: candidate.victory!, postroll,
+          origin: verification === "verified" ? "agent" : "manual" })}>
+          {verification === "verified" ? `將 #${candidate.number} 放入剪輯草稿` : `載入 #${candidate.number} 手動修正`}
+        </button>}
       </div>
       <p className="candidate-hint">可在 AI 對話輸入「查看 #{candidate.number}」。保留標籤不代表已確認成功；匯出前請檢查完整挑戰。</p>
     </div>}

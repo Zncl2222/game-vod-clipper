@@ -58,10 +58,10 @@ export function WorkspaceGuide({ onClose }: { onClose: () => void }) {
     <h2 id="guide-title">從一支實況，到一場勝利。</h2>
     <p className="guide-intro">你的桌面剪輯工作區，照自己的步調完成。</p>
     <ol className="guide-steps">
-      <li><FolderOpen aria-hidden="true" size={20} /><div><h3>01 · 帶入影片</h3><p>按「匯入影片」選擇來源。本機錄影請先放進 downloads/ 資料夾，或貼上 YouTube 網址。背景準備完成後就能預覽。</p></div></li>
+      <li><FolderOpen aria-hidden="true" size={20} /><div><h3>01 · 帶入影片</h3><p>按「我的 YouTube」連接頻道、選取直播，勾選「匯入後自動找片段」即可接著分析。也能按「匯入影片」貼上網址或選擇 downloads/ 裡的本機錄影。</p></div></li>
       <li><Sparkles aria-hidden="true" size={20} /><div><h3>02 · 尋找成功挑戰</h3><p>按「一鍵搜尋成功挑戰」，或開啟 AI 對話指定範圍。第一次使用 AI，先到「帳號設定」連接帳號並選擇模型。也可以直接手動剪輯。</p></div></li>
       <li><Scissors aria-hidden="true" size={20} /><div><h3>03 · 逐段核對與調整</h3><p>上方「目前剪輯」的實框是匯出範圍，分別標示開始、勝利與結束；結束＝勝利時間＋收尾秒數，斜線區也會保留。下方 AI 編號卡是參考片段，淡虛線僅供對照。點選候選預覽，使用保留／排除整理結果，再將成功候選放入草稿。拖曳開始與勝利位置，或直接輸入時間；點「目前剪輯」放大、點「全片」找其他位置，按「證據」查看探索進度。最後看完完整片段並核對收尾。</p></div></li>
-      <li><ArrowDownToLine aria-hidden="true" size={20} /><div><h3>04 · 確認後匯出</h3><p>確認沒有失敗、死亡或跑圖片段，並包含勝利後 5–10 秒。勾選完整看過後按「匯出 MP4」，完成的影片會出現在下方成品區，可播放或下載。</p></div></li>
+      <li><ArrowDownToLine aria-hidden="true" size={20} /><div><h3>04 · 確認後匯出與上傳</h3><p>確認沒有失敗、死亡或跑圖片段，並包含勝利後 5–10 秒。勾選完整看過後按「匯出 MP4」。到右側「成品」選擇下載，或按「上傳 YouTube」確認標題與觀看權限後上傳；預設為私人影片。</p></div></li>
     </ol>
     <div className="guide-shortcuts"><h3><Keyboard aria-hidden="true" size={17} />桌面快捷操作</h3>
       <dl><div><dt><kbd>I</kbd></dt><dd>將播放位置設為開始</dd></div><div><dt><kbd>O</kbd></dt><dd>將播放位置設為勝利</dd></div>

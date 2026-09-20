@@ -73,6 +73,35 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConnectionError):
             await chat(self.connection, ChatRequest(model="selected-model", message="hi"), None)
 
+    async def test_incomplete_draft_allows_conversation_and_seek(self):
+        for draft in (None, {"start": 100, "victory": 50, "postroll": 8},
+                      {"start": 10, "victory": 179, "postroll": 8}):
+            with self.subTest(draft=draft):
+                context = {"project_id": "project-1", "draft": draft}
+                self.connection.respond.return_value = {"reply": json.dumps({"reply": "聊聊遊戲", "action": None})}
+                result = await chat(self.connection, ChatRequest(model="selected-model", message="聊聊遊戲", context=context), PROJECT)
+                self.assertIsNone(result["action"])
+                payload = json.loads(self.connection.respond.call_args.args[0].splitlines()[-1])
+                self.assertEqual(payload["project"]["project_id"], PROJECT["id"])
+                self.assertIsNone(payload["project"]["draft"])
+                action = {"kind": "seek", "seconds": 30, "start": None, "victory": None, "postroll": None}
+                self.connection.respond.return_value = {"reply": json.dumps({"reply": "跳到30秒", "action": action})}
+                result = await chat(self.connection, ChatRequest(model="selected-model", message="跳到30秒", context=context), PROJECT)
+                self.assertEqual(result["action"]["seconds"], 30)
+
+    async def test_missing_draft_can_be_repaired_but_cannot_be_exported(self):
+        context = {"project_id": "project-1"}
+        action = {"kind": "set_draft", "start": 10, "victory": 100, "postroll": 8, "seconds": None}
+        self.connection.respond.return_value = {"reply": json.dumps({"reply": "設定這段時間", "action": action})}
+        result = await chat(self.connection, ChatRequest(model="selected-model", message="設定開始10秒、勝利100秒、收尾8秒", context=context), PROJECT)
+        self.assertEqual(result["action"]["kind"], "set_draft")
+        for invalid in ({**action, "postroll": 2},
+                        {"kind": "export", "start": None, "victory": None, "postroll": None, "seconds": None}):
+            with self.subTest(action=invalid):
+                self.connection.respond.return_value = {"reply": json.dumps({"reply": "操作", "action": invalid})}
+                with self.assertRaises(ConnectionError):
+                    await chat(self.connection, ChatRequest(model="selected-model", message="調整或匯出", context=context), PROJECT)
+
     async def test_invalid_actions_cannot_change_draft(self):
         cases = [
             {"kind": "set_draft", "start": 10, "victory": 178, "postroll": 8, "seconds": None},

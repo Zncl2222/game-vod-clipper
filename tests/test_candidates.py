@@ -37,6 +37,47 @@ class CandidatesTest(unittest.TestCase):
         self.assertEqual([v["number"] for v in values], [1, 2])
         self.assertEqual(values[0]["start"], 22)
 
+    def test_provisional_and_failed_verification_are_visible_on_individual_candidates(self):
+        first = dict(self.segment, kind="possible_win", victory=35)
+        second = dict(first, id="first:c2", start=50, end=80, victory=80,
+                      confidence="high", summary="完整成功嘗試")
+        result = {"status": "uncertain", "start": 50, "victory": 80, "postroll": 8,
+                  "review_complete": True, "checks": {"dense": True},
+                  "warnings": ["仍與死亡／重試片段重疊"]}
+        job = self.job | {"status": "succeeded", "candidates": [first, second], "result": result}
+        values = project_candidates(self.project, [job])
+        self.assertEqual([v["verification"] for v in values], ["unverified", "blocked"])
+        self.assertIn("仍與死亡／重試片段重疊", values[1]["warnings"])
+        self.assertNotIn("仍與死亡／重試片段重疊", values[0]["warnings"])
+        self.assertEqual(second["warnings"], [])  # Public projection cannot rewrite evidence.
+
+    def test_only_exact_verified_attempt_gets_verified_label_and_its_postroll(self):
+        segment = dict(self.segment, kind="possible_win", victory=35)
+        result = {"status": "candidate", "start": 20, "victory": 35, "postroll": 6,
+                  "review_complete": True, "warnings": [],
+                  "checks": dict.fromkeys(("search", "entry", "outcome", "boundaries", "dense", "continuity"), True)}
+        job = self.job | {"status": "succeeded", "result": result, "candidates": [segment]}
+        verified = project_candidates(self.project, [job])[0]
+        self.assertEqual(verified["verification"], "verified")
+        self.assertEqual(verified["postroll"], 6)
+        for changes in ({"start": 19}, {"victory": 34}):
+            other = job | {"candidates": [segment | changes]}
+            self.assertEqual(project_candidates(self.project, [other])[0]["verification"], "unverified")
+        for changes in ({"checks": {}}, {"review_complete": False}):
+            incomplete = job | {"result": result | changes}
+            self.assertNotEqual(project_candidates(self.project, [incomplete])[0]["verification"], "verified")
+
+    def test_failure_in_postroll_blocks_candidate_but_earlier_failure_does_not(self):
+        winner = dict(self.segment, kind="possible_win", victory=35)
+        failure = dict(self.segment, id="first:failure", start=38, end=39,
+                       kind="death_retry", confidence="high")
+        job = self.job | {"candidates": [winner, failure]}
+        value = project_candidates(self.project, [job])[0]
+        self.assertEqual(value["verification"], "blocked")
+        self.assertTrue(any("死亡" in w for w in value["warnings"]))
+        failure.update(start=10, end=15)
+        self.assertEqual(project_candidates(self.project, [job])[0]["verification"], "unverified")
+
     def test_review_persists_without_approving_draft_and_reset_invalidates_tags(self):
         with TestClient(self.app) as client:
             body = {"candidate_id": "first:c1", "review": "keep", "analysis_generation": 0}

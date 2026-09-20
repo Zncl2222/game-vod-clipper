@@ -14,10 +14,12 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
-            for table in ("projects", "jobs"):
+            for table in ("projects", "jobs", "usage"):
                 db.execute(
                     f"CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
                 )
+        from .usage import backfill_usage
+        backfill_usage(self)
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=15)
@@ -117,5 +119,5 @@ class Store:
 
     @staticmethod
     def _table(table):
-        if table not in {"projects", "jobs"}:
+        if table not in {"projects", "jobs", "usage"}:
             raise ValueError("Unknown table")

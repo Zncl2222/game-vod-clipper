@@ -67,24 +67,27 @@
 .unified-workbench .compact-seek { z-index: 4; opacity: 0; touch-action: pan-y; }
 .unified-workbench .compact-seek:focus-visible { opacity: 0; outline: none; }
 .unified-workbench .clip-range-track .review-playhead { z-index: 7; top: -5px; bottom: -5px; height: auto; }
-.unified-workbench .clip-range-handle { top: 0; bottom: 40px; width: 24px; min-height: 34px; border: 2px solid var(--surface); background: var(--accent); border-radius: 5px; z-index: 8; touch-action: none; }
-.unified-workbench .clip-range-handle.victory-handle { top: 52px; bottom: 0; background: var(--surface); border: 2px dashed var(--gold); display: grid; place-items: center; }
-.unified-workbench .victory-handle .trim-handle-grip { display: block; height: 12px; border-left: 2px solid var(--gold); }
-.clip-point-label { position: absolute; z-index: 10; width: 48px; height: 22px; display: grid; place-items: center; border: 1px solid var(--surface); border-radius: 3px; background: var(--accent); color: var(--surface); font-size: 12px; font-weight: 600; pointer-events: none; white-space: nowrap; }
-.clip-point-label.point-start { top: 1px; }
-.clip-point-label.point-end { top: 27px; background: var(--ink); }
-.clip-point-label.point-victory { bottom: 1px; background: var(--surface); color: var(--gold); border: 1px dashed var(--gold); }
+.unified-workbench .clip-range-handle { top: 0; bottom: 0; width: 24px; min-height: 40px; padding: 0; border: 0; background: transparent; border-radius: 4px; z-index: 8; touch-action: none; }
+.unified-workbench .clip-range-handle .trim-handle-grip { position: relative; display: grid; place-items: center; width: 12px; height: 32px; border: 1px solid var(--surface); border-radius: 4px; background: var(--accent); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 20%, transparent); transition: background var(--duration-fast); }
+.unified-workbench .trim-handle-grip::after { content: ""; width: 4px; height: 12px; border-inline: 1px solid var(--surface); }
+.unified-workbench .clip-range-handle:hover .trim-handle-grip, .unified-workbench .clip-range-handle:active .trim-handle-grip { background: var(--ink); }
+.unified-workbench .clip-range-handle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; z-index: 9; }
+/* Stagger matching controls only when the timestamps leave too little room for their labels. */
+.unified-workbench [data-crowded-markers] .clip-range-handle { bottom: auto; height: 40px; }
+.unified-workbench [data-crowded-markers] .clip-range-handle[data-edge="victory"] { top: auto; bottom: 0; }
+.clip-point-label { position: absolute; z-index: 10; width: 48px; height: 22px; display: grid; place-items: center; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface); color: var(--accent); font-size: 12px; font-weight: 600; pointer-events: none; white-space: nowrap; }
+.clip-point-label.point-start, .clip-point-label.point-victory { top: 4px; }
+.clip-point-label.point-end { bottom: 4px; }
+[data-crowded-markers] .clip-point-label.point-end { top: 33px; bottom: auto; }
+[data-crowded-markers] .clip-point-label.point-victory { top: auto; bottom: 4px; }
 .clip-end-marker, .clip-victory-guide { position: absolute; top: 0; bottom: 0; width: 0; pointer-events: none; z-index: 6; }
-.clip-end-marker { border-left: 3px solid var(--ink); transform: translateX(-2px); }
-.clip-end-marker::before, .clip-end-marker::after { content: ""; position: absolute; width: 9px; height: 3px; right: 0; background: var(--ink); }
-.clip-end-marker::before { top: 0; }
-.clip-end-marker::after { bottom: 0; }
-.clip-victory-guide { border-left: 2px dashed var(--gold); transform: translateX(-1px); }
+.clip-end-marker, .clip-victory-guide { border-left: 2px solid var(--accent); transform: translateX(-1px); }
 .workbench-lane-label.clip-lane-label, .workbench-lane-label.candidate-lane-label { flex-direction: column; align-items: flex-start; gap: 5px; }
 .clip-lane-label > strong, .candidate-lane-label > strong { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .clip-lane-label > strong { color: var(--accent); }
 .workbench-lane-label > small { font-size: 10px; color: var(--muted); line-height: 1.5; }
 .unified-workbench .source-selection-fill { background: color-mix(in srgb, var(--green) 12%, transparent); }
+.unified-workbench .source-selection-postroll, .unified-workbench .source-legend-postroll { background: color-mix(in srgb, var(--accent) 16%, transparent); opacity: 1; }
 .unified-workbench .source-reference-fill { background: none; box-shadow: none; border-block: 1px dashed var(--control-border); }
 .unified-workbench .source-reference-edge { background: none; border-left: 1px dashed var(--control-border); }
 .workbench-outside { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); margin: 0 0 6px; }

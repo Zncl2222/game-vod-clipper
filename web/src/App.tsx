@@ -2,12 +2,14 @@ import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "reac
 import BossReviewDock from "./BossReviewDock";
 import FinishedClips from "./FinishedClips";
 import EditorTools from "./EditorTools";
+import { draftStorageKey, readWorkingDraft } from "./editorDrafts";
 import { validSelection } from "./SelectionOverlay";
 import { timelineWindow, type TimeWindow } from "./TimelineZoom";
 import ClipWorkspace, { candidates } from "./ClipWorkspace";
 import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./ChatPanel";
 import ProjectLibrary from "./ProjectLibrary";
 import ImportModal from "./ImportModal";
+import YouTubeDialog, { type UploadTarget } from "./YouTubeDialog";
 import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./WorkspaceGuide";
 import { usePanelLayout, usePanelVisibility } from "./ResizableSidebars";
 import { useWorkbenchSize } from "./ResizableWorkbench";
@@ -39,6 +41,7 @@ import {
   Sparkles,
   Trophy,
   X,
+  Youtube,
 } from "lucide-react";
 import {
   active,
@@ -46,6 +49,8 @@ import {
   media,
   time,
   reviewCandidates,
+  finishedClips,
+  editableClipDraft,
   type NumberedCandidate,
   type Draft,
   type Job,
@@ -60,6 +65,8 @@ export default function App() {
   );
   const [connected, setConnected] = useState(false);
   const [modal, setModal] = useState(false);
+  const [youtubeOpen, setYoutubeOpen] = useState(false);
+  const [uploadTarget, setUploadTarget] = useState<UploadTarget | undefined>();
   const [guide, setGuide] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [error, setError] = useState("");
@@ -156,6 +163,8 @@ export default function App() {
           <Plus size={17} />
           <span>匯入影片</span>
         </button>
+        <button type="button" className="youtube-library-button" aria-label="我的 YouTube" title="我的 YouTube" aria-haspopup="dialog"
+          onClick={() => { setUploadTarget(undefined); setYoutubeOpen(true); }}><Youtube size={18} aria-hidden="true" /><span>我的 YouTube</span></button>
         <div className="nav-caption">
           素材庫{" "}
           <span>{state.projects.length.toString().padStart(2, "0")}</span>
@@ -214,6 +223,7 @@ export default function App() {
               正在重新連接服務。已儲存的任務會保留，連線後將恢復進度。
             </div>
           )}
+          {project?.youtube_analysis_error && <div role="status" className="notice">{project.youtube_analysis_error}</div>}
           {!project ? (
             <WelcomeScreen onImport={() => setModal(true)} onGuide={() => setGuide(true)} />
           ) : project.ready ? (
@@ -259,6 +269,14 @@ export default function App() {
         </main>
       </div>
       <ChatPanel
+        clips={project?.ready ? <FinishedClips key={project.id} project={project} jobs={projectJobs}
+          onUpload={job => { setUploadTarget({ job, project }); setYoutubeOpen(true); }}
+          selected={editorContext?.project_id === project.id ? editorContext.clip_id : null}
+          onSelect={id => {
+            editorChat.current?.loadClip(id);
+            if (window.matchMedia("(max-width: 900px)").matches && chatOpen) toggleChat();
+          }} /> : undefined}
+        clipCount={project ? finishedClips(project.id, projectJobs).length : 0}
         jobs={projectJobs}
         searchRef={aiChat}
         onSearchError={(message) => { setError(message); openChat(); }}
@@ -270,6 +288,7 @@ export default function App() {
       />
       {modal && (
         <ImportModal
+          onYouTube={() => { setModal(false); setUploadTarget(undefined); setYoutubeOpen(true); }}
           onClose={() => setModal(false)}
           onImport={(id) => {
             select(id);
@@ -278,6 +297,8 @@ export default function App() {
         />
       )}
       {guide && <WorkspaceGuide onClose={() => setGuide(false)} />}
+      {youtubeOpen && <YouTubeDialog target={uploadTarget} onClose={() => setYoutubeOpen(false)}
+        onImport={id => { select(id); setYoutubeOpen(false); }} />}
     </div>
   );
 }
@@ -344,18 +365,24 @@ function Editor({
   onContext: (context: EditorContext) => void;
 }) {
   const duration = project.duration!;
-  const [draft, setDraft] = useState<Draft>(() => {
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem(`bosscut:draft:${project.id}`) ?? "null",
-      );
-      return saved?.revision === project.draft!.revision
-        ? saved
-        : project.draft!;
-    } catch {
-      return project.draft!;
-    }
-  });
+  const [draft, setDraft] = useState<Draft>(() => readWorkingDraft(project.id, null, project.draft!));
+  const workingDraft = useRef(draft);
+  workingDraft.current = draft;
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [editingExportId, setEditingExportId] = useState<string | null>(null);
+  const selectionGeneration = useRef(0);
+  const editorIdentity = useRef({ clipId: editingExportId, generation: 0 });
+  editorIdentity.current = { clipId: editingExportId, generation: selectionGeneration.current };
+  const finished = finishedClips(project.id, jobs);
+  const editingExport = finished.find(job => job.id === editingExportId);
+  const savedDrafts = useRef(new Map<string | null, Draft>());
+  const serverBaseline = editingExport ? editableClipDraft(editingExport) : project.draft!;
+  const acknowledged = savedDrafts.current.get(editingExportId);
+  const baseline = acknowledged && acknowledged.revision > serverBaseline.revision ? acknowledged : serverBaseline;
+  type Snapshot = { draft: Draft; view: TimeWindow; current: number; selectedClip: string | null; selectedSegment: string | null };
+  const snapshots = useRef(new Map<string | null, Snapshot>());
+  const pendingSave = useRef<{ clipId: string | null; revision: number } | null>(null);
   const [timelineView, setTimelineView] = useState<TimeWindow>(() => validSelection(draft, duration)
     ? timelineWindow(draft.start - 5, draft.victory + draft.postroll - draft.start + 10, duration)
     : { from: 0, to: duration });
@@ -407,18 +434,23 @@ function Editor({
     draft.postroll >= 5 &&
     draft.postroll <= 10 &&
     end <= duration;
-  const dirty = JSON.stringify(draft) !== JSON.stringify(project.draft);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   useEffect(() => {
-    localStorage.setItem(`bosscut:draft:${project.id}`, JSON.stringify(draft));
-  }, [draft, project.id]);
+    try { localStorage.setItem(draftStorageKey(project.id, editingExportId), JSON.stringify(draft)); }
+    catch { onError("無法暫存瀏覽器草稿；離開前請按「儲存草稿」。"); }
+  }, [draft, project.id, editingExportId, onError]);
   useEffect(() => {
-    onContext({ project_id: project.id, title: project.title, duration, draft, analysis_generation: project.analysis_generation ?? 0 });
-  }, [draft, project.id, project.title, project.analysis_generation, duration, onContext]);
+    onContext({ project_id: project.id, title: project.title, duration, draft, clip_id: editingExportId,
+      selection_generation: selectionGeneration.current, analysis_generation: project.analysis_generation ?? 0 });
+  }, [draft, editingExportId, project.id, project.title, project.analysis_generation, duration, onContext]);
   useImperativeHandle(chatRef, () => ({
+    loadClip: id => switchWorkspace(id),
     apply(action, expected) {
       if (resetPending.current || resetting) return "影片正在重置，未套用舊操作。";
       if ((expected.analysis_generation ?? 0) !== (project.analysis_generation ?? 0)) return "影片已重置，未套用舊操作。";
       if (expected.project_id !== project.id) return "影片已切換，未套用操作。";
+      if ((expected.clip_id ?? null) !== editingExportId || (expected.selection_generation ?? 0) !== selectionGeneration.current)
+        return "編輯對象已切換，未套用舊操作。請重新送出需求。";
       if (action.kind === "select_candidate") {
         const segment = reviewCandidates(project, jobs).find(c => c.id === action.candidate_id);
         if (!segment) return "候選片段已不存在，請重新選取。";
@@ -452,6 +484,37 @@ function Editor({
       return `已更新草稿 · ${time(start)} → ${time(victory)} · 收尾 ${postroll} 秒`;
     },
   }));
+  function switchWorkspace(clipId: string | null) {
+    if (clipId === editingExportId || resetPending.current) return;
+    const job = clipId ? finished.find(item => item.id === clipId) : null;
+    if (clipId && !job) { onError("這個成品已不存在，請重新整理清單。"); return; }
+    snapshots.current.set(editingExportId, { draft, view: timelineView, current, selectedClip, selectedSegment });
+    const base = job ? editableClipDraft(job) : project.draft!;
+    const known = savedDrafts.current.get(clipId);
+    const nextBase = known && known.revision > base.revision ? known : base;
+    const previous = snapshots.current.get(clipId);
+    // SSE may announce our saved revision before the PUT response arrives. Keep
+    // newer local edits on that in-flight base until the response rebases them.
+    const ownSavePending = pendingSave.current?.clipId === clipId && pendingSave.current?.revision === previous?.draft.revision;
+    const restored = previous && (previous.draft.revision === nextBase.revision || ownSavePending) ? previous : null;
+    const nextDraft = restored?.draft ?? readWorkingDraft(project.id, clipId, nextBase);
+    video.current?.pause();
+    selectionGeneration.current++;
+    editorIdentity.current = { clipId, generation: selectionGeneration.current };
+    setEditingExportId(clipId);
+    setDraft(nextDraft);
+    setSelectedClip(restored?.selectedClip ?? null);
+    setSelectedSegment(restored?.selectedSegment ?? null);
+    setTimelineView(restored?.view ?? (validSelection(nextDraft, duration)
+      ? timelineWindow(nextDraft.start - 5, nextDraft.victory + nextDraft.postroll - nextDraft.start + 10, duration)
+      : { from: 0, to: duration }));
+    setSavedMessage("");
+    setAiFeedback(null);
+    candidateBaseline.current = null;
+    seek(restored?.current ?? (validSelection(nextDraft, duration) ? nextDraft.start : 0));
+    previewPanel.current?.scrollIntoView({ block: "start" });
+    previewPanel.current?.querySelector<HTMLButtonElement>(".source-workspace-button")?.focus({ preventScroll: true });
+  }
   function change(values: Partial<Draft>) {
     setAiFeedback(null);
     setSelectedClip(null);
@@ -506,34 +569,57 @@ function Editor({
     return () => window.removeEventListener("keydown", keydown);
   }, [current, duration]);
   async function save(exportNow = false) {
+    if (pendingSave.current) return;
+    const target = editingExportId, generation = selectionGeneration.current, submitted = draft;
+    pendingSave.current = { clipId: target, revision: submitted.revision };
     setBusy(true);
     onError("");
     try {
       const saved = await api<Draft>(
-        `/projects/${project.id}/draft`,
+        target ? `/projects/${project.id}/clips/${target}/draft` : `/projects/${project.id}/draft`,
         "PUT",
-        draft,
+        submitted,
       );
-      setDraft(saved);
-      setSavedMessage("草稿已儲存");
+      savedDrafts.current.set(target, saved);
+      // The response belongs to the submitted workspace, even if the user switched.
+      const snapshot = snapshots.current.get(target);
+      if (snapshot) snapshots.current.set(target, { ...snapshot, draft: {
+        ...snapshot.draft, revision: saved.revision,
+      } });
+      if (editorIdentity.current.clipId === target) {
+        setDraft(currentDraft => ({ ...currentDraft, revision: saved.revision }));
+        setSavedMessage(JSON.stringify(submitted) === JSON.stringify(workingDraft.current) ? "草稿已儲存" : "草稿已儲存，仍有新的修改");
+      }
+      try {
+        const pending = JSON.parse(localStorage.getItem(draftStorageKey(project.id, target)) ?? "null");
+        localStorage.setItem(draftStorageKey(project.id, target), JSON.stringify({ ...(pending ?? saved), revision: saved.revision }));
+      } catch { /* The acknowledged server draft remains available on reload. */ }
       if (exportNow) {
         await api(`/projects/${project.id}/exports`, "POST", {
           revision: saved.revision,
+          ...(target ? { source_job_id: target } : {}),
         });
-        setSavedMessage("已加入匯出佇列");
+        if (editorIdentity.current.clipId === target && editorIdentity.current.generation === generation)
+          setSavedMessage(target ? "已另存新成品，原片段保留" : "已加入匯出佇列");
       }
     } catch (e) {
       onError((e as Error).message);
     } finally {
+      pendingSave.current = null;
       setBusy(false);
     }
   }
   async function importAgent(file?: File) {
     if (!file) return;
     onError("");
+    const expected = { ...editorIdentity.current }, expectedDraft = workingDraft.current;
     try {
       if (file.size > 100_000) throw new Error("Agent JSON 檔案過大。");
       const data = JSON.parse(await file.text());
+      if (!mounted.current) return;
+      if (editorIdentity.current.clipId !== expected.clipId || editorIdentity.current.generation !== expected.generation ||
+          JSON.stringify(workingDraft.current) !== JSON.stringify(expectedDraft))
+        throw new Error("編輯對象或草稿已變更，未套用匯入結果。請在要調整的片段重新匯入。");
       if (data.project_id !== project.id)
         throw new Error("Agent 結果的 project_id 與目前影片不符。");
       const candidate = data.draft ?? data;
@@ -556,12 +642,12 @@ function Editor({
       });
       seek(candidate.start);
     } catch (e) {
-      onError((e as Error).message);
+      if (mounted.current) onError((e as Error).message);
     }
   }
   const searchingId = jobs.find(j => j.kind === "analyze" && active(j))?.id;
   useEffect(() => {
-    if (searchingId) candidateBaseline.current = draft.reviewed ? null : JSON.stringify(draft);
+    if (searchingId) candidateBaseline.current = editingExportId || draft.reviewed ? null : JSON.stringify(draft);
   }, [searchingId]);
   function selectClip(job: Job, navigate = true) {
     if (!candidates(project, [job]).length) return;
@@ -584,7 +670,7 @@ function Editor({
     const candidate = candidates(project, jobs)[0];
     if (!candidate || seenCandidates.current.has(candidate.id)) return;
     seenCandidates.current.add(candidate.id);
-    if (candidateBaseline.current === JSON.stringify(draft) && !draft.reviewed) selectClip(candidate, false);
+    if (!editingExportId && candidateBaseline.current === JSON.stringify(draft) && !draft.reviewed) selectClip(candidate, false);
   }, [jobs, project.id]);
   return (
     <>
@@ -598,6 +684,10 @@ function Editor({
               <strong title={project.title}>{project.title}</strong>
             </span>
             <div className="preview-display-controls">
+              <button type="button" className="source-workspace-button" aria-pressed={!editingExportId}
+                onClick={() => switchWorkspace(null)} title="回到原片，繼續使用完整編輯台">
+                <ArrowLeft size={15} aria-hidden="true" />{editingExportId ? "回到原片" : "原片編輯台"}
+              </button>
               {project.width && project.height && <span className="resolution">{project.width} × {project.height}</span>}
               <button type="button" className="preview-expand" aria-pressed={previewExpanded}
                 onClick={onTogglePreview} title={previewExpanded ? "退出劇院模式（Esc）" : "放大影片並保留剪輯拉條"}>
@@ -636,7 +726,7 @@ function Editor({
                 }
               }}
             />
-            <span className="preview-badge">來源預覽</span>
+            <span className="preview-badge">{editingExport ? `成品 #${finished.findIndex(job => job.id === editingExport.id) + 1} · 編輯中` : "原片 · 編輯中"}</span>
           </div>
           <div className="transport">
             <button className="icon-button transport-play" aria-label={playing ? "暫停原片" : "播放原片"}
@@ -730,9 +820,9 @@ function Editor({
               ) : (
                 <ArrowDownToLine size={16} />
               )}
-              {busy ? "正在提交…" : jobs.some(j => j.kind === "export" && active(j)) ? "正在匯出…" : "匯出 MP4"}
+              {busy ? "正在提交…" : jobs.some(j => j.kind === "export" && active(j)) ? "正在匯出…" : editingExportId ? "另存新成品" : "匯出 MP4"}
             </button>
-            <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : !draft.reviewed ? "看完片段並勾選確認即可匯出" : "MP4 影片 · 含原片音訊"}</p>
+            <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : !draft.reviewed ? "看完片段並勾選確認即可匯出" : editingExportId ? "保留原成品，不覆寫原檔" : "MP4 影片 · 含原片音訊"}</p>
             </div>
           </div>
         </section>
@@ -781,7 +871,7 @@ function Editor({
             <button
               className="text-button"
               onClick={() => {
-                setDraft(project.draft!);
+                setDraft(baseline);
                 setSavedMessage("已還原儲存版本");
               }}
             >
@@ -798,7 +888,6 @@ function Editor({
             </button>
           </div>
         </details>
-        <FinishedClips project={project} jobs={jobs} onSeek={seek} />
       <details className="workspace-details">
       <summary><FileJson size={16} /> 進階 Agent 匯入／匯出</summary>
       <div className="agent-strip">

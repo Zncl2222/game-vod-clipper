@@ -15,10 +15,41 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+
+class CodexCallError(RuntimeError):
+    def __init__(self, message: str, *, kind: str, retryable: bool = False):
+        super().__init__(message)
+        self.kind = kind
+        self.retryable = retryable
+
+
+def call_error(model: str, errors: list[str]) -> CodexCallError:
+    """Classify provider errors without reflecting diagnostics or secrets in UI."""
+    detail = " ".join(errors).lower()
+    if any(word in detail for word in ("insufficient_quota", "quota exceeded", "usage limit", "credit balance", "billing")):
+        return CodexCallError(f"Codex ({model}) 的可用額度已用完，請確認額度或等待重置後接續。", kind="quota")
+    if any(word in detail for word in ("unauthorized", "401", "authentication", "not logged in", "token expired", "invalid_api_key")):
+        return CodexCallError("Codex 登入已失效，請重新登入後接續分析。", kind="authentication")
+    if any(word in detail for word in ("permission", "403", "not supported", "model_not_found", "does not exist", "do not have access")):
+        return CodexCallError(f"目前帳號無法使用模型 {model}，請確認模型權限。", kind="permission")
+    if any(word in detail for word in ("at capacity", "overloaded", "server overloaded")):
+        return CodexCallError(f"模型 {model} 目前滿載，暫時無法回應。", kind="capacity", retryable=True)
+    if any(word in detail for word in ("rate limit", "rate_limit", "too many requests", "429")):
+        return CodexCallError("Codex 暫時達到請求速率限制。", kind="rate_limit", retryable=True)
+    if any(word in detail for word in ("stream disconnected", "connection reset", "connection refused", "network", "timed out", "timeout", "error sending request", "failed to connect")):
+        return CodexCallError("Codex 連線中斷或網路逾時。", kind="network", retryable=True)
+    if any(word in detail for word in ("internal server error", "service unavailable", "502", "503", "504")):
+        return CodexCallError("Codex 服務暫時無法回應。", kind="service", retryable=True)
+    return CodexCallError(
+        f"Codex ({model}) 呼叫失敗，原因未能辨識；詳細紀錄保留於任務資料夾。",
+        kind="unknown")
+
+
 def execute(
     work: Path, images: list[Path], prompt: str, timeout: float | None,
     *, model: str, schema: dict | None = None, effort: str | None = None,
     on_event: Callable[[dict], None] | None = None,
+    on_usage: Callable[[dict], None] | None = None,
     cancel: threading.Event | None = None,
 ) -> dict:
     if cancel and cancel.is_set():
@@ -56,6 +87,10 @@ def execute(
                     "hooks", "browser_use", "computer_use", "image_generation"):
         args += ["--disable", feature]
     args += ["-c", 'web_search="disabled"']
+    if schema and images:
+        # This is a tool-free visual worker, not a repository coding session.
+        # The host supplies the visual rules and owns all media operations.
+        args += ["-c", "project_doc_max_bytes=0", "-c", 'model_verbosity="low"']
     if effort:
         args += ["-c", f"model_reasoning_effort={json.dumps(effort)}"]
     if schema:
@@ -76,6 +111,8 @@ def execute(
             return
         if event.get("type") == "turn.completed":
             usage = event.get("usage", {})
+            if on_usage:
+                on_usage(usage)
         if event.get("type") in {"error", "turn.failed"}:
             errors.append(str(event.get("message") or event.get("error")))
         if on_event:
@@ -110,8 +147,9 @@ def execute(
                     if cancel and cancel.is_set():
                         raise RuntimeError("AI 工作已取消。")
                     if deadline is not None and time.monotonic() >= deadline:
-                        raise RuntimeError(
-                            f"Codex 本輪超過 {timeout:.0f} 秒仍未完成，已停止。請重試或縮小分析範圍。"
+                        raise CodexCallError(
+                            f"Codex 本輪超過 {timeout:.0f} 秒仍未完成，已停止。請重試或縮小分析範圍。",
+                            kind="timeout",
                         )
                     time.sleep(0.2)
             finally:
@@ -119,9 +157,7 @@ def execute(
                     process.kill()
                 process.wait()
     if code or errors or not result_file.is_file():
-        raise RuntimeError(
-            f"Codex ({model}) 呼叫失敗。請檢查登入、模型權限、額度與網路；不會自動切換模型或計費方式。"
-        )
+        raise call_error(model, errors)
     if result_file.stat().st_size > 100_000:
         raise RuntimeError("AI 回應過長，請縮小問題範圍。")
     reply = result_file.read_text(encoding="utf-8").strip()

@@ -22,7 +22,8 @@ class PacketExtractionTest(unittest.TestCase):
         count = int(args[args.index('-frames:v') + 1])
         for i in range(count):
             path = target % (i + 1) if '%' in target else target
-            Image.new('RGB', (16, 16)).save(path)
+            index = int(Path(path).stem.split('-')[-1])
+            Image.new('RGB', (16, 16), (index * 2 % 256, 30, 70)).save(path)
         return subprocess.CompletedProcess(args, 0, '', '')
 
     def test_long_sparse_packet_seeks_each_target_and_reports_progress(self):
@@ -56,6 +57,21 @@ class PacketExtractionTest(unittest.TestCase):
         self.assertEqual(len(manifest['timestamps']), 20)
         self.assertEqual([p.name for p in images], ['sheet-00.jpg', 'sheet-01.jpg',
             'detail-001.jpg', 'detail-011.jpg', 'detail-020.jpg'])
+
+    def test_exact_duplicates_share_an_image_without_losing_timestamps_or_small_changes(self):
+        def paused(args, **kwargs):
+            for index in range(1, 4):
+                picture = Image.new('RGB', (16, 16))
+                if index == 3:
+                    picture.putpixel((10, 10), (255, 255, 255))
+                picture.save(args[-1] % index, format='PNG')
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with patch('game_vod_clipper.codex_analysis.subprocess.run', side_effect=paused):
+            images, manifest = extract_packet(Path('unopened.mp4'), self.work, (10, 12, 1))
+        self.assertEqual(manifest['timestamps'], [10, 11, 12])
+        self.assertEqual(manifest['identical_frames'], {'10': [11]})
+        self.assertEqual(manifest['unique_frames'], 2)
+        self.assertEqual(len(images), 2)
 
     def test_timeout_reports_completed_frames_without_command_dump(self):
         def slow(args, **kwargs):

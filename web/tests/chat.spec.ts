@@ -374,19 +374,20 @@ test("live exploration and finished clips share source timestamps", async ({ pag
   const timeline = page.getByLabel("AI 探索與證據", { exact: true });
   await expect(timeline.getByRole("status")).toContainText("00:02:00–00:02:30");
   await expect(timeline.getByRole("button", { name: "查看證據 00:02:10 疑似勝利文字" })).toBeVisible();
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("tab", { name: "成品 2" }).click();
   const finished = page.getByRole("region", { name: "成品片段", exact: true });
-  await expect(finished.getByLabel("成品片段清單").getByRole("button")).toHaveCount(2);
+  await expect(finished.getByLabel("成品片段清單").getByRole("button", { name: /^編輯成品 #/ })).toHaveCount(2);
   const sourceTrack = (await page.locator(".clip-range-track").boundingBox())!;
   for (const selector of [".candidate-overview", ".ai-overview-track"]) {
     const track = (await page.locator(selector).first().boundingBox())!;
     expect(track.x).toBeCloseTo(sourceTrack.x, 0);
     expect(track.width).toBeCloseTo(sourceTrack.width, 0);
   }
-  await finished.getByLabel("切換成品", { exact: true }).selectOption("clip-b");
-  await expect(finished.locator("video")).toHaveAttribute("src", "/api/jobs/clip-b/download");
-  await finished.getByRole("button", { name: /成品 #1/ }).click();
-  await expect(finished.locator("video")).toHaveAttribute("src", "/api/jobs/clip-a/download");
+  await finished.getByRole("button", { name: "編輯成品 #2", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("120");
+  await finished.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue(String(project.draft.start));
+  await expect(page.locator(".video-wrap video")).toHaveAttribute("src", "/api/projects/demo/media/preview.mp4");
   await page.screenshot({ path: "../runs/ai-workspace-timeline.png", fullPage: true });
 });
 
@@ -444,9 +445,205 @@ test("right rail chats, switches model, keeps history and fits desktop", async (
   expect(errors).toEqual([]);
 });
 
+test("one assistant continues ordinary chat and applies requested tools after selecting a video", async ({ page }) => {
+  await setup(page);
+  const input = page.getByLabel("輸入訊息");
+  const log = page.getByRole("log");
+  await expect(page.getByRole("tab", { name: /一般聊天|剪輯助理/ })).toHaveCount(0);
+  const requests: unknown[] = [];
+  await page.route("**/api/codex/chat", route => {
+    const body = route.request().postDataJSON(); requests.push(body);
+    const edit = body.message === "收尾改成8秒";
+    return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply",
+      reply: "收到：" + body.message, project_id: body.context?.project_id,
+      action: edit ? { kind: "set_draft", start: 10, victory: 100, postroll: 8, seconds: null } : null }) + "\n" });
+  });
+  await input.fill("今天想聊遊戲"); await input.press("Enter");
+  await expect(log).toContainText("收到：今天想聊遊戲");
+  expect(requests[0]).toMatchObject({ context: null, history: [] });
+  await page.evaluate(project => window.dispatchEvent(new CustomEvent("fixture:state", {
+    detail: { projects: [project], jobs: [] },
+  })), project);
+  await expect(page.locator(".chat-context")).toContainText(project.title);
+  await expect(page.getByRole("tab", { name: /一般聊天|剪輯助理/ })).toHaveCount(0);
+  await input.fill("幫我想一個直播標題"); await input.press("Enter");
+  await expect(log).toContainText("收到：幫我想一個直播標題");
+  expect(requests[1]).toMatchObject({ context: { project_id: "demo" }, history: [
+    { role: "user", content: "今天想聊遊戲" }, { role: "assistant", content: "收到：今天想聊遊戲" },
+  ] });
+  await expect(page.getByLabel("勝利後收尾")).toHaveValue("5");
+  await expect(page.getByRole("checkbox")).toBeChecked();
+  await input.fill("收尾改成8秒"); await input.press("Enter");
+  await expect(log).toContainText("已更新草稿");
+  await expect(page.getByLabel("勝利後收尾")).toHaveValue("8");
+  await expect(page.getByRole("checkbox")).not.toBeChecked();
+  expect(requests[2]).toMatchObject({ history: [
+    { role: "user", content: "今天想聊遊戲" }, { role: "assistant", content: "收到：今天想聊遊戲" },
+    { role: "user", content: "幫我想一個直播標題" }, { role: "assistant", content: "收到：幫我想一個直播標題" },
+  ] });
+  await input.fill("接著還想問的問題");
+  await page.reload();
+  await expect(input).toHaveValue("接著還想問的問題");
+  await expect(log).toContainText("已更新草稿");
+  await page.getByLabel("新對話").click();
+  await expect(input).toHaveValue("");
+  await expect(log).not.toContainText("今天想聊遊戲");
+});
+
+test("an incomplete draft still allows ordinary chat, search and a requested timing repair", async ({ page }) => {
+  await setup(page, [project]);
+  await page.getByLabel("開始時間").fill("120");
+  const requests: unknown[] = [];
+  await page.route("**/api/codex/chat", route => {
+    const body = route.request().postDataJSON(); requests.push(body);
+    expect(body.context).toMatchObject({ project_id: "demo", draft: null });
+    const repair = body.message === "設定開始10秒、勝利100秒、收尾8秒";
+    return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply",
+      reply: body.intent === "search" ? "搜尋已建立" : "收到：" + body.message, project_id: "demo",
+      action: repair ? { kind: "set_draft", start: 10, victory: 100, postroll: 8, seconds: null } : null }) + "\n" });
+  });
+  const input = page.getByLabel("輸入訊息");
+  await input.fill("幫我想直播標題"); await input.press("Enter");
+  await expect(page.getByRole("log")).toContainText("收到：幫我想直播標題");
+  await expect(page.getByLabel("開始時間")).toHaveValue("120");
+  await input.fill("搜尋後再送出的提問");
+  await page.locator(".chat-panel").getByRole("button", { name: "一鍵搜尋成功挑戰", exact: true }).click();
+  await expect(page.getByRole("log")).toContainText("搜尋已建立");
+  await expect(input).toHaveValue("搜尋後再送出的提問");
+  expect(requests[1]).toMatchObject({ intent: "search", search_start: 0, search_end: 180 });
+  await input.fill("設定開始10秒、勝利100秒、收尾8秒"); await input.press("Enter");
+  await expect(page.getByLabel("開始時間")).toHaveValue("10");
+  await expect(page.getByLabel("勝利後收尾")).toHaveValue("8");
+  await expect(page.getByRole("log")).toContainText("已更新草稿");
+});
+
+test("browsing clips preserves a pending assistant reply and unsent text without stealing focus", async ({ page }) => {
+  await setup(page, [project]);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/codex/chat", async route => {
+    await gate;
+    await route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "收尾調整為8秒", project_id: "demo",
+      action: { kind: "set_draft", start: 10, victory: 100, postroll: 8, seconds: null } }) + "\n" });
+  });
+  const input = page.getByLabel("輸入訊息");
+  await input.fill("收尾改成8秒"); await input.press("Enter");
+  await expect(page.getByLabel("停止回應")).toBeVisible();
+  await input.fill("下一個問題");
+  const clips = page.getByRole("tab", { name: "成品 0" });
+  await clips.click(); release();
+  await expect(page.getByLabel("勝利後收尾")).toHaveValue("8");
+  await expect(clips).toBeFocused();
+  await expect(input).not.toBeVisible();
+  await page.getByRole("tab", { name: "AI 助理", exact: true }).click();
+  await expect(page.getByRole("log")).toContainText("收尾調整為8秒");
+  await expect(page.getByRole("log")).toContainText("已更新草稿");
+  await expect(input).toHaveValue("下一個問題");
+});
+
+test("failed assistant replies retain unsent text and can be retried", async ({ page }) => {
+  await setup(page, [project]);
+  await page.route("**/api/codex/chat", route => route.fulfill({ contentType: "application/x-ndjson",
+    body: JSON.stringify({ type: "error", detail: "測試連線失敗" }) + "\n" }));
+  const input = page.getByLabel("輸入訊息");
+  await input.fill("幫我想一個標題"); await input.press("Enter");
+  await expect(page.getByRole("alert")).toContainText("測試連線失敗");
+  await expect(input).toHaveValue("幫我想一個標題");
+  await page.route("**/api/codex/chat", route => {
+    expect(route.request().postDataJSON().history).toEqual([]);
+    return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "重試成功", action: null }) + "\n" });
+  });
+  await input.press("Enter");
+  await expect(page.getByRole("log")).toContainText("重試成功");
+  await expect(input).toHaveValue("");
+});
+
+for (const version of ["v1", "v2"]) {
+  test("unified assistant migrates " + version + " history and excludes other projects from model context", async ({ page }) => {
+    await page.addInitScript(version => {
+      if (sessionStorage.getItem("bosscut:chat:v3")) return;
+      const general = [
+        { id: "general-user", role: "user", content: "舊的聊天訊息" },
+        { id: "general-ai", role: "assistant", content: "舊的聊天回覆" },
+      ];
+      const editing = [
+        { id: "edit-user", role: "user", content: "舊的剪輯請求", project_id: "demo", analysis_generation: 0 },
+        { id: "edit-ai", role: "assistant", content: "舊的剪輯回覆", project_id: "demo", analysis_generation: 0 },
+      ];
+      sessionStorage.setItem("bosscut:chat:" + version, JSON.stringify(version === "v1" ? [...general, ...editing] : {
+        chat: { messages: general, input: "未送出的聊天" }, edit: { messages: editing, input: "未送出的剪輯要求" },
+      }));
+    }, version);
+    await setup(page, [project, { ...project, id: "another", title: "另一支影片" }]);
+    const log = page.getByRole("log");
+    await expect(log).toContainText("舊的聊天回覆");
+    await expect(log).toContainText("舊的剪輯回覆");
+    await expect(page.getByLabel("輸入訊息")).toHaveValue(version === "v2" ? "未送出的聊天\n\n未送出的剪輯要求" : "");
+    await page.reload();
+    await expect(log).toContainText("舊的聊天回覆");
+    await expect(log).toContainText("舊的剪輯回覆");
+    await page.getByRole("button", { name: /另一支影片/ }).first().click();
+    await page.route("**/api/codex/chat", route => {
+      const body = route.request().postDataJSON();
+      expect(body.context.project_id).toBe("another");
+      expect(body.history).toEqual([
+        { role: "user", content: "舊的聊天訊息" }, { role: "assistant", content: "舊的聊天回覆" },
+      ]);
+      return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "另一支影片的回覆", action: null }) + "\n" });
+    });
+    await page.getByLabel("輸入訊息").fill("查看這支影片"); await page.getByLabel("輸入訊息").press("Enter");
+    await expect(log).toContainText("另一支影片的回覆");
+    expect(await page.evaluate(() => sessionStorage.getItem("bosscut:chat:v2"))).toBeNull();
+    expect(await page.evaluate(() => sessionStorage.getItem("bosscut:chat:v1"))).toBeNull();
+  });
+}
+
+test("merging long unsent drafts preserves all text and enforces the message limit", async ({ page }) => {
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem("bosscut:chat:v3")) return;
+    sessionStorage.setItem("bosscut:chat:v2", JSON.stringify({
+      chat: { messages: [], input: " ".repeat(3999) + "聊" }, edit: { messages: [], input: "剪" + " ".repeat(3999) },
+    }));
+  });
+  await setup(page);
+  const input = page.getByLabel("輸入訊息");
+  const merged = " ".repeat(3999) + "聊\n\n剪" + " ".repeat(3999);
+  await expect(input).toHaveValue(merged);
+  await expect(page.getByLabel("送出訊息")).toBeDisabled();
+  await expect(page.getByRole("alert")).toContainText("每則訊息最多 4,000 字");
+  await page.reload();
+  await expect(input).toHaveValue(merged);
+  let requests = 0;
+  await page.route("**/api/codex/chat", route => {
+    requests++;
+    return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "不應送出", action: null }) + "\n" });
+  });
+  await input.press("Enter");
+  await expect(input).toHaveValue(merged);
+  expect(requests).toBe(0);
+  await input.fill("分次送出");
+  await expect(page.getByLabel("送出訊息")).toBeEnabled();
+  await expect(input).not.toHaveAttribute("aria-invalid", "true");
+});
+
+test("switching accounts clears the unified transcript and saved input", async ({ page }) => {
+  await setup(page, [project]);
+  await page.route("**/api/codex/chat", route => route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "舊帳號的回覆", action: null }) + "\n" }));
+  await page.getByLabel("輸入訊息").fill("聊天訊息"); await page.getByLabel("輸入訊息").press("Enter");
+  await expect(page.getByRole("log")).toContainText("舊帳號的回覆");
+  await page.getByLabel("輸入訊息").fill("未送出的問題");
+  await page.route("**/api/codex", route => route.fulfill({ json: { available: true, auth_mode: "chatgpt", email: "another@example.test", detail: "已切換帳號" } }));
+  await page.getByLabel("帳號設定", { exact: true }).click();
+  await page.getByRole("button", { name: "重新整理狀態", exact: true }).click();
+  await expect(page.getByText("another@example.test", { exact: false })).toBeVisible();
+  await expect(page.getByRole("log")).not.toContainText("舊帳號的回覆");
+  await expect(page.getByLabel("輸入訊息")).toHaveValue("");
+  const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem("bosscut:chat:v3")!));
+  expect(saved).toEqual({ messages: [], input: "" });
+});
+
 test("editor commands update draft and invalidate review without media processing", async ({ page }) => {
   await setup(page, [project]);
-  await page.getByRole("button", { name: "剪輯助理", exact: true }).click();
   await page.route("**/api/codex/chat", async (route) => {
     expect(route.request().postDataJSON().context.draft.postroll).toBe(5);
     await route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "收尾改為 8 秒。", model: "model-a", project_id: "demo",
@@ -464,7 +661,6 @@ test("editor commands update draft and invalidate review without media processin
 
 test("late reply cannot overwrite a newer manual edit", async ({ page }) => {
   await setup(page, [project]);
-  await page.getByRole("button", { name: "剪輯助理", exact: true }).click();
   let release!: () => void;
   const wait = new Promise<void>((resolve) => { release = resolve; });
   await page.route("**/api/codex/chat", async (route) => {
@@ -494,6 +690,12 @@ test("mobile opens a full-height conversation without horizontal overflow", asyn
   await page.goto("/");
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await expect(page.getByLabel("輸入訊息")).toBeVisible();
+  // A mismatched backend response in the new metadata panel must not unmount
+  // the conversation or the editor (this fixture returns account data for it).
+  await page.locator(".usage-panel > summary").click();
+  await expect(page.locator(".usage-panel")).toContainText("Token 紀錄格式異常");
+  await expect(page.getByLabel("輸入訊息")).toBeVisible();
+  await page.locator(".usage-panel > summary").click();
   await page.screenshot({ path: "../runs/chat-mobile.png" });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.getByLabel("關閉 AI 對話").click();
@@ -640,16 +842,18 @@ test("new visual candidates preserve manual edits until a card is selected", asy
   await expect(page.getByLabel("開始時間")).toHaveValue("20");
 });
 
-test("completed exports have inline players in the workspace without starting new jobs", async ({ page }) => {
+test("completed exports directly enter the original editor without starting new jobs", async ({ page }) => {
   await setup(page, [project]);
   await page.evaluate(project => window.dispatchEvent(new CustomEvent("fixture:state", { detail: {
     projects: [project], jobs: [{ id: "finished-export", project_id: "demo", kind: "export", status: "succeeded", draft: project.draft }],
   } })), project);
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
-  const player = page.getByRole("region", { name: "成品切換播放器" }).locator("video");
-  await expect(player).toHaveAttribute("src", "/api/jobs/finished-export/download");
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  const player = page.locator(".video-wrap video");
+  await expect(player).toHaveAttribute("src", "/api/projects/demo/media/preview.mp4");
   await expect(player).toHaveAttribute("preload", "metadata");
-  await expect(player).toHaveAttribute("controls", "");
+  await expect(player).not.toHaveAttribute("controls");
+  await expect(page.getByRole("button", { name: "回到原片", exact: true })).toBeVisible();
 });
 
 test("video dock searches the full VOD without opening the mobile drawer", async ({ page }) => {
@@ -877,7 +1081,8 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   await page.getByRole("button", { name: "看全片", exact: true }).click();
   await expect(timeline.locator(".candidate-marker")).toHaveCount(3);
   await expect(page.getByLabel("片段 #2 詳情")).toContainText("00:01:02.000");
-  await page.getByRole("button", { name: "將 #2 放入剪輯草稿" }).click();
+  await expect(page.getByLabel("片段 #2 詳情")).toContainText("尚未驗證");
+  await page.getByRole("button", { name: "載入 #2 手動修正" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("62");
   await expect(page.getByLabel("勝利時間")).toHaveValue("107");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
@@ -967,7 +1172,7 @@ test("reset viewing progress keeps candidates, unsaved edits and exports while s
   await expect(page.getByRole("button", { name: "選取片段 保留候選" })).toBeVisible();
   await expect(page.getByLabel("開始時間")).toHaveValue("37");
   await expect(page.getByRole("checkbox")).not.toBeChecked();
-  await expect(page.getByLabel("成品預覽 #1")).toHaveCount(1);
+  await expect(page.locator(".finished-clip-open")).toHaveCount(1);
   await expect(page.getByRole("log")).not.toContainText("OLD_VIEWING_CONTEXT");
   await expect(page.getByRole("button", { name: "重置 AI 查看進度" })).toBeDisabled();
   expect(resets).toBe(1);
@@ -1207,10 +1412,11 @@ test("model settings stay readable on mobile and exported file location is disco
   await page.evaluate(project => window.dispatchEvent(new CustomEvent("fixture:state", { detail: {
     projects: [project], jobs: [{ id: "finished-export", project_id: "demo", kind: "export", status: "succeeded", draft: project.draft }],
   } })), project);
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "AI 對話", exact: true }).click();
+  await page.getByRole("tab", { name: "成品 1" }).click();
   await page.getByText("檔案儲存位置", { exact: true }).click();
   await expect(page.locator(".export-location code")).toHaveText("clips/web/demo/finished-export.mp4");
-  await expect(page.getByRole("link", { name: "下載 MP4", exact: true })).toHaveAttribute("href", "/api/jobs/finished-export/download");
+  await expect(page.getByRole("link", { name: "下載成品 #1 MP4", exact: true })).toHaveAttribute("href", "/api/jobs/finished-export/download");
 });
 
 test("large source preview stays visible while candidate review scrolls independently", async ({ page }) => {

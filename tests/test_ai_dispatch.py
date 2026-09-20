@@ -63,6 +63,28 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(retry.status_code, 202)
         self.assertEqual(retry.json()["analysis"]["effort"], "high")
 
+    def test_youtube_auto_analysis_uses_visual_review_effort_without_changing_chat(self):
+        selected = self.codex.models.return_value[0]
+        selected.update(effort="medium", supported_efforts=["low", "medium", "high", "xhigh"])
+        automatic = self.client.portal.call(self.app.state.youtube.analyze,
+            self.store.get("projects", "p"), "picked", "youtube-import:p")
+        self.assertEqual(automatic["analysis"]["effort"], "xhigh")
+        self.assertEqual(automatic["analysis"]["effort_policy"], "adaptive")
+        self.store.patch("jobs", automatic["id"], status="cancelled")
+        explicit = self.request(intent="search", search_start=0, search_end=120, effort="low")
+        self.assertEqual(self.store.get("jobs", explicit["job_id"])["analysis"]["effort"], "low")
+        self.assertEqual(selected["effort"], "medium")
+
+    def test_youtube_auto_analysis_only_uses_supported_efforts(self):
+        selected = self.codex.models.return_value[0]
+        for supported, expected in ((["medium", "high"], "high"), (["medium"], "medium"), ([], "medium")):
+            with self.subTest(supported=supported):
+                selected.update(effort="medium", supported_efforts=supported)
+                automatic = self.client.portal.call(self.app.state.youtube.analyze,
+                    self.store.get("projects", "p"), "picked", "auto:" + expected + str(supported))
+                self.store.patch("jobs", automatic["id"], status="cancelled")
+                self.assertEqual(automatic["analysis"]["effort"], expected)
+
     def test_repeated_request_is_idempotent_and_other_search_is_rejected(self):
         body = {"intent": "search", "search_start": 0, "search_end": 120, "request_id": "same-request"}
         first = self.request(**body)
@@ -97,6 +119,25 @@ class DispatchTest(unittest.TestCase):
         result = self.request(context=None)
         self.assertEqual(result["type"], "error")
         self.assertEqual(self.store.all("jobs"), [])
+
+    def test_ordinary_chat_with_a_selected_project_does_not_schedule_work(self):
+        self.codex.respond.return_value = {"reply": json.dumps({"reply": "這裡有三個直播標題。", "action": None})}
+        for draft in ({"start": 10, "victory": 100, "postroll": 8}, None,
+                      {"start": 100, "victory": 10, "postroll": 8}):
+            with self.subTest(draft=draft):
+                result = self.request(message="幫我想三個直播標題", context={"project_id": "p", "draft": draft})
+                self.assertEqual(result["type"], "reply")
+                self.assertIsNone(result["action"])
+                self.assertNotIn("job_id", result)
+                self.assertEqual(self.store.all("jobs"), [])
+
+    def test_search_tools_work_while_the_current_draft_is_incomplete(self):
+        for options in ({"intent": "search", "search_start": 0, "search_end": 120}, {}):
+            with self.subTest(options=options):
+                result = self.request(context={"project_id": "p", "draft": None}, **options)
+                self.assertEqual(result["type"], "reply")
+                self.assertEqual(self.store.get("jobs", result["job_id"])["analysis"]["end"], 120)
+                self.store.patch("jobs", result["job_id"], status="cancelled")
 
     def test_conversation_can_cancel_its_own_search(self):
         queued = self.request(intent="search", search_start=0, search_end=120)

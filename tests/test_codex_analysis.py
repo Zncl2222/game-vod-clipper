@@ -25,6 +25,7 @@ try:
     )
     from game_vod_clipper.web import create_app
     from game_vod_clipper.web_store import Store
+    from game_vod_clipper.codex_runtime import CodexCallError, call_error
 
     AVAILABLE = True
 except ImportError:
@@ -73,6 +74,9 @@ if mode == "timeout":
 if mode == "failed":
     print('{"type":"turn.failed","error":{"message":"fixture failure"}}', flush=True)
     sys.exit(2)
+if mode == "capacity":
+    print('{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}', flush=True)
+    sys.exit(2)
 deadline = time.monotonic() + 4
 while not (result.parent / "continue").exists():
     if time.monotonic() > deadline:
@@ -84,7 +88,7 @@ sys.stdout.write('{"type":"item.')
 sys.stdout.flush()
 time.sleep(0.25)
 print('completed","item":{"type":"reasoning","text":"private reasoning"}}', flush=True)
-result.write_text('{"status":"not_found"}')
+result.write_text('{"status":"not_found"}' if mode != "invalid" else 'invalid JSON')
 sys.stdout.write('{"type":"turn.completed","usage":{"input_tokens":12}}')
 sys.stdout.flush()
 ''', encoding="utf-8")
@@ -93,7 +97,7 @@ sys.stdout.flush()
     def tearDown(self):
         self.temp.cleanup()
 
-    def invoke(self, mode, callback, timeout=5):
+    def invoke(self, mode, callback, timeout=5, on_usage=None):
         real_popen = subprocess.Popen
 
         def fake_popen(args, **kwargs):
@@ -107,7 +111,16 @@ sys.stdout.flush()
         with patch("game_vod_clipper.codex_runtime.shutil.which", return_value=sys.executable), patch(
             "game_vod_clipper.codex_runtime.subprocess.Popen", side_effect=fake_popen
         ):
-            return invoke_codex(self.work, [], "fixture prompt" * 20000, timeout, on_event=callback)
+            return invoke_codex(self.work, [], "fixture prompt" * 20000, timeout, on_event=callback, on_usage=on_usage)
+
+    def test_usage_is_delivered_even_when_structured_response_is_invalid(self):
+        recorded = []
+        def update(event):
+            if event["type"] == "thread.started":
+                (self.work / "continue").touch()
+        with self.assertRaises(ValueError):
+            self.invoke("invalid", update, on_usage=recorded.append)
+        self.assertEqual(recorded, [{"input_tokens": 12}])
 
     def test_events_arrive_before_exit_and_partial_lines_are_preserved(self):
         received = []
@@ -144,6 +157,62 @@ sys.stdout.flush()
         with self.assertRaisesRegex(RuntimeError, "呼叫失敗"):
             self.invoke("failed", lambda event: None)
         self.assertFalse((self.work / "response.json").exists())
+
+    def test_capacity_error_remains_specific_after_bounded_retries(self):
+        with patch("game_vod_clipper.codex_analysis.time.sleep"):
+            with self.assertRaisesRegex(CodexCallError, "滿載.*重試 2 次.*保留分析進度"):
+                self.invoke("capacity", lambda event: None, timeout=60)
+        self.assertEqual(len(self.processes), 3)
+        for folder in (self.work, self.work / "retry-1", self.work / "retry-2"):
+            self.assertIn("at capacity", (folder / "events.jsonl").read_text())
+
+    def test_retries_share_one_packet_deadline(self):
+        with patch("game_vod_clipper.codex_analysis.execute", side_effect=call_error("chosen", ["at capacity"])) as execute, \
+             patch("game_vod_clipper.codex_analysis.time.monotonic", side_effect=[0, 0, 9]), \
+             patch("game_vod_clipper.codex_analysis.time.sleep") as sleep:
+            with self.assertRaisesRegex(CodexCallError, "滿載.*等待額度已用完.*保留進度"):
+                invoke_codex(self.work, [], "question", 10, model="chosen")
+        self.assertEqual(execute.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_retry_reuses_images_prompt_and_model_without_reextracting(self):
+        responses = [call_error("chosen", ["stream disconnected"]),
+                     {"reply": '{"status":"not_found"}', "usage": {"input_tokens": 7}}]
+        events = []
+        images = [self.work / "already-extracted.jpg"]
+        with patch("game_vod_clipper.codex_analysis.execute", side_effect=responses) as execute, \
+             patch("game_vod_clipper.codex_analysis.time.sleep"):
+            result, usage = invoke_codex(self.work, images, "same question", None,
+                                        model="chosen", effort="xhigh", on_event=events.append)
+        self.assertEqual(result["status"], "not_found")
+        self.assertEqual(usage, {"input_tokens": 7})
+        self.assertEqual(execute.call_count, 2)
+        for call in execute.call_args_list:
+            self.assertEqual(call.args[1:], (images, "same question", None))
+            self.assertEqual(call.kwargs["model"], "chosen")
+            self.assertEqual(call.kwargs["effort"], "xhigh")
+        self.assertEqual(events[0]["type"], "analysis.retry")
+        self.assertTrue((self.work / "response.json").is_file())
+
+    def test_account_and_unknown_errors_are_not_automatically_retried(self):
+        cases = [("insufficient_quota", "quota"), ("usage limit reached", "quota"),
+                 ("401 unauthorized", "authentication"), ("model_not_found", "permission"),
+                 ("fixture failure", "unknown")]
+        for message, kind in cases:
+            with self.subTest(kind=kind):
+                error = call_error("chosen", [message])
+                self.assertEqual(error.kind, kind)
+                self.assertFalse(error.retryable)
+                with patch("game_vod_clipper.codex_analysis.execute", side_effect=error) as execute:
+                    with self.assertRaises(CodexCallError):
+                        invoke_codex(self.work, [], "prompt", None, model="chosen")
+                    self.assertEqual(execute.call_count, 1)
+
+    def test_error_details_do_not_leak_provider_diagnostics(self):
+        error = call_error("chosen", ["network error; authorization=secret-value"])
+        self.assertEqual(error.kind, "network")
+        self.assertTrue(error.retryable)
+        self.assertNotIn("secret-value", str(error))
 
     def test_heartbeat_is_distinct_from_activity_and_stops_on_exit(self):
         store = Store(self.work)
@@ -316,8 +385,22 @@ class CodexAnalysisTest(unittest.TestCase):
             )
             submit.assert_called_once_with(
                 "synthetic", "analyze", analysis={"start": 0.0, "end": 16.0,
-                    "model": MODEL, "effort": "medium", "request_id": ANY}
+                    "model": MODEL, "effort": "medium", "effort_policy": "fixed", "request_id": ANY}
             )
+
+    def test_api_keeps_effort_ceiling_and_exposes_fixed_override(self):
+        app = create_app(self.root)
+        app.state.codex.status = AsyncMock(return_value={"available": True})
+        app.state.codex.models = AsyncMock(return_value=[{
+            "id": MODEL, "effort": "medium", "supported_efforts": ["medium", "high", "xhigh"],
+            "input_modalities": ["text", "image"]}])
+        with TestClient(app) as client, patch("game_vod_clipper.web.Jobs.submit", return_value={"id": "queued"}) as submit:
+            for extra, expected in (({}, "adaptive"), ({"effort_policy": "fixed"}, "fixed")):
+                response = client.post("/api/projects/synthetic/analyze", json={
+                    "start": 0, "end": 16, "effort": "xhigh", **extra})
+                self.assertEqual(response.status_code, 202, response.text)
+                self.assertEqual(submit.call_args.kwargs["analysis"]["effort"], "xhigh")
+                self.assertEqual(submit.call_args.kwargs["analysis"]["effort_policy"], expected)
 
     @unittest.skipUnless(
         os.environ.get("GAME_VOD_LIVE_CODEX_TEST") == "1", "Opt-in live Codex check"
