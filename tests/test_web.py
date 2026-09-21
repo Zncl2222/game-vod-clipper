@@ -127,11 +127,7 @@ class WebTest(unittest.TestCase):
                 )
             saved = client.put(draft_url, json=draft).json()
             self.assertEqual(saved["revision"], 1)
-            self.assertEqual(
-                client.post(export_url, json={"revision": 1}).status_code, 422
-            )
             self.assertEqual(client.put(draft_url, json=draft).status_code, 409)
-            saved = client.put(draft_url, json=saved | {"reviewed": True}).json()
             exported = client.post(
                 export_url, json={"revision": saved["revision"]}
             ).json()
@@ -139,6 +135,7 @@ class WebTest(unittest.TestCase):
                 export_url, json={"revision": saved["revision"]}
             ).json()
             self.assertEqual(exported["id"], duplicate["id"])
+            self.assertFalse(exported["draft"]["reviewed"])
             # A new draft must not mutate the already queued export snapshot.
             client.put(draft_url, json=saved | {"start": 2, "reviewed": False})
             job = self.wait_job(client, exported["id"])
@@ -165,7 +162,7 @@ class WebTest(unittest.TestCase):
                 float(metadata["format"]["duration"]), 11.75, delta=0.1
             )
             self.assertTrue(output.with_suffix(".json").is_file())
-            # The publishing boundary accepts the actual worker's reviewed receipt.
+            # The publishing boundary accepts the actual worker's validated export receipt.
             _, publishable = app.state.youtube.uploads.validate_export(job["id"])
             self.assertEqual(publishable, output)
             original_bytes = output.read_bytes()

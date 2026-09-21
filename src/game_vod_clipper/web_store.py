@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 
@@ -82,6 +83,33 @@ class Store:
             db.executemany("DELETE FROM jobs WHERE id=?", keys)
             db.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
+    def set_candidate_edit(self, project_id: str, candidate_id: str, edit: dict):
+        from .candidates import project_candidates
+
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not row:
+                raise KeyError(project_id)
+            project = json.loads(row[0])
+            if project.get("analysis_generation", 0) != edit["analysis_generation"]:
+                raise ValueError("影片分析已重置，請重新選取片段。")
+            jobs = [json.loads(row[0]) for row in db.execute("SELECT data FROM jobs ORDER BY rowid DESC")]
+            candidate = next((c for c in project_candidates(project, jobs) if c["id"] == candidate_id), None)
+            if not candidate:
+                raise KeyError(candidate_id)
+            previous = candidate.get("manual_edit", {})
+            if previous.get("revision", 0) != edit["revision"]:
+                raise ValueError("此片段已在其他視窗調整，請重新載入後再編輯。")
+            saved = {key: edit[key] for key in ("start", "victory", "postroll")}
+            saved.update(revision=edit["revision"] + 1, updated_at=time.time())
+            project.setdefault("candidate_edits", {})[candidate_id] = saved
+            project.setdefault("candidate_reviews", {})[candidate_id] = "pending"
+            db.execute("UPDATE projects SET data=? WHERE id=?",
+                       (json.dumps(project, ensure_ascii=False, allow_nan=False), project_id))
+
+            return next(c for c in project_candidates(project, jobs) if c["id"] == candidate_id)
+
     def reset_analysis(self, project_id: str, *, progress_only: bool = False) -> dict:
         """Forget viewing progress, optionally retaining candidate records and edits."""
         with self.connect() as db:
@@ -95,6 +123,7 @@ class Store:
             if not progress_only:
                 project["editor_generation"] += 1
                 project["candidate_reviews"] = {}
+                project["candidate_edits"] = {}
                 project["draft"] = {
                     "start": 0, "victory": project["duration"] - 8,
                     "postroll": 8, "reviewed": False,

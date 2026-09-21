@@ -8,6 +8,7 @@ import { timelineWindow, type TimeWindow } from "./TimelineZoom";
 import ClipWorkspace, { candidates } from "./ClipWorkspace";
 import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./ChatPanel";
 import ProjectLibrary from "./ProjectLibrary";
+import LocalStorageUsage from "./LocalStorageUsage";
 import ImportModal from "./ImportModal";
 import YouTubeDialog, { type UploadTarget } from "./YouTubeDialog";
 import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./WorkspaceGuide";
@@ -36,7 +37,6 @@ import {
   RotateCcw,
   Save,
   Scissors,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Trophy,
@@ -51,6 +51,8 @@ import {
   reviewCandidates,
   finishedClips,
   editableClipDraft,
+  candidateExports,
+  sameClipRange,
   type NumberedCandidate,
   type Draft,
   type Job,
@@ -173,13 +175,7 @@ export default function App() {
           onSelect={select} onRenamed={renameProject} onDeleted={deleteProject} onError={setError} />
         <div className="sidebar-bottom">
           <button className="sidebar-guide" aria-label="使用指南與快捷鍵" title={!libraryOpen ? "使用指南與快捷鍵" : undefined} onClick={() => setGuide(true)}><CircleHelp size={17} /><span>使用指南與快捷鍵</span></button>
-          <div className="local-card">
-            <ShieldCheck size={19} />
-            <div>
-              <strong>原始影片留在本機</strong>
-              <p>預覽與剪輯於此裝置處理</p>
-            </div>
-          </div>
+          <LocalStorageUsage refreshKey={state.jobs.filter(job => job.kind !== "analyze").map(job => `${job.id}:${job.status}`).sort().join("|")} />
           <span className={`connection ${connected ? "online" : ""}`}>
             <span className="tiny-dot" />
             {connected ? "工作區已連線" : "正在連接本機服務…"}
@@ -189,7 +185,7 @@ export default function App() {
       </aside>
       <div className="main-shell">
         <header className="topbar">
-          <WorkflowSteps ready={!!project?.ready} reviewed={!!currentDraft?.reviewed} exported={exported} />
+          <WorkflowSteps ready={!!project?.ready} exported={exported} />
           <div className="topbar-right">
             {project?.ready && <button type="button" className="topbar-tools" aria-label="更多工具" aria-haspopup="dialog"
               aria-controls="editor-tools" aria-describedby={mediaJobStatus ? "tools-job-status" : undefined} onClick={() => setToolsOpen(true)}>
@@ -375,6 +371,9 @@ function Editor({
   const editorIdentity = useRef({ clipId: editingExportId, generation: 0 });
   editorIdentity.current = { clipId: editingExportId, generation: selectionGeneration.current };
   const finished = finishedClips(project.id, jobs);
+  const currentRangeExported = finished.some(job => sameClipRange(job.draft!, draft));
+  const draftCandidate = reviewCandidates(project, jobs).find(candidate => candidate.id === draft.candidate_id);
+  const candidatePreviouslyExported = !!draftCandidate && candidateExports(project.id, draftCandidate, jobs).length > 0;
   const editingExport = finished.find(job => job.id === editingExportId);
   const savedDrafts = useRef(new Map<string | null, Draft>());
   const serverBaseline = editingExport ? editableClipDraft(editingExport) : project.draft!;
@@ -466,7 +465,7 @@ function Editor({
       }
       if (JSON.stringify(expected.draft) !== JSON.stringify(draft)) return "你已修改草稿，未覆蓋新的設定。請再送出一次需求。";
       if (action.kind === "export") {
-        if (!draft.reviewed) return "請先檢查完整片段並勾選成功挑戰確認，再要求匯出。";
+        if (!valid) return "請先修正剪輯時間範圍，再要求匯出。";
         if (busy || jobs.some(j => j.kind === "export" && active(j))) return "影片正在儲存或匯出，請等候完成。";
         void save(true);
         return "正在儲存草稿並提交 FFmpeg 剪輯，結果會顯示在成品區。";
@@ -518,8 +517,28 @@ function Editor({
   function change(values: Partial<Draft>) {
     setAiFeedback(null);
     setSelectedClip(null);
-    setDraft((d) => ({ ...d, ...values, reviewed: false }));
+    setDraft(d => {
+      const timingChanged = (["start", "victory", "postroll"] as const).some(key => values[key] !== undefined && values[key] !== d[key]);
+      const aiReplacement = values.origin === "agent" && values.candidate_id === undefined;
+      return { ...d, ...(aiReplacement ? { candidate_id: null, candidate_revision: null, manually_adjusted: false } : {}),
+        ...(timingChanged && values.origin === undefined ? { origin: "manual" as const, manually_adjusted: true } : {}),
+        ...values, reviewed: false };
+    });
     setSavedMessage("");
+  }
+  function candidateSaved(id: string, previousRevision: number, revision: number) {
+    const rebase = (value: Draft) => value.candidate_id === id && (value.candidate_revision ?? 0) === previousRevision
+      ? { ...value, candidate_revision: revision } : value;
+    setDraft(rebase);
+    for (const [key, snapshot] of snapshots.current) snapshots.current.set(key, { ...snapshot, draft: rebase(snapshot.draft) });
+    // A range save may finish while a different source/clip workspace is open.
+    for (const target of [null, ...finished.map(job => job.id)]) {
+      try {
+        const key = draftStorageKey(project.id, target);
+        const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+        if (saved) localStorage.setItem(key, JSON.stringify(rebase(saved)));
+      } catch { /* The candidate correction itself is already saved on the server. */ }
+    }
   }
   function seek(seconds: number) {
     if (video.current) {
@@ -570,6 +589,7 @@ function Editor({
   }, [current, duration]);
   async function save(exportNow = false) {
     if (pendingSave.current) return;
+    if (exportNow && !valid) { onError("請先修正剪輯時間範圍，再匯出。"); return; }
     const target = editingExportId, generation = selectionGeneration.current, submitted = draft;
     pendingSave.current = { clipId: target, revision: submitted.revision };
     setBusy(true);
@@ -600,7 +620,7 @@ function Editor({
           ...(target ? { source_job_id: target } : {}),
         });
         if (editorIdentity.current.clipId === target && editorIdentity.current.generation === generation)
-          setSavedMessage(target ? "已另存新成品，原片段保留" : "已加入匯出佇列");
+          setSavedMessage(target ? "已加入匯出佇列，原成品保留" : "已加入匯出佇列");
       }
     } catch (e) {
       onError((e as Error).message);
@@ -652,8 +672,12 @@ function Editor({
   function selectClip(job: Job, navigate = true) {
     if (!candidates(project, [job]).length) return;
     const result = job.result!;
+    const candidate = reviewCandidates(project, jobs).find(segment => segment.victory !== null && sameClipRange(
+      { start: segment.start, victory: segment.victory, postroll: segment.postroll ?? 8 },
+      { start: result.start!, victory: result.victory!, postroll: result.postroll }));
     if (navigate) video.current?.pause();
-    setDraft(d => ({ ...d, start: result.start!, victory: result.victory!, postroll: result.postroll, origin: "agent", reviewed: false }));
+    setDraft(d => ({ ...d, start: result.start!, victory: result.victory!, postroll: result.postroll, origin: "agent", reviewed: false,
+      candidate_id: candidate?.id ?? null, candidate_revision: candidate?.manual_edit?.revision ?? null, manually_adjusted: false }));
     setSelectedClip(job.id);
     setSavedMessage("");
     setTimelineView(timelineWindow(result.start! - 5, result.victory! + result.postroll - result.start! + 10, duration));
@@ -780,27 +804,20 @@ function Editor({
           <ClipWorkspace project={project} jobs={jobs} draft={draft} selected={selectedClip}
             view={timelineView} onViewChange={setTimelineView}
             selectedSegment={selectedSegment} onSelectSegment={selectSegment} onError={onError}
+            onCandidateSaved={candidateSaved}
             onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current}
             onResetProgress={() => reset(true)} resetting={resetting} highlightedFields={aiFeedback?.fields} />
           </div>
           <div className="compact-export">
             <div className="export-review">
-            <div className="draft-status" role="status"><span className={`tiny-dot ${draft.reviewed ? "is-reviewed" : ""}`} />
+            <div className="draft-status" role="status"><span className={`tiny-dot ${currentRangeExported ? "is-exported" : ""}`} />
               {savedMessage || (dirty ? "修改已暫存於此瀏覽器" : "草稿已儲存")}
               <span className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</span>
             </div>
-            <label className="review-checkbox">
-              <input
-                type="checkbox"
-                checked={draft.reviewed}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, reviewed: e.target.checked }))
-                }
-              />
-              <span>
-                我已完整看過：只有成功挑戰，包含勝利。
-              </span>
-            </label>
+            <p className={`export-range-status ${currentRangeExported ? "is-exported" : ""}`} role="status">
+              {currentRangeExported ? <><Check size={14} aria-hidden="true" />目前區間已匯出</>
+                : candidatePreviouslyExported ? "此片段曾匯出，目前區間有修改" : "匯出會自動儲存目前區間"}
+            </p>
             </div>
             <BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />
             <div className="export-action-group">
@@ -809,7 +826,6 @@ function Editor({
               aria-describedby="export-help"
               disabled={
                 !valid ||
-                !draft.reviewed ||
                 busy ||
                 jobs.some((j) => j.kind === "export" && active(j))
               }
@@ -822,7 +838,7 @@ function Editor({
               )}
               {busy ? "正在提交…" : jobs.some(j => j.kind === "export" && active(j)) ? "正在匯出…" : editingExportId ? "另存新成品" : "匯出 MP4"}
             </button>
-            <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : !draft.reviewed ? "看完片段並勾選確認即可匯出" : editingExportId ? "保留原成品，不覆寫原檔" : "MP4 影片 · 含原片音訊"}</p>
+            <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : editingExportId ? "保留原成品，不覆寫原檔" : "MP4 影片 · 含原片音訊"}</p>
             </div>
           </div>
         </section>

@@ -39,17 +39,15 @@ test("candidate verification remains visible and rejected ranges load only for m
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await expect(page.getByLabel("片段 #1 詳情")).toContainText("尚未驗證");
   await expect(page.getByLabel("片段 #1 詳情").getByRole("status")).toContainText("可能包含失敗／重試");
-  await expect(page.getByRole("button", { name: "將 #1 放入剪輯草稿" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "編輯片段 #1 區間" })).toBeVisible();
   await page.getByRole("button", { name: "下一段", exact: true }).click();
   const blocked = page.getByLabel("片段 #2 詳情");
   await expect(blocked).toContainText("未通過驗證");
   await expect(blocked).toContainText("仍與死亡／重試片段重疊");
   await expect(blocked.getByRole("button", { name: "預覽 #2", exact: true })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "將 #2 放入剪輯草稿" })).toHaveCount(0);
-  await blocked.getByRole("button", { name: "載入 #2 手動修正" }).click();
+  await blocked.getByRole("button", { name: "編輯片段 #2 區間" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("80");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
-  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeEnabled();
   await blocked.scrollIntoViewIfNeeded();
   await page.screenshot({ path: "../runs/candidate-verification-desktop.png" });
   await page.getByLabel("關閉 AI 對話").click();
@@ -60,10 +58,9 @@ test("candidate verification remains visible and rejected ranges load only for m
   await page.screenshot({ path: "../runs/candidate-verification-mobile.png" });
   await blocked.getByRole("button", { name: "下一段", exact: true }).click();
   await expect(page.getByLabel("片段 #3 詳情")).toContainText("已通過 AI 檢查");
-  await page.getByRole("button", { name: "將 #3 放入剪輯草稿" }).click();
+  await page.getByRole("button", { name: "編輯片段 #3 區間" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("150");
   await expect(page.getByLabel("勝利後收尾")).toHaveValue("6");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
 });
 
 test("desktop onboarding and guide support keyboard dismissal and restore focus", async ({ page }) => {
@@ -123,16 +120,14 @@ test("YouTube form validates inline, preserves failed input, and submits a trimm
   await expect(dialog).not.toBeVisible();
 });
 
-test("library search preserves the working draft and workflow follows review changes", async ({ page }) => {
+test("library search preserves the working draft and valid edits can be exported directly", async ({ page }) => {
   await workspace(page, [project, { ...project, id: "second", title: "黑暗靈魂 · 無名王者" }]);
   const steps = page.getByRole("list", { name: "剪輯流程" });
   await expect(steps.locator('[aria-current="step"]')).toContainText("核對片段");
-  await page.getByRole("checkbox").check();
-  await expect(steps.locator('[aria-current="step"]')).toContainText("匯出成品");
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeEnabled();
   await page.getByLabel("搜尋素材庫").fill("無名");
   await expect(page.locator(".project-card")).toHaveCount(1);
   await expect(page.locator(".project-card")).toHaveAttribute("title", "黑暗靈魂 · 無名王者");
-  await expect(page.getByRole("checkbox")).toBeChecked();
   await page.getByLabel("搜尋素材庫").fill("不存在");
   await expect(page.getByRole("status").filter({ hasText: "找不到符合的影片" })).toBeVisible();
   await page.getByRole("button", { name: "清除素材搜尋" }).click();
@@ -141,8 +136,8 @@ test("library search preserves the working draft and workflow follows review cha
   await expect(page.getByLabel("開始時間")).toBeFocused();
   await page.getByLabel("開始時間").fill("125");
   await expect(steps.locator('[aria-current="step"]')).toContainText("核對片段");
-  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeDisabled();
-  await expect(page.locator(".compact-export")).toContainText("看完片段並勾選確認即可匯出");
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeEnabled();
+  await expect(page.locator(".compact-export")).toContainText("匯出會自動儲存目前區間");
 });
 
 test("desktop layouts keep review and export visible and preserve the player in theater mode", async ({ page }) => {
@@ -150,7 +145,6 @@ test("desktop layouts keep review and export visible and preserve the player in 
   for (const [width, height] of [[1280, 800], [1440, 900], [1920, 1080]]) {
     await page.setViewportSize({ width, height });
     await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
-    await expect(page.getByRole("checkbox")).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `../runs/studio-editor-${width}.png` });
   }
@@ -215,7 +209,6 @@ test("the candidate track aligns a dashed draft reference on the same zoomed tim
   await page.getByRole("slider", { name: "片段開始邊界", exact: true }).press("Shift+ArrowRight");
   await expect(summary).toContainText("00:01:01.000 → 00:03:08.000");
   await expectOverlay(61, 188);
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await page.getByRole("slider", { name: "勝利位置邊界", exact: true }).press("Shift+ArrowRight");
   await expect(summary).toContainText("00:01:01.000 → 00:03:09.000");
   await expectOverlay(61, 189);

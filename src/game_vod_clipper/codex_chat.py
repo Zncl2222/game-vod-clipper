@@ -150,8 +150,8 @@ Describe the requested change without claiming it is already applied, saved,
 reviewed or exported: the UI applies validated commands after this response.
 Do not generate commands for requests to explain/discuss settings rather than
 change them. When explicitly asked to cut/export the current draft, emit export
-with all time fields and candidate_id null. The UI checks the current draft has
-been reviewed and saves it before scheduling the host's FFmpeg export. Never
+with all time fields and candidate_id null. The UI validates and saves the current
+draft before scheduling the host's FFmpeg export; no review checkbox or keep tag is required. Never
 claim export succeeded before a completed job exists. Do not emit export for
 questions about exporting. Search runs the repository game-vod-boss-clipper SKILL
 with FFmpeg sampling and visual review; the host provides these tools by default.

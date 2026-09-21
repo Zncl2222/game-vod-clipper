@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Film, FolderOpen, Search, Upload } from "lucide-react";
+import { Check, ChevronDown, Download, Film, FolderOpen, Pencil, Search, Upload } from "lucide-react";
 import { active, finishedClips, media, time, type Job, type Project } from "./api";
 
 export default function FinishedClips({ project, jobs, selected, onSelect, onUpload }: {
@@ -20,18 +20,36 @@ export default function FinishedClips({ project, jobs, selected, onSelect, onUpl
     <div className="finished-clip-list" role="group" aria-label="成品片段清單">
       {items.map(({ job, number }) => {
         const range = job.draft!;
+        const end = range.victory + range.postroll;
+        const isSelected = selected === job.id;
         const thumb = project.thumbnails.reduce<Project["thumbnails"][number] | undefined>((closest, item) =>
           !closest || Math.abs(item.time - range.start) < Math.abs(closest.time - range.start) ? item : closest, undefined);
-        return <article key={job.id} className={`finished-clip-card ${selected === job.id ? "is-selected" : ""}`}>
-          <button type="button" aria-pressed={selected === job.id} aria-label={`編輯成品 #${number}`}
+        return <article key={job.id} className={`finished-clip-card ${isSelected ? "is-selected" : ""}`}>
+          <button type="button" aria-pressed={isSelected} aria-label={`編輯成品 #${number}`}
             className="finished-clip-open" onClick={() => onSelect(job.id)}>
-            <span className="finished-clip-thumb">{thumb ? <img src={media(project, thumb.file)} alt="" loading="lazy" /> : <Film size={23} aria-hidden="true" />}</span>
-            <span className="finished-clip-copy"><strong>成品 #{number}</strong><span>原片 {time(range.start)}–{time(range.victory + range.postroll)}</span>
-              <small>片長 {time(range.victory + range.postroll - range.start)} · {selected === job.id ? "正在編輯" : job.edit_draft ? "已有儲存草稿" : "點選直接編輯"}</small></span>
+            <span className="finished-clip-summary">
+              <span className="finished-clip-thumb">{thumb ? <img src={media(project, thumb.file)} alt="" loading="lazy" /> : <Film size={24} aria-hidden="true" />}</span>
+              <span className="finished-clip-copy">
+                <span className="finished-clip-title"><strong>成品 #{number}</strong>
+                  {isSelected ? <span className="finished-clip-status"><Check size={12} aria-hidden="true" />編輯中</span>
+                    : job.edit_draft && <span className="finished-clip-status">已存草稿</span>}
+                </span>
+                <span className="finished-clip-meta">MP4 · 片長 {time(end - range.start)}</span>
+              </span>
+              <Pencil className="finished-clip-edit-icon" size={16} aria-hidden="true" />
+            </span>
+            {range.manually_adjusted && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
+            <span className="finished-clip-range"><span>原片範圍</span><span>{time(range.start)} – {time(end)}</span></span>
           </button>
-          <div className="finished-clip-actions"><span>原成品保留</span><a href={`/api/jobs/${job.id}/download`} download aria-label={`下載成品 #${number} MP4`}><Download size={14} aria-hidden="true" />下載 MP4</a>
-            <button type="button" className="youtube-upload-button" aria-label={`上傳成品 #${number} 到 YouTube`} onClick={() => onUpload(job)}><Upload size={14} aria-hidden="true" />上傳 YouTube</button></div>
-          <details className="export-location"><summary>檔案儲存位置</summary><code>clips/web/{project.id}/{job.id}.mp4</code></details>
+          <div className="finished-clip-actions">
+            <a className="finished-clip-action" href={`/api/jobs/${job.id}/download`} download aria-label={`下載成品 #${number} MP4`}><Download size={16} aria-hidden="true" />下載 MP4</a>
+            <button type="button" className="finished-clip-action finished-clip-action-primary" aria-label={`上傳成品 #${number} 到 YouTube`} aria-haspopup="dialog"
+              onClick={() => onUpload(job)}><Upload size={16} aria-hidden="true" />上傳 YouTube</button>
+          </div>
+          <details className="finished-clip-details">
+            <summary><FolderOpen size={14} aria-hidden="true" />檔案儲存位置<ChevronDown className="finished-clip-details-chevron" size={14} aria-hidden="true" /></summary>
+            <div><p>編輯會另存新成品，原檔保留。</p><code>clips/web/{project.id}/{job.id}.mp4</code></div>
+          </details>
         </article>;
       })}
     </div>

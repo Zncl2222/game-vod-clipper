@@ -123,6 +123,21 @@
 .unified-workbench .candidate-list-disclosure { grid-column: 1 / -1; margin: 7px 0 0; font-size: 12px; }
 .unified-workbench .candidate-list-disclosure > summary, .workbench-review-tools > summary { min-height: 30px; padding: 5px 0; cursor: pointer; color: var(--muted); }
 .unified-workbench .candidate-detail { grid-column: 1 / -1; margin-top: 10px; }
+.candidate-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.candidate-heading > div { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 1; min-width: 180px; }
+.candidate-heading > div > span:last-child:not(.manual-adjustment-badge) { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.candidate-heading .candidate-edit-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 10px 14px; flex-shrink: 0; }
+.manual-adjustment-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface); color: var(--accent); font-size: 12px; line-height: 1.5; font-weight: 500; }
+.candidate-export-badge, .candidate-list button .candidate-export-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 4px; background: var(--surface-active); color: var(--accent); font-family: inherit; font-size: 12px; line-height: 1.5; font-weight: 500; }
+.candidate-detail .candidate-export-badge { background: var(--surface); }
+.candidate-marker b svg { vertical-align: -1px; }
+.candidate-edit-session { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px; margin: 8px 0 12px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface-active); scroll-margin-block: 8px; }
+.candidate-edit-session > div { flex: 1; min-width: 160px; }
+.candidate-edit-session strong { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.workbench-preview-actions .manual-adjustment-badge { font-family: inherit; color: var(--accent); font-size: 12px; }
+.candidate-edit-session p { margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.candidate-edit-session .secondary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; }
+.candidate-edit-session .inline-error { flex-basis: 100%; color: var(--danger); }
 .unified-workbench .source-comparison-legend { margin: 0 0 8px calc(var(--workbench-label) + 12px); gap: 6px 14px; font-size: 11px; }
 .unified-workbench .source-comparison-legend i { width: 16px; height: 10px; }
 .unified-workbench .workbench-review-tools { font-size: 12px; margin-top: 6px; }
@@ -133,13 +148,6 @@
 .workbench-exploration-details { grid-column: 2; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
 .workbench-exploration-details p { font-size: 12px; color: var(--muted); }
 .unified-workbench .ai-signal-list { grid-column: 2; margin: 0; font-size: 12px; }
-.finished-clips { border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 18px; margin-top: 16px; background: var(--surface); }
-.finished-clips h2 { font-size: 15px; margin: 0; }
-.finished-clips h2 span { font-size: 12px; color: var(--muted); }
-.finished-clip-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.finished-clip-list button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; background: var(--surface-subtle); font-size: 12px; }
-.finished-clip-list button[aria-pressed="true"] { border-color: var(--accent); background: var(--surface-active); }
-.finished-clip-list button span { font: 11px ui-monospace, monospace; color: var(--muted); }
 @media (min-width: 641px) and (max-width: 1180px) {
   .app.has-editor { --workbench-label: 72px; }
   .has-editor .compact-export .boss-review-dock { display: none; }

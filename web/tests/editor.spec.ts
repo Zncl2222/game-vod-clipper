@@ -16,7 +16,8 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await expect(page.getByRole("region", { name: "剪輯設定", exact: true })).toBeVisible({
     timeout: 30_000,
   });
-  await expect(page.getByRole("button", { name: "匯出 MP4" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "匯出 MP4" })).toBeEnabled();
+  await expect(page.locator(".compact-export input[type=checkbox]")).toHaveCount(0);
   await expect
     .poll(() =>
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.readyState),
@@ -53,11 +54,8 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await expect(player).toHaveAttribute("data-instance", "original-playing-video");
   expect(await player.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
   await page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.pause());
-  await page.getByRole("checkbox").check();
-  // Any edit must invalidate the prior review.
+  // Timing edits can be exported directly without an extra confirmation step.
   await page.getByLabel("開始時間").fill("1.5");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
-  await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "匯出 MP4" }).click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeAttached({
     timeout: 30_000,
@@ -116,7 +114,6 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   });
   await expect(page.getByLabel("開始時間")).toHaveValue("2");
   await expect(page.getByRole("alert")).toHaveCount(0);
-  await expect(page.getByRole("checkbox", { includeHidden: true })).not.toBeChecked();
   await page.getByRole("button", { name: "儲存草稿" }).click();
   await expect(
     page.getByRole("dialog", { name: "更多工具", exact: true }).getByText("草稿已儲存", { exact: false }),
@@ -173,10 +170,8 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   );
   await page.reload();
   await expect(page.getByLabel("開始時間")).toHaveValue("2");
-  await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await page.getByRole("button", { name: /套用候選/ }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("3");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   expect(consoleErrors).toEqual([]);
 });

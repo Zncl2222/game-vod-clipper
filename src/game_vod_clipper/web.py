@@ -22,7 +22,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .web_store import Store
@@ -32,6 +32,7 @@ from .candidates import project_candidates
 from .youtube_routes import YouTubeWorkspace
 from .youtube_account import YouTubeError
 from .usage import quota_change, usage_summary
+from .storage import video_storage
 
 ACTIVE = {"queued", "running"}
 EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
@@ -56,6 +57,9 @@ class Draft(BaseModel):
     reviewed: bool = False
     revision: int = Field(ge=0)
     origin: Literal["manual", "agent"] = "manual"
+    candidate_id: str | None = Field(default=None, min_length=1, max_length=200)
+    candidate_revision: int | None = Field(default=None, ge=0)
+    manually_adjusted: bool | None = None
 
 
 class ExportRequest(BaseModel):
@@ -68,6 +72,16 @@ class CandidateReviewRequest(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=200)
     review: Literal["pending", "keep", "reject"]
     analysis_generation: int = Field(ge=0)
+
+
+class CandidateEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    candidate_id: str = Field(min_length=1, max_length=200)
+    analysis_generation: int = Field(ge=0)
+    revision: int = Field(ge=0)
+    start: float = Field(ge=0)
+    victory: float = Field(gt=0)
+    postroll: float = Field(ge=5, le=10)
 
 
 class CodexLoginRequest(BaseModel):
@@ -359,6 +373,10 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def read_state():
         return state()
 
+    @app.get("/api/storage")
+    def storage():
+        return video_storage(root)
+
     @app.get("/api/codex")
     async def codex_status():
         return await codex.status()
@@ -610,6 +628,20 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(409, str(error)) from None
         return {"candidate_id": body.candidate_id, "review": body.review}
 
+    @app.put("/api/projects/{project_id}/candidate-edit")
+    async def edit_candidate(project_id: str, body: CandidateEditRequest):
+        project = get("projects", project_id)
+        if not project.get("ready"):
+            raise HTTPException(409, "預覽尚未完成。")
+        if not body.start < body.victory or body.victory + body.postroll > project["duration"]:
+            raise HTTPException(422, "開始必須早於勝利，且勝利後須保留完整 5–10 秒，不可超出原片。")
+        try:
+            return store.set_candidate_edit(project_id, body.candidate_id, body.model_dump())
+        except KeyError:
+            raise HTTPException(404, "找不到這個影片的候選片段。") from None
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+
     def clip_for_edit(project_id: str, job_id: str):
         job = get("jobs", job_id)
         if (job["project_id"] != project_id or job["kind"] != "export"
@@ -639,7 +671,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         validate_draft(project, body)
         if body.revision != editable_clip_draft(job)["revision"]:
             raise HTTPException(409, "片段草稿已更新，請重新載入專案。")
-        draft = body.model_dump() | {"revision": body.revision + 1}
+        draft = body.model_dump(exclude_none=True) | {"revision": body.revision + 1}
         store.patch("jobs", job_id, edit_draft=draft)
         return draft
 
@@ -649,7 +681,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         validate_draft(project, body)
         if body.revision != project["draft"]["revision"]:
             raise HTTPException(409, "草稿已更新，請重新載入專案。")
-        draft = body.model_dump() | {"revision": body.revision + 1}
+        draft = body.model_dump(exclude_none=True) | {"revision": body.revision + 1}
         store.patch("projects", project_id, draft=draft)
         return draft
 
@@ -660,10 +692,10 @@ def create_app(root: Path | None = None) -> FastAPI:
                  if body.source_job_id else project.get("draft"))
         if not draft or draft["revision"] != body.revision:
             raise HTTPException(409, "請先儲存目前草稿。")
-        if not draft["reviewed"]:
-            raise HTTPException(
-                422, "請先完整檢查片段，確認同一次成功挑戰且沒有死亡、讀取或跑圖。"
-            )
+        try:
+            validate_draft(project, Draft.model_validate(draft))
+        except ValidationError:
+            raise HTTPException(422, "剪輯時間範圍無效，請修正後再匯出。") from None
         for job in store.all("jobs"):
             if (
                 job["project_id"] == project_id

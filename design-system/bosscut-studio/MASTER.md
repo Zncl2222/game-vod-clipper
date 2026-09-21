@@ -87,9 +87,11 @@ Retain separate source/clip drafts, viewport and playhead on workspace switches.
 Keep the source-return button below the sticky header (including after scrolling).
 Layout rules live in `workbench.css` and `clip-library.css`.
 
-The current draft's review state drives the workflow header. Any timing edit clears
-review. An export action explains its disabled state next to the button. Local
-browser edits and explicitly saved drafts must be described differently.
+The current range's successful export state drives the workflow header. Valid ranges
+export directly and are saved automatically; no review checkbox or keep tag gates export.
+Candidate export history persists after timing edits, while the current range clearly
+states whether it has changed since export. An export action explains its disabled
+state next to the button. Local browser edits and saved drafts must be described differently.
 
 ## Interaction and accessibility
 
@@ -105,7 +107,8 @@ field errors linked to controls, and a focusable summary for server failures.
 - Every state uses text or shape as well as color. Visible keyboard focus is required.
 - Controls respond in 140–200ms; reduced-motion disables movement and transitions.
 - Never start analysis, authentication, or export just to decorate a view.
-- Final exports still require user review and 5–10 seconds after victory.
+- Exports require valid timing with 5–10 seconds after victory. Encourage inspecting
+  the candidate, without requiring a review checkbox or claiming visual validation.
 
 ## Verification
 

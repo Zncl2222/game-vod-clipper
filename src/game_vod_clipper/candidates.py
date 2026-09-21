@@ -88,4 +88,14 @@ def project_candidates(project: dict, jobs: list[dict]) -> list[dict]:
                 ))
         tags = {reviews[key] for key in segment["aliases"] if key in reviews}
         segment.update(number=index, review=reviews.get(segment["id"], next(iter(tags)) if len(tags) == 1 else "pending"))
+    # Keep model output intact; human corrections are a separate, durable layer.
+    for segment in consolidated:
+        edits = project.get("candidate_edits", {})
+        manual = edits.get(segment["id"]) or max(
+            (edits[key] for key in segment["aliases"] if key in edits),
+            key=lambda item: item["updated_at"], default=None)
+        if manual:
+            segment["ai_range"] = {key: segment.get(key) for key in ("start", "end", "victory", "postroll")}
+            segment.update(start=manual["start"], victory=manual["victory"], postroll=manual["postroll"],
+                           end=manual["victory"] + manual["postroll"], manual_edit=manual, verification="unverified")
     return consolidated

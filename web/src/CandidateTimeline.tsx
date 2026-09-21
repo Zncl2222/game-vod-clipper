@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import SelectionOverlay, { validSelection } from "./SelectionOverlay";
 import { type TimeWindow } from "./TimelineZoom";
-import { Play, Sparkles, Tag } from "lucide-react";
-import { api, time, type CandidateReview, type Draft, type NumberedCandidate, type Project } from "./api";
+import { Check, Pencil, Play, Sparkles, Tag } from "lucide-react";
+import { api, candidateExports, time, type CandidateReview, type Draft, type Job, type NumberedCandidate, type Project } from "./api";
 
 const kinds = { possible_win: "疑似勝利", fight: "戰鬥", death_retry: "死亡／重試", unknown: "待釐清" };
 const confidence = { low: "低", medium: "中", high: "高" };
 const reviews = { pending: "待核對", keep: "保留", reject: "排除" };
 const verificationLabels = { unverified: "尚未驗證", blocked: "未通過驗證", verified: "已通過 AI 檢查" };
 
-export default function CandidateTimeline({ project, segments, selected, current, onSelect, onSeek, onPlay, onApply, onError, view, draft }: {
-  project: Project; segments: NumberedCandidate[]; selected: string | null; current: number;
+function ExportBadge({ count }: { count: number }) {
+  return count ? <span className="candidate-export-badge"><Check size={13} aria-hidden="true" />已匯出{count > 1 ? ` · ${count} 次` : ""}</span> : null;
+}
+
+export default function CandidateTimeline({ project, jobs, segments, selected, current, onSelect, onSeek, onPlay, onEdit, onError, view, draft }: {
+  project: Project; jobs: Job[]; segments: NumberedCandidate[]; selected: string | null; current: number;
   onSelect: (segment: NumberedCandidate, seconds?: number) => void; onSeek: (seconds: number) => void; onPlay: (start: number, end: number) => void;
-  onApply: (draft: Partial<Draft>) => void; onError: (message: string) => void;
+  onEdit: (candidate: NumberedCandidate) => void; onError: (message: string) => void;
   view: TimeWindow; draft: Draft;
 }) {
   const [busy, setBusy] = useState(false);
@@ -33,6 +37,7 @@ export default function CandidateTimeline({ project, segments, selected, current
     bounds.from + Math.max(0, Math.min(1, (x - bounds.left) / Math.max(1, bounds.width))) * bounds.span;
   const index = segments.findIndex(c => c.id === selected);
   const candidate = segments[index];
+  const exportCounts = new Map(segments.map(segment => [segment.id, candidateExports(project.id, segment, jobs).length]));
   const lanes: number[] = [];
   const markers = segments.filter(s => s.end >= from && s.start <= to).sort((a, b) => a.start - b.start).map(segment => {
     const left = Math.min(95, Math.max(0, segment.start - from) / span * 100);
@@ -44,9 +49,7 @@ export default function CandidateTimeline({ project, segments, selected, current
   });
   const review = (segment: NumberedCandidate) => savedReviews[segment.id] ?? segment.review;
   const verification = candidate?.verification ?? "unverified";
-  const postroll = candidate?.victory == null ? 0 : Math.min(candidate.postroll ?? 8, duration - candidate.victory);
-  const canApply = candidate?.kind === "possible_win" && candidate.victory !== null
-    && Number.isFinite(candidate.victory) && candidate.start < candidate.victory && candidate.victory <= candidate.end && postroll >= 5;
+  const adjusted = (segment: NumberedCandidate) => !!segment.manual_edit || (draft.candidate_id === segment.id && !!draft.manually_adjusted);
 
   function scrub(x: number) {
     const gesture = drag.current;
@@ -118,11 +121,11 @@ export default function CandidateTimeline({ project, segments, selected, current
       {markers.map(({ segment, left, width, lane }) => <button key={segment.id}
         className={`candidate-marker ${segment.kind} ${selected === segment.id ? "selected" : ""} ${review(segment) === "reject" ? "rejected" : ""}`}
         style={{ left: `${left}%`, width: `${width}%`, top: lane * 40 + 4 }}
-        aria-label={`時間軸片段 #${segment.number} ${kinds[segment.kind]} ${time(segment.start)} 至 ${time(segment.end)}`}
+        aria-label={`時間軸片段 #${segment.number} ${kinds[segment.kind]} ${time(segment.start)} 至 ${time(segment.end)}${adjusted(segment) ? " · 已手動調整" : ""}${exportCounts.get(segment.id) ? " · 已匯出" : ""}`}
         data-candidate-id={segment.id}
         aria-pressed={selected === segment.id} onClick={e => { if (e.detail === 0) onSelect(segment); }}
-        title={`#${segment.number} ${segment.boss} · ${kinds[segment.kind]} · ${time(segment.start)}–${time(segment.end)}`}>
-        <b>AI #{segment.number}</b><span> {kinds[segment.kind]}</span>
+        title={`#${segment.number} ${segment.boss} · ${kinds[segment.kind]} · ${time(segment.start)}–${time(segment.end)}${exportCounts.get(segment.id) ? " · 已匯出" : ""}`}>
+        <b>{!!exportCounts.get(segment.id) && <Check size={12} aria-hidden="true" />}{adjusted(segment) ? <><Pencil size={11} aria-hidden="true" /> #{segment.number}</> : `AI #${segment.number}`}</b><span> {kinds[segment.kind]}</span>
         <i className="candidate-duration" aria-hidden="true" style={{
           left: `${((Math.max(from, segment.start) - from) / span * 100 - left) / width * 100}%`,
           width: `${(Math.min(to, segment.end) - Math.max(from, segment.start)) / span * 100 / width * 100}%`,
@@ -131,7 +134,7 @@ export default function CandidateTimeline({ project, segments, selected, current
       {current >= from && current <= to && <span className="candidate-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
       </div>
     </div>
-    <p className="candidate-reference-note">AI 候選供核對；放入剪輯草稿後才會成為匯出範圍。<span>虛線僅對齊目前剪輯。</span></p>
+    <p className="candidate-reference-note">選取候選後，按「編輯區間」即可微調。<span>虛線僅對齊目前剪輯。</span></p>
     <div className="candidate-legend">{Object.entries(kinds).map(([kind, label]) => <span key={kind} className={kind}><i />{label}</span>)}</div>
     {!segments.length && <p className="candidate-empty">AI 找到可疑片段後會陸續標在這裡；尚未確認勝利的片段也能點選預覽。</p>}
     {!!segments.length && <details className="candidate-list-disclosure"><summary>片段清單 · {segments.length} 個候選</summary><div className="candidate-list" role="group" aria-label="候選片段清單">
@@ -139,15 +142,22 @@ export default function CandidateTimeline({ project, segments, selected, current
         className={selected === segment.id ? "selected" : ""} onClick={() => onSelect(segment)}>
         <strong>#{segment.number} {segment.boss || kinds[segment.kind]}</strong>
         <span>{time(segment.start)}–{time(segment.end)}</span><small>{kinds[segment.kind]} · {verificationLabels[segment.verification ?? "unverified"]} · {reviews[review(segment)]}</small>
+        {adjusted(segment) && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
+        <ExportBadge count={exportCounts.get(segment.id) ?? 0} />
       </button>)}
     </div></details>}
     {candidate && <div className="candidate-detail" role="group" aria-label={`片段 #${candidate.number} 詳情`}>
-      <div className="candidate-heading"><strong>#{candidate.number} {candidate.boss || kinds[candidate.kind]}</strong>
-        <span>{kinds[candidate.kind]} · {verificationLabels[verification]} · 辨識信心{confidence[candidate.confidence]} · {reviews[review(candidate)]}</span></div>
-      {candidate.kind === "possible_win" && verification !== "verified" && <p className="candidate-warning" role="status">
+      <div className="candidate-heading"><div><strong>#{candidate.number} {candidate.boss || kinds[candidate.kind]}</strong>
+        {adjusted(candidate) && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
+        <ExportBadge count={exportCounts.get(candidate.id) ?? 0} />
+        <span>{kinds[candidate.kind]} · {adjusted(candidate) ? "人工調整後待核對" : verificationLabels[verification]} · AI 辨識信心{confidence[candidate.confidence]} · {reviews[review(candidate)]}</span></div>
+        <button type="button" className="primary candidate-edit-button" aria-label={`編輯片段 #${candidate.number} 區間`} onClick={() => onEdit(candidate)}><Pencil size={15} aria-hidden="true" />編輯區間</button>
+      </div>
+      {candidate.kind === "possible_win" && verification !== "verified" && !candidate.manual_edit && <p className="candidate-warning" role="status">
         {verification === "blocked" ? "這段未通過成功挑戰驗證，請先核對失敗／重試畫面並修正區間。" : "這是初步標註，尚未確認完整成功嘗試，可能包含失敗／重試。"}
       </p>}
       <p>{time(candidate.start, true)}–{time(candidate.end, true)} · {candidate.summary}</p>
+      {candidate.ai_range && <p className="candidate-original-range">AI 原始區間 {time(candidate.ai_range.start, true)}–{time(candidate.ai_range.end, true)} · 已保留供比對</p>}
       <p className="source-candidate-overlap">{!validSelection(draft, duration) ? "區間無效，無法對照" : Math.min(draft.victory + draft.postroll, candidate.end) > Math.max(draft.start, candidate.start)
         ? `與目前剪輯重疊 ${time(Math.min(draft.victory + draft.postroll, candidate.end) - Math.max(draft.start, candidate.start), true)}` : "與目前剪輯未重疊"}</p>
       {candidate.warnings.map((warning, i) => <p className="candidate-warning" key={i}>{warning}</p>)}
@@ -159,12 +169,8 @@ export default function CandidateTimeline({ project, segments, selected, current
           value={review(candidate)} onChange={e => void tag(e.target.value as CandidateReview)}>
           {Object.entries(reviews).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
-        {canApply && <button className="secondary" onClick={() => onApply({ start: candidate.start, victory: candidate.victory!, postroll,
-          origin: verification === "verified" ? "agent" : "manual" })}>
-          {verification === "verified" ? `將 #${candidate.number} 放入剪輯草稿` : `載入 #${candidate.number} 手動修正`}
-        </button>}
       </div>
-      <p className="candidate-hint">可在 AI 對話輸入「查看 #{candidate.number}」。保留標籤不代表已確認成功；匯出前請檢查完整挑戰。</p>
+      <p className="candidate-hint">保留／排除僅用於整理候選，不影響匯出。也可在 AI 對話輸入「查看 #{candidate.number}」。</p>
     </div>}
   </section>;
 }

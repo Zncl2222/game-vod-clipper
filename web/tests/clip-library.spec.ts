@@ -51,7 +51,6 @@ test("clicking a clip directly opens the same editor and preserves source and cl
   await expect(page.getByLabel("開始時間")).toHaveValue("500");
   await expect(page.getByLabel("勝利時間")).toHaveValue("620");
   await expect(page.getByRole("button", { name: "回到原片", exact: true })).toBeInViewport();
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await expect(video).toHaveAttribute("data-identity", "retained");
   await expect(page.locator("video")).toHaveCount(1);
   await page.getByLabel("開始時間").fill("490");
@@ -78,8 +77,7 @@ test("saving and exporting clip drafts never change the original project or MP4"
   await page.getByRole("tab", { name: "成品 2" }).click();
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await page.getByLabel("開始時間").fill("495");
-  await expect(page.getByRole("button", { name: "另存新成品", exact: true })).toBeDisabled();
-  await page.getByRole("checkbox").check();
+  await expect(page.getByRole("button", { name: "另存新成品", exact: true })).toBeEnabled();
   const request = page.waitForRequest(request => request.url().endsWith("/exports"));
   await page.getByRole("button", { name: "另存新成品", exact: true }).click();
   expect((await request).postDataJSON()).toEqual({ revision: 1, source_job_id: "clip-1" });

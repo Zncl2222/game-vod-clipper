@@ -1,4 +1,4 @@
-"""Resumable uploads of reviewed exports, with durable duplicate prevention."""
+"""Resumable uploads of completed exports, with durable duplicate prevention."""
 
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ class YouTubeUploads:
             raise YouTubeError("只能上傳已完成匯出的剪輯成品。", 422)
         draft = job.get("draft") or {}
         project = self.store.get("projects", job["project_id"])
-        if not project or not draft.get("reviewed"):
+        if not project:
             raise YouTubeError("請先檢查剪輯並匯出成品。", 422)
         values = [draft.get(k) for k in ("start", "victory", "postroll")]
         if (not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
@@ -104,9 +104,10 @@ class YouTubeUploads:
             receipt = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise YouTubeError("缺少成品驗證紀錄，請重新匯出。", 422) from None
+        validation = ("human_reviewed; " if draft.get("reviewed") else "") + "duration_checked; no_automated_visual_validation"
         if (receipt.get("project_id") != project["id"] or receipt.get("draft") != draft
                 or receipt.get("output") != str(path.relative_to(self.store.root))
-                or receipt.get("validation") != "human_reviewed; duration_checked; no_automated_visual_validation"):
+                or receipt.get("validation") != validation):
             raise YouTubeError("成品驗證紀錄不一致，請重新匯出。", 422)
         return job, path
 

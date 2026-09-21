@@ -103,8 +103,6 @@
 .sidebar .youtube-library-button { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; margin-top: 8px; border: 1px solid var(--sidebar-muted); border-radius: var(--radius-sm); color: var(--sidebar-muted); font-size: 13px; }
 .sidebar .youtube-library-button:hover { color: var(--surface); background: #ffffff0a; }
 .library-is-collapsed .youtube-library-button span { display: none; }
-.finished-clip-actions .youtube-upload-button { display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 12px; padding: 8px; min-height: 44px; }
-.finished-clip-actions { flex-wrap: wrap; }
 .import-youtube-account { margin-top: 12px; display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--accent); font-weight: 500; }
 @media (max-width: 600px) {
   .yt-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }

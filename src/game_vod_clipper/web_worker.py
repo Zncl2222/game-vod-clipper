@@ -219,7 +219,8 @@ def run(root: Path, job_id: str):
             "source": project["source"],
             "draft": draft,
             "output": str(output.relative_to(root)),
-            "validation": "human_reviewed; duration_checked; no_automated_visual_validation",
+            "validation": ("human_reviewed; " if draft.get("reviewed") else "")
+                          + "duration_checked; no_automated_visual_validation",
         }
         output.with_suffix(".json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

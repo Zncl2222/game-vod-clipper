@@ -90,6 +90,22 @@ button svg, a svg { flex-shrink: 0; }
 .local-card strong { display: block; font-size: 12px; }
 .local-card p { color: var(--sidebar-muted); font-size: 12px; line-height: 1.65; }
 .local-card svg { flex-shrink: 0; margin-top: 3px; color: var(--green); }
+.local-storage { border: 1px solid var(--sidebar-muted); border-radius: var(--radius-md); color: var(--sidebar-muted); }
+.local-storage summary { display: flex; align-items: center; gap: 10px; padding: 12px; min-height: 64px; cursor: pointer; list-style: none; }
+.local-storage summary::-webkit-details-marker { display: none; }
+.local-storage summary > svg { flex-shrink: 0; color: var(--green); }
+.local-storage summary > span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.local-storage-label { font-size: 12px; }
+.local-storage strong { color: var(--surface); font-size: 18px; line-height: 1.3; font-weight: 500; font-variant-numeric: tabular-nums; }
+.local-storage-chevron { margin-left: auto; transition: transform var(--duration-fast); }
+.local-storage[open] .local-storage-chevron { transform: rotate(180deg); }
+.local-storage-details { padding: 0 12px 12px; }
+.local-storage-details dl { margin: 0; padding-top: 12px; border-top: 1px solid var(--sidebar-muted); font-size: 12px; }
+.local-storage-details dl > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 8px; margin-bottom: 8px; }
+.local-storage-details dd { margin: 0; color: var(--surface); font-variant-numeric: tabular-nums; }
+.local-storage-details p { font-size: 12px; line-height: 1.6; }
+.local-storage-details button { display: flex; align-items: center; gap: 8px; margin-top: 8px; min-height: 32px; color: var(--green); font-size: 12px; }
+.library-is-collapsed .local-storage { display: none; }
 .connection, .connection.online { font-size: 12px; color: var(--sidebar-muted); margin: 16px 5px; }
 .connection.online .tiny-dot { color: var(--green); }
 .version { display: block; font-size: 10px; color: var(--sidebar-muted); letter-spacing: 1.1px; margin: 0 5px; }
@@ -223,7 +239,9 @@ footer { color: var(--muted); font-size: 12px; padding-block: 24px; line-height:
 .export-review { flex: 1; min-width: 0; }
 .draft-status { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 8px; font-size: 11px; color: var(--muted); margin-bottom: 6px; }
 .draft-status .tiny-dot { background: var(--gold); }
-.draft-status .is-reviewed { background: var(--accent); }
+.draft-status .is-exported { background: var(--accent); }
+.export-range-status { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.export-range-status.is-exported { color: var(--accent); }
 .draft-duration { font-variant-numeric: tabular-nums; }
 .compact-export .review-checkbox { align-items: center; font-size: 12px; line-height: 1.7; gap: 8px; }
 .compact-export .review-checkbox span { color: var(--muted); }

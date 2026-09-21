@@ -345,7 +345,6 @@ test("draft edges drag across the full source and zoom stays fixed during draggi
   await page.mouse.up();
   expect(Number(await end.getAttribute("aria-valuenow"))).toBeCloseTo(150, 0);
   await expect(page.getByLabel("勝利後收尾")).toHaveValue("5");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await page.getByRole("button", { name: "放大片段", exact: true }).click();
   const ruler = page.locator(".clip-trimmer .source-time-ruler");
   const before = await ruler.textContent();
@@ -391,7 +390,7 @@ test("live exploration and finished clips share source timestamps", async ({ pag
   await page.screenshot({ path: "../runs/ai-workspace-timeline.png", fullPage: true });
 });
 
-test("chat export saves reviewed draft and uses the existing export endpoint", async ({ page }) => {
+test("chat export validates timing and saves the draft without requiring a checkbox", async ({ page }) => {
   await setup(page, [project]);
   let exports = 0;
   await page.route("**/api/projects/demo/draft", route => route.fulfill({ json: { ...route.request().postDataJSON(), revision: 1 } }));
@@ -403,12 +402,12 @@ test("chat export saves reviewed draft and uses the existing export endpoint", a
   await page.route("**/api/codex/chat", route => route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({
     type: "reply", reply: "提交剪輯", project_id: "demo", action: { kind: "export", start: null, victory: null, postroll: null, seconds: null },
   }) + "\n" }));
-  await page.getByRole("checkbox").uncheck();
+  await page.getByLabel("開始時間").fill("179");
   await page.getByLabel("輸入訊息").fill("匯出片段");
   await page.getByLabel("送出訊息").click();
-  await expect(page.getByRole("log")).toContainText("請先檢查完整片段");
+  await expect(page.getByRole("log")).toContainText("請先修正剪輯時間範圍");
   expect(exports).toBe(0);
-  await page.getByRole("checkbox").check();
+  await page.getByLabel("開始時間").fill("10");
   await page.getByLabel("輸入訊息").fill("匯出片段");
   await page.getByLabel("送出訊息").click();
   await expect.poll(() => exports).toBe(1);
@@ -472,11 +471,9 @@ test("one assistant continues ordinary chat and applies requested tools after se
     { role: "user", content: "今天想聊遊戲" }, { role: "assistant", content: "收到：今天想聊遊戲" },
   ] });
   await expect(page.getByLabel("勝利後收尾")).toHaveValue("5");
-  await expect(page.getByRole("checkbox")).toBeChecked();
   await input.fill("收尾改成8秒"); await input.press("Enter");
   await expect(log).toContainText("已更新草稿");
   await expect(page.getByLabel("勝利後收尾")).toHaveValue("8");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   expect(requests[2]).toMatchObject({ history: [
     { role: "user", content: "今天想聊遊戲" }, { role: "assistant", content: "收到：今天想聊遊戲" },
     { role: "user", content: "幫我想一個直播標題" }, { role: "assistant", content: "收到：幫我想一個直播標題" },
@@ -652,7 +649,6 @@ test("editor commands update draft and invalidate review without media processin
   await page.getByLabel("輸入訊息").fill("收尾改成8秒");
   await page.getByLabel("送出訊息").click();
   await expect(page.getByLabel("勝利後收尾")).toHaveValue("8");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await expect(page.getByRole("log")).toContainText("已更新草稿");
   await expect(page.getByLabel("勝利後收尾")).toHaveClass(/ai-target/);
   await expect(page.getByLabel("開始時間")).not.toHaveClass(/ai-target/);
@@ -780,7 +776,6 @@ test("one-click search and typed search use the chat endpoint and shared result 
   await expect(page.getByLabel("AI 搜尋任務")).toContainText("model-b");
   await page.getByRole("button", { name: /套用候選/ }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("20");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
 });
 
 test("failed extraction shows a readable error and older searches stay collapsed", async ({ page }) => {
@@ -811,7 +806,6 @@ test("AI candidate appears selected in workspace and range handles edit the draf
   await page.locator(".workbench-review-tools > summary").click();
   await expect(workspace.getByRole("button", { name: "選取片段 測試 Boss" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("開始時間")).toHaveValue("20");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await workspace.screenshot({ path: "../runs/clip-workspace.png" });
   const handle = workspace.getByRole("slider", { name: "片段開始邊界" });
   await handle.scrollIntoViewIfNeeded();
@@ -960,7 +954,6 @@ test("candidate bars seek at the clicked position and scrub video without changi
   await page.keyboard.press("ArrowRight");
   await expect.poll(current).toBe(21);
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
-  await expect(page.getByRole("checkbox")).toBeChecked();
 });
 
 test("source comparison candidates seek and drag across the track without changing the draft", async ({ page }) => {
@@ -1007,7 +1000,6 @@ test("source comparison candidates seek and drag across the track without changi
   await expect.poll(current).toBeCloseTo(75, 0);
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
   await expect(page.getByLabel("勝利時間")).toHaveValue("100");
-  await expect(page.getByRole("checkbox")).toBeChecked();
 });
 
 test("zoomed source comparison maps positions to the visible source window", async ({ page }) => {
@@ -1040,7 +1032,6 @@ test("zoomed source comparison maps positions to the visible source window", asy
   await expect(source).toHaveAttribute("min", String(from));
   await expect(source).toHaveAttribute("max", String(to));
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
-  await expect(page.getByRole("checkbox")).toBeChecked();
 });
 
 test("uncertain candidates appear live, keep stable numbers, preview, tag and explicitly become drafts", async ({ page }) => {
@@ -1061,9 +1052,8 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   await expect(timeline.locator(".candidate-marker")).toHaveCount(3);
   await timeline.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await expect(page.getByLabel("片段 #1 詳情")).toContainText("戰鬥尚未確認結果");
-  await expect(page.getByRole("button", { name: "將 #1 放入剪輯草稿" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "編輯片段 #1 區間" })).toBeVisible();
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
-  await expect(page.getByRole("checkbox")).toBeChecked();
   await page.getByRole("button", { name: "下一段", exact: true }).click();
   await page.getByRole("button", { name: "預覽 #2", exact: true }).click();
   await expect(page.locator(".video-wrap video")).toHaveAttribute("data-played", "60");
@@ -1082,10 +1072,9 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   await expect(timeline.locator(".candidate-marker")).toHaveCount(3);
   await expect(page.getByLabel("片段 #2 詳情")).toContainText("00:01:02.000");
   await expect(page.getByLabel("片段 #2 詳情")).toContainText("尚未驗證");
-  await page.getByRole("button", { name: "載入 #2 手動修正" }).click();
+  await page.getByRole("button", { name: "編輯片段 #2 區間" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("62");
   await expect(page.getByLabel("勝利時間")).toHaveValue("107");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await page.screenshot({ path: "../runs/candidate-review-desktop.png", fullPage: true });
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify(nextState)}\n\n` }));
   await page.reload();
@@ -1171,7 +1160,6 @@ test("reset viewing progress keeps candidates, unsaved edits and exports while s
   await page.locator(".workbench-review-tools > summary").click();
   await expect(page.getByRole("button", { name: "選取片段 保留候選" })).toBeVisible();
   await expect(page.getByLabel("開始時間")).toHaveValue("37");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await expect(page.locator(".finished-clip-open")).toHaveCount(1);
   await expect(page.getByRole("log")).not.toContainText("OLD_VIEWING_CONTEXT");
   await expect(page.getByRole("button", { name: "重置 AI 查看進度" })).toBeDisabled();
@@ -1281,7 +1269,6 @@ test("reset removes old candidates and editing context and a new search starts f
   await page.getByRole("button", { name: "重置分析結果" }).click();
   await expect(page.getByRole("button", { name: "選取片段 舊候選" })).toHaveCount(0);
   await expect(page.getByRole("log")).not.toContainText("舊判斷");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   await expect(page.getByLabel("開始時間")).toHaveValue("0");
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bosscut:draft:demo")!).revision)).toBe(1);
   let fresh = false;
@@ -1350,7 +1337,6 @@ test("six-hour VOD zooms to seconds, pans across the source and keeps all tracks
   expect(changed).toBeLessThan(10801);
   expect(await ruler.textContent()).toBe(before);
   await expect(page.getByLabel("勝利後收尾")).toHaveValue("8");
-  await expect(page.getByRole("checkbox")).not.toBeChecked();
   expect(new Set(await page.locator(".source-time-ruler").allTextContents()).size).toBe(1);
   await position.press("End");
   await expect(seek).toHaveAttribute("min", "21595");
@@ -1389,7 +1375,6 @@ test("timeline wheel zoom anchors the pointed time and navigator pans without ed
   await expect(seek).toHaveAttribute("max", "21600");
   expect(Number(await seek.getAttribute("max")) - Number(await seek.getAttribute("min"))).toBeCloseTo(to - from);
   await expect(page.getByLabel("開始時間")).toHaveValue("10");
-  await expect(page.getByRole("checkbox")).toBeChecked();
 });
 
 test("model settings stay readable on mobile and exported file location is discoverable", async ({ page }) => {
@@ -1415,7 +1400,7 @@ test("model settings stay readable on mobile and exported file location is disco
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await page.getByRole("tab", { name: "成品 1" }).click();
   await page.getByText("檔案儲存位置", { exact: true }).click();
-  await expect(page.locator(".export-location code")).toHaveText("clips/web/demo/finished-export.mp4");
+  await expect(page.getByRole("region", { name: "成品片段", exact: true }).getByText("clips/web/demo/finished-export.mp4", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "下載成品 #1 MP4", exact: true })).toHaveAttribute("href", "/api/jobs/finished-export/download");
 });
 

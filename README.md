@@ -46,6 +46,11 @@ edit its source range directly; **回到原片** restores the original editable
 workspace. Source and clip drafts are kept separately. **另存新成品** exports a
 new MP4 after review without overwriting the existing clip.
 
+The bottom-left **本地影片用量** shows video file sizes in this workspace. Expand it
+for original videos, finished clips, and preview/temporary videos. Totals include
+unimported files and update every 30 seconds or with **重新計算**. Linked copies of
+the same file are counted once; files outside the workspace are excluded.
+
 See [the POC guide](docs/web-poc.md) for development, the Agent JSON contract,
 testing, and current limitations.
 
@@ -56,7 +61,7 @@ livestreams, and imports public/unlisted archives with optional automatic AI rev
 An opt-in watcher imports new completed streams while the backend is running.
 After reviewing and exporting a clip, use **上傳 YouTube** in **成品** to confirm its
 metadata and upload it privately by default. Upload progress, pause/resume and
-duplicate prevention persist locally. Only reviewed clip exports can be uploaded;
+duplicate prevention persist locally. Only completed, validated clip exports can be uploaded;
 source VODs cannot. See the [YouTube setup and workflow guide](docs/youtube-workflow.md).
 
 ### Chat and control the editor
@@ -69,7 +74,7 @@ on this browser. Collapsing a panel preserves the working draft, playback, libra
 search, and unsent conversation input for reopening it. The import dialog
 can refresh the local source list without closing; invalid URLs and
 source errors include recovery guidance. The player footer keeps draft status,
-clip length, review confirmation, and export availability visible together.
+clip length, export history, and export availability visible together.
 The shared visual rules live in [the desktop design system](design-system/bosscut-studio/MASTER.md).
 
 The main view keeps the video, one range timeline, previews and export together.
@@ -86,8 +91,8 @@ search progress appears below the video and in the conversation.
 - The selected project's title, duration, current draft and analysis results are
   attached automatically. Ordinary chat also works without a selected video or
   with incomplete timing fields. Search and preview tools remain available with
-  an incomplete draft; export requires valid timing and manual review. Timing
-  changes invalidate review. Project-specific history sent to the model is scoped
+  an incomplete draft; export requires valid timing and automatically saves the draft,
+  without a review checkbox or a keep tag. Project-specific history sent to the model is scoped
   to the current project and analysis; context-free conversation remains available.
 - The model picker uses official App Server `model/list` results. Your selection
   applies to the next message and search task. Searches require image support and
@@ -106,8 +111,8 @@ search progress appears below the video and in the conversation.
   Switching accounts clears the conversation and unsent input.
 - Replies proposing editor commands are validated against the source duration.
   A reply cannot overwrite a draft edited during generation or target a different
-  project after switching. No command can mark footage as reviewed; export tools
-  require a reviewed draft and use the existing save/export queue.
+  project after switching. Export tools require an explicit export request, validate
+  the current timing, and use the existing save/export queue without claiming human review.
 
 The chat endpoint sends newline-delimited status and final-response events;
 responses appear when the model has completed its structured answer. Chat calls
@@ -158,9 +163,18 @@ Each segment retains its ID and display number when a continued analysis refines
 its boundaries. **待核對／保留／排除** tags are saved to the project and survive reloads.
 Chat understands references such as **查看 #2**, using the same stored candidates.
 Selecting or tagging an annotation does not change or approve the export draft.
-For a possible victory with a known victory time, **將 #N 放入剪輯草稿** loads an
-unreviewed draft with 5–8 seconds of postroll, depending on the remaining footage.
-Annotations with an unknown victory remain previewable without inventing a win.
+Use **編輯區間** to load any selected candidate into the existing editor, then drag
+its boundaries or change the start/victory times and 5–10 second postroll. For an
+unknown victory, the editor explicitly labels its initial victory time as
+provisional; locate the actual victory before exporting. Timing changes display
+**已手動調整**. **儲存區間** persists the corrected candidate separately from AI
+output, retaining the original range for comparison. Saved corrections survive
+reloads and further AI refinement, and reset the candidate's review tag to pending.
+Export automatically saves a valid range; neither **保留** nor a confirmation checkbox
+is required. Successful exports mark the corresponding candidate **已匯出**; queued,
+running, and failed jobs do not. Further timing edits retain export history while
+showing that the current range has changed. The human-adjustment marker also follows
+the exported clip. Preview the footage to assess the complete successful attempt.
 Stopped or incomplete analysis keeps the annotations already found; an empty
 result does not manufacture candidates. Older single-result jobs with usable
 timestamps also appear as provisional annotations.
@@ -335,7 +349,8 @@ not repeated setup/export instructions. Byte-identical frames share one image wh
 preserving all sampled timestamps; small visual changes are never removed by a
 similarity threshold. Each packet records extraction/model timing and prompt size.
 Dense sampling improves the evidence but does not guarantee no missed frames or
-CLI-equivalent judgment. Preview and manual review remain required before export.
+CLI-equivalent judgment. Preview the footage to assess the candidate; exporting
+does not claim visual validation or require a review checkbox.
 
 Temporary model capacity, rate-limit and network/service failures retry the same
 packet at most twice, reusing its extracted images and the selected model/effort.

@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -28,6 +28,63 @@ class CandidatesTest(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def edit(self, **changes):
+        return {"candidate_id": self.segment["id"], "analysis_generation": 0, "revision": 0,
+                "start": 22, "victory": 36, "postroll": 8} | changes
+
+    def test_manual_range_persists_separately_from_ai_evidence_and_export_review(self):
+        with TestClient(self.app) as client:
+            response = client.put("/api/projects/p/candidate-edit", json=self.edit())
+            self.assertEqual(response.status_code, 200, response.text)
+            candidate = response.json()
+            self.assertEqual(candidate["start"], 22)
+            self.assertEqual(candidate["end"], 44)
+            self.assertEqual(candidate["manual_edit"]["revision"], 1)
+            self.assertEqual(candidate["ai_range"]["start"], 20)
+            self.assertIsNone(candidate["ai_range"]["victory"])
+            self.assertEqual(candidate["verification"], "unverified")
+            self.assertEqual(candidate["review"], "pending")
+            self.assertEqual(client.get("/api/state").json()["projects"][0]["review_candidates"][0], candidate)
+        self.assertEqual(Store(Path(self.temp.name)).get("projects", "p")["candidate_edits"][self.segment["id"]], candidate["manual_edit"])
+        self.assertEqual(self.store.get("jobs", "first")["candidates"], [self.segment])
+        self.assertEqual(self.store.get("projects", "p")["draft"], self.project["draft"])
+
+    def test_manual_range_validates_ownership_boundaries_and_conflicting_writes(self):
+        with TestClient(self.app) as client:
+            url = "/api/projects/p/candidate-edit"
+            for changes in ({"start": -1}, {"start": 36}, {"victory": 95}, {"postroll": 4}, {"postroll": 11}, {"start": "NaN"}):
+                self.assertEqual(client.put(url, json=self.edit(**changes)).status_code, 422)
+            self.assertEqual(client.put(url, json=self.edit(candidate_id="other:c1")).status_code, 404)
+            self.assertEqual(client.put(url, json=self.edit(analysis_generation=1)).status_code, 409)
+            self.assertEqual(client.put(url, json=self.edit()).status_code, 200)
+            self.assertEqual(client.put(url, json=self.edit(start=23)).status_code, 409)
+            self.assertEqual(client.put(url, json=self.edit(start=23, revision=1)).status_code, 200)
+
+    def test_ai_refinement_and_progress_reset_preserve_human_changes_full_reset_clears_them(self):
+        with TestClient(self.app) as client:
+            client.put("/api/projects/p/candidate-edit", json=self.edit())
+            self.store.patch("jobs", "first", candidates=[dict(self.segment, start=21, end=42)])
+            candidate = client.get("/api/state").json()["projects"][0]["review_candidates"][0]
+            self.assertEqual(candidate["start"], 22)
+            self.assertEqual(candidate["ai_range"]["start"], 21)
+            self.store.reset_analysis("p", progress_only=True)
+            self.assertEqual(client.get("/api/state").json()["projects"][0]["review_candidates"][0]["start"], 22)
+            self.assertEqual(client.put("/api/projects/p/candidate-edit", json=self.edit(revision=1)).status_code, 409)
+            self.store.reset_analysis("p")
+            self.assertEqual(self.store.get("projects", "p")["candidate_edits"], {})
+
+    def test_manual_provenance_survives_saved_drafts(self):
+        draft = self.project["draft"] | {"candidate_id": self.segment["id"], "candidate_revision": 1, "manually_adjusted": True}
+        with TestClient(self.app) as client:
+            result = client.put("/api/projects/p/draft", json=draft)
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertTrue(result.json()["manually_adjusted"])
+            self.assertEqual(result.json()["candidate_id"], self.segment["id"])
+            with patch.object(self.app.state.jobs, "submit", return_value={"id": "export"}) as submit:
+                self.assertEqual(client.post("/api/projects/p/exports", json={"revision": 1}).status_code, 202)
+                self.assertTrue(submit.call_args.args[2]["manually_adjusted"])
+                self.assertFalse(submit.call_args.args[2]["reviewed"])
 
     def test_resume_refines_ids_and_numbers_without_merging_different_projects(self):
         self.store.put("jobs", {**self.job, "id": "resume", "candidates": [dict(self.segment, start=22),
@@ -78,14 +135,16 @@ class CandidatesTest(unittest.TestCase):
         failure.update(start=10, end=15)
         self.assertEqual(project_candidates(self.project, [job])[0]["verification"], "unverified")
 
-    def test_review_persists_without_approving_draft_and_reset_invalidates_tags(self):
+    def test_review_tags_are_independent_from_export_and_reset_invalidates_tags(self):
         with TestClient(self.app) as client:
             body = {"candidate_id": "first:c1", "review": "keep", "analysis_generation": 0}
             self.assertEqual(client.put("/api/projects/p/candidate-review", json=body).status_code, 200)
             saved = Store(Path(self.temp.name)).get("projects", "p")
             self.assertEqual(saved["candidate_reviews"], {"first:c1": "keep"})
             self.assertEqual(saved["draft"], self.project["draft"])
-            self.assertEqual(client.post("/api/projects/p/exports", json={"revision": 0}).status_code, 422)
+            with patch.object(self.app.state.jobs, "submit", return_value={"id": "export"}) as submit:
+                self.assertEqual(client.post("/api/projects/p/exports", json={"revision": 0}).status_code, 202)
+                self.assertFalse(submit.call_args.args[2]["reviewed"])
             for changes, expected in [({"candidate_id": "other:c1"}, 404), ({"review": "approved"}, 422)]:
                 self.assertEqual(client.put("/api/projects/p/candidate-review", json=body | changes).status_code, expected)
             self.store.reset_analysis("p")

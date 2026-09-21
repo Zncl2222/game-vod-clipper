@@ -63,11 +63,9 @@ class ClipDraftTest(unittest.TestCase):
                 self.assertEqual(self.client.put(self.url, json=self.draft).status_code, 404)
                 self.assertEqual(self.client.post("/api/projects/one/exports", json=dict(revision=0, source_job_id="clip")).status_code, 404)
 
-    def test_export_requires_review_and_keeps_an_independent_snapshot(self):
+    def test_export_accepts_unchecked_draft_and_keeps_an_independent_snapshot(self):
         saved = self.client.put(self.url, json=self.draft).json()
         export = "/api/projects/one/exports"
-        self.assertEqual(self.client.post(export, json=dict(revision=1, source_job_id="clip")).status_code, 422)
-        saved = self.client.put(self.url, json=saved | dict(reviewed=True)).json()
         body = dict(revision=saved["revision"], source_job_id="clip")
         created = self.client.post(export, json=body)
         self.assertEqual(created.status_code, 202, created.text)
@@ -75,12 +73,20 @@ class ClipDraftTest(unittest.TestCase):
         self.assertNotEqual(result["id"], "clip")
         self.assertEqual(result["source_job_id"], "clip")
         self.assertEqual(result["draft"], saved)
+        self.assertFalse(result["draft"]["reviewed"])
         self.assertEqual(self.client.post(export, json=body).json()["id"], result["id"])
         self.client.put(self.url, json=saved | dict(start=8, reviewed=False))
         self.assertEqual(self.store.get("jobs", result["id"])["draft"], saved)
         self.assertEqual(self.store.get("projects", "one")["draft"], self.original)
         self.assertEqual(self.store.get("jobs", "clip")["draft"], self.original)
         self.assertEqual(self.client.post(export, json=body).status_code, 409)
+
+    def test_export_still_rejects_invalid_stored_ranges_without_a_review_gate(self):
+        for change in (dict(start=20), dict(victory=85), dict(postroll=4), dict(postroll=11)):
+            with self.subTest(change=change):
+                self.store.patch("jobs", "clip", edit_draft=self.draft | change)
+                response = self.client.post("/api/projects/one/exports", json=dict(revision=0, source_job_id="clip"))
+                self.assertEqual(response.status_code, 422, response.text)
 
     def test_export_deduplication_is_scoped_to_the_editing_target(self):
         self.store.put("jobs", dict(id="other", project_id="one", kind="export", status="succeeded", draft=self.original, progress=100))

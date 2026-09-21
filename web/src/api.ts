@@ -5,6 +5,9 @@ export type Draft = {
   reviewed: boolean;
   revision: number;
   origin: "manual" | "agent";
+  candidate_id?: string | null;
+  candidate_revision?: number | null;
+  manually_adjusted?: boolean | null;
 };
 export type Project = {
   youtube_analysis_error?: string | null;
@@ -104,11 +107,31 @@ export function finishedClips(projectId: string, jobs: Job[]) {
     .sort((a, b) => (a.created ?? 0) - (b.created ?? 0) || a.id.localeCompare(b.id));
 }
 
+export function sameClipRange(a: Pick<Draft, "start" | "victory" | "postroll">, b: Pick<Draft, "start" | "victory" | "postroll">) {
+  return (["start", "victory", "postroll"] as const).every(key => Math.abs(a[key] - b[key]) < .001);
+}
+
+export function candidateExports(projectId: string, candidate: NumberedCandidate, jobs: Job[]) {
+  const ids = new Set([candidate.id, ...(candidate.aliases ?? [])]);
+  return finishedClips(projectId, jobs).filter(job => {
+    const draft = job.draft!;
+    if (draft.candidate_id) return ids.has(draft.candidate_id);
+    // Older exports have no candidate identity. Match exact boundaries, never overlap.
+    return [candidate, candidate.ai_range].some(range => range?.victory != null && sameClipRange(draft, {
+      start: range.start, victory: range.victory, postroll: range.postroll ?? 8,
+    }));
+  });
+}
+
 export function editableClipDraft(job: Job): Draft {
   return job.edit_draft ?? { ...job.draft!, revision: 0, reviewed: false };
 }
 export type CandidateReview = "pending" | "keep" | "reject";
+export type CandidateEdit = { start: number; victory: number; postroll: number; revision: number; updated_at: number };
 export type CandidateSegment = {
+  aliases?: string[];
+  manual_edit?: CandidateEdit;
+  ai_range?: { start: number; end: number; victory: number | null; postroll?: number | null };
   id: string; start: number; end: number; victory: number | null;
   verification?: "unverified" | "blocked" | "verified";
   postroll?: number;
@@ -129,7 +152,7 @@ export function reviewCandidates(project: Project, jobs: Job[]): NumberedCandida
     let segments = job.candidates ?? r?.candidates ?? [];
     if (!segments.length && r && r.start !== null && r.victory !== null) {
       segments = [{ id: `${job.id}:legacy`, start: r.start, end: Math.min(project.duration!, r.victory + r.postroll),
-        victory: r.victory, kind: "possible_win", confidence: "low", boss: r.boss, summary: r.summary,
+        victory: r.victory, postroll: r.postroll, kind: "possible_win", confidence: "low", boss: r.boss, summary: r.summary,
         warnings: r.warnings, evidence: r.evidence }];
     }
     for (const segment of segments) {
@@ -138,6 +161,7 @@ export function reviewCandidates(project: Project, jobs: Job[]): NumberedCandida
         // provisional and retain a matching result's rejection warnings.
         const matches = segment.victory !== null && segment.start === r?.start && segment.victory === r?.victory;
         found.set(segment.id, { ...segment, verification: matches && r.status !== "candidate" ? "blocked" : "unverified",
+          postroll: matches ? r.postroll : segment.postroll,
           warnings: [...new Set([...segment.warnings, ...(matches ? r.warnings : [])])] });
       }
     }
@@ -145,6 +169,10 @@ export function reviewCandidates(project: Project, jobs: Job[]): NumberedCandida
   return [...found.values()].map((segment, i) => ({ ...segment, number: i + 1, review: project.candidate_reviews?.[segment.id] ?? "pending" }));
 }
 export type Source = { path: string; name: string; size: number };
+export type VideoStorage = {
+  bytes: number; files: number; incomplete: boolean; updated_at: number;
+  categories: Record<"sources" | "exports" | "previews", { bytes: number; files: number }>;
+};
 
 export function apiError(path: string, status: number, detail?: unknown): string {
   if (status === 404 && path.startsWith("/codex")) {
