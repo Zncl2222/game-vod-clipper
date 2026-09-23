@@ -10,7 +10,7 @@ from unittest.mock import patch
 from game_vod_clipper.media import download_video
 from game_vod_clipper.process import CommandResult, ToolMissingError, resolve_tool_command
 from game_vod_clipper.web_store import Store
-from game_vod_clipper.web_worker import run
+from game_vod_clipper.web_worker import SOURCE_PREFIX, run
 from game_vod_clipper.youtube import javascript_runtime, youtube_command
 
 
@@ -95,7 +95,7 @@ class YouTubeTest(unittest.TestCase):
             source = root / "downloads" / "web" / "video" / "source.mp4"
             source.parent.mkdir(parents=True)
             source.touch()
-            with patch("game_vod_clipper.web_worker.command", return_value=str(source) + "\n") as command, patch(
+            with patch("game_vod_clipper.web_worker.command", return_value=SOURCE_PREFIX + str(source) + "\n") as command, patch(
                 "game_vod_clipper.web_worker.probe", return_value={"duration": 16, "width": 320, "height": 180}
             ):
                 run(root, "prepare")

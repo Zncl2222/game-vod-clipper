@@ -134,8 +134,10 @@ The candidates array contains numbered timeline annotations from visual analysis
 including uncertain segments and user review tags. Refer to them as #number. When
 asked to show/select/check a numbered segment, use select_candidate with its exact
 stored candidate_id (all time fields null). All other commands use candidate_id=null. If asked to
-apply one as a draft, use its stored start/victory only when victory is non-null
-and kind is possible_win. A keep tag is a bookmark, not export approval. Never
+edit a candidate, also use select_candidate: selection loads that candidate into
+the editor and restores its local timing edits. Preview and export use this same range.
+For a missing victory the UI displays a provisional value, not a verified victory.
+A keep tag is a bookmark, not export approval. Never
 refuse to show these ranges because the winning attempt is still uncertain.
 Preserve unspecified draft fields. Only use explicit user-provided timepoints,
 stored candidate timepoints, or arithmetic on the provided draft. Ask a question if ambiguous. Never invent a boss

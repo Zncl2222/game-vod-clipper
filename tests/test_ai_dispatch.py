@@ -53,6 +53,25 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(second["model"], "picked")
         self.assertIsNone(text["action"])
 
+    def test_selected_candidate_recheck_is_scoped_and_rejects_stale_selection(self):
+        self.store.put("jobs", {"id": "discovery", "project_id": "p", "kind": "analyze", "status": "succeeded",
+                                "candidates": [{"id": "discovery:c0001", "start": 20, "end": 70,
+                                                "victory": None, "kind": "possible_win", "confidence": "medium",
+                                                "boss": "Boss", "summary": "結局不明", "warnings": [], "evidence": []}]})
+        body = {"start": 22, "end": 68, "model": "picked", "candidate_id": "discovery:c0001",
+                "analysis_generation": 0}
+        response = self.client.post("/api/projects/p/analyze", json=body)
+        self.assertEqual(response.status_code, 202)
+        analysis = response.json()["analysis"]
+        self.assertEqual((analysis["start"], analysis["end"], analysis["candidate_id"]), (22, 68, body["candidate_id"]))
+        self.assertEqual(analysis["review_target"]["summary"], "結局不明")
+        self.store.patch("jobs", response.json()["id"], status="cancelled")
+        missing = self.client.post("/api/projects/p/analyze", json={**body, "candidate_id": "other:c0001"})
+        self.assertEqual(missing.status_code, 404)
+        self.store.patch("projects", "p", analysis_generation=1)
+        stale = self.client.post("/api/projects/p/analyze", json=body)
+        self.assertEqual(stale.status_code, 409)
+
     def test_selected_effort_reaches_search_and_retry_without_checkpoint(self):
         self.codex.models.return_value[0]["supported_efforts"] = ["low", "high"]
         first = self.request(intent="search", search_start=0, search_end=120, effort="high")

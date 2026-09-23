@@ -43,7 +43,7 @@ may use 10–11px. Numeric values use tabular figures. Use a 4/8px spacing rhyth
 ## Workspace hierarchy
 
 - Library: brand, import, searchable projects, help, local storage/connection status.
-- Header: actual import/review/export stage, **更多工具**, and help.
+- Header: actual import/review/export stage, **專案工具**, and help.
 - Editor (revised layout A): the desktop shell fits the viewport without scrolling,
   with the preview above one independently scrolling workbench;
   the AI conversation keeps its full-height right column. A single ruler aligns selection,
@@ -70,7 +70,7 @@ may use 10–11px. Numeric values use tabular figures. Use a 4/8px spacing rhyth
   quota lookup fails; unavailable allowance is never represented as zero percent.
 - Secondary details: evidence and exploration (workbench toggle) and preview shortcuts.
   Manual actions, draft management, external Agent handoff, and processing history live
-  in the **更多工具** dialog. Keep its header fixed, scroll only its content, preserve
+  in the **專案工具** dialog. Keep its header fixed, scroll only its content, preserve
   editor state, and restore focus on close. Processing history remains inline while
   a source is being prepared; active/failed jobs are indicated on the tools button.
 
@@ -84,6 +84,25 @@ track uses a subtle solid tint for postroll. Candidate cards have numbered text 
 duplicating the filled draft overlay. Show candidate overlap as text. Completed exports use a list
 with source timestamps, direct editing, download and file location; no second player.
 Retain separate source/clip drafts, viewport and playhead on workspace switches.
+Selecting a candidate immediately loads its editable range: the selected candidate,
+timing controls, preview shortcut and export all use that same draft. The fixed export
+footer names the current target and its start/end, with a shortcut to timing inputs.
+The selected candidate detail offers a focused AI recheck of the currently displayed
+range. Keep its task status, finding and timestamped evidence with that candidate;
+show the exact submitted range and leave the working draft unchanged by the reply.
+Candidate working edits persist locally across selection and reload; selecting the
+same candidate never resets them. Late AI replies cannot overwrite another candidate
+or survive a selection round trip. Selecting a candidate from a completed clip returns
+to source editing while preserving the completed clip's separate working draft.
+Keep the optional clip name in the fixed export footer so naming remains visible
+while the workbench scrolls. Finished clips expose explicit edit and confirmed delete
+actions; deleting the selected clip restores the source workspace and its draft.
+Keep the footer focused on naming and exporting: name and export button align on
+one row, current range sits below the name, and save/export status shares a separate
+bottom row. Stack these groups in narrow panels. Keep AI search and analysis reset
+with the candidate section, away from the export button. Timeline navigation uses
+aligned rows for viewing shortcuts and zoom/pan; allow the title its own row in
+narrow panels. Keep the useful project tools dialog explicitly named **專案工具**.
 Keep the source-return button below the sticky header (including after scrolling).
 Layout rules live in `workbench.css` and `clip-library.css`.
 

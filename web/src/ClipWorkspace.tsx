@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Film, ListFilter, Pencil, Play, Save, Trophy } from "lucide-react";
 import { active, api, currentAnalysis, media, reviewCandidates, time, type Draft, type Job, type NumberedCandidate, type Project } from "./api";
 import AIWorkspaceTimeline from "./AIWorkspaceTimeline";
@@ -20,14 +20,16 @@ export function candidates(project: Project, jobs: Job[]) {
 }
 
 export default function ClipWorkspace({ project, jobs, draft, selected, onSelect, onChange, onPlay, onSeek, current,
-  selectedSegment, onSelectSegment, onCandidateSaved, onError, view, onViewChange, onResetProgress, resetting, highlightedFields = [] }: {
+  selectedSegment, onSelectSegment, onCandidateSaved, onError, onRecheck, view, onViewChange, onResetProgress, resetting, candidateActions, highlightedFields = [] }: {
   project: Project; jobs: Job[]; draft: Draft; selected: string | null;
   onSelect: (job: Job) => void; onChange: (values: Partial<Draft>) => void;
   onPlay: (start: number, end: number) => void; onSeek: (seconds: number) => void; current: number;
   selectedSegment: string | null; onSelectSegment: (segment: NumberedCandidate, seconds?: number) => void;
   onCandidateSaved: (id: string, previousRevision: number, revision: number) => void;
+  onRecheck: (candidateId: string, start: number, end: number) => Promise<string>;
   onError: (message: string) => void; view: TimeWindow; onViewChange: (view: TimeWindow) => void;
   onResetProgress: () => Promise<void>; resetting: boolean; highlightedFields?: string[];
+  candidateActions?: ReactNode;
 }) {
   const workspace = useRef<HTMLElement>(null);
   const track = useRef<HTMLDivElement>(null);
@@ -59,6 +61,8 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   const thumbnails = project.thumbnails.filter(t => t.time >= from && t.time <= to).slice(0, 14);
   const selectionInView = valid && draft.start < to && finish > from;
   const crowdedMarkers = trackWidth > 0 && (draft.victory - draft.start) / span * trackWidth < 96;
+
+  useEffect(() => { setRangeError(""); }, [draft.candidate_id]);
 
   useEffect(() => {
     const element = track.current;
@@ -94,20 +98,11 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     onSeek(value);
   }
   function editCandidate(candidate: NumberedCandidate) {
-    onSelectSegment(candidate);
-    const postroll = Math.max(5, Math.min(10, candidate.postroll ?? 8));
-    const victory = candidate.victory ?? Math.min(duration - postroll, Math.max(candidate.start + 1 / 30, candidate.end - postroll));
-    const next = { ...draft, start: candidate.start, victory, postroll, candidate_id: candidate.id,
-      candidate_revision: candidate.manual_edit?.revision ?? 0, manually_adjusted: !!candidate.manual_edit,
-      origin: candidate.manual_edit || candidate.verification !== "verified" ? "manual" as const : "agent" as const };
-    onChange(next);
+    if (draft.candidate_id !== candidate.id) onSelectSegment(candidate);
     setRangeError("");
-    if (validSelection(next, duration)) onViewChange(timelineWindow(next.start - 5, next.victory + next.postroll - next.start + 10, duration));
-    requestAnimationFrame(() => {
-      const input = workspace.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
-      input?.focus({ preventScroll: true });
-      workspace.current?.querySelector(".candidate-edit-session")?.scrollIntoView({ block: "nearest" });
-    });
+    const input = workspace.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
+    input?.scrollIntoView({ block: "nearest" });
+    input?.focus({ preventScroll: true });
   }
   async function saveRange() {
     if (!editingCandidate || !valid || !draft.manually_adjusted || savePending.current) return;
@@ -184,15 +179,6 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     </div>
     {valid && !selectionInView && <p className="workbench-outside">目前剪輯區間在可視範圍外
       <button className="text-button" onClick={() => onViewChange(timelineWindow(draft.start - 5, finish - draft.start + 10, duration))}>回到目前剪輯</button></p>}
-    {editingCandidate && <div className="candidate-edit-session" role="group" aria-label={`正在編輯片段 #${editingCandidate.number}`}>
-      <div><strong><Pencil size={14} aria-hidden="true" />編輯片段 #{editingCandidate.number}
-        {draft.manually_adjusted && <span className="manual-adjustment-badge">已手動調整</span>}</strong>
-        <p>{rangeSaved ? "人工調整已儲存；匯出前請再核對完整片段。" : "拖曳上方邊界或修改下方時間，再儲存區間。"}</p>
-        {editingCandidate.victory === null && <p>勝利時間尚未確認，目前為暫定值，請定位勝利畫面後調整。</p>}</div>
-      <button type="button" className="secondary" disabled={!valid || !draft.manually_adjusted || savingRange || rangeSaved} onClick={() => void saveRange()}>
-        <Save size={14} aria-hidden="true" />{savingRange ? "儲存中…" : rangeSaved ? "區間已儲存" : "儲存區間"}</button>
-      {rangeError && <p className="inline-error" role="alert">{rangeError}</p>}
-    </div>}
     <section className="workbench-timing" aria-label="剪輯設定">
       <h2 className="sr-only">剪輯設定</h2>
       {(["start", "victory"] as const).map(edge => <div className="workbench-time-field" key={edge}>
@@ -216,8 +202,18 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
       <span><i className="source-legend-selection" aria-hidden="true" />實框：匯出範圍</span>
       <span><i className="source-legend-postroll" aria-hidden="true" />淡色區：收尾，仍會匯出</span>
     </div>
+    <div className="workbench-candidate-actions">{candidateActions}</div>
     <CandidateTimeline project={project} jobs={jobs} draft={draft} segments={segments} selected={selectedSegment} view={view}
-      current={current} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onEdit={editCandidate} onError={onError} />
+      current={current} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onEdit={editCandidate} onError={onError} onRecheck={onRecheck} />
+    {editingCandidate && <div className="candidate-edit-session" role="group" aria-label={`正在編輯片段 #${editingCandidate.number}`}>
+      <div><strong><Pencil size={14} aria-hidden="true" />編輯片段 #{editingCandidate.number}
+        {draft.manually_adjusted && <span className="manual-adjustment-badge">已手動調整</span>}</strong>
+        <p>{rangeSaved ? "區間已儲存，可直接匯出。" : "修改暫存於此瀏覽器，切換片段後可繼續編輯。"}</p>
+        {editingCandidate.victory === null && <p>勝利時間尚未確認，目前為暫定值，請定位勝利畫面後調整。</p>}</div>
+      <button type="button" className="secondary" disabled={!valid || !draft.manually_adjusted || savingRange || rangeSaved} onClick={() => void saveRange()}>
+        <Save size={14} aria-hidden="true" />{savingRange ? "儲存中…" : rangeSaved ? "區間已儲存" : "儲存區間"}</button>
+      {rangeError && <p className="inline-error" role="alert">{rangeError}</p>}
+    </div>}
     <div id="workbench-evidence" hidden={!showEvidence}>
       <AIWorkspaceTimeline project={project} jobs={jobs} view={view} current={current} onSeek={onSeek} onResetProgress={onResetProgress} resetting={resetting} />
     </div>

@@ -5,8 +5,20 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from typing import Literal
 
 from .process import ToolMissingError, resolve_tool_command
+
+DownloadQuality = Literal["best", "2160", "1440", "1080", "720", "480"]
+
+
+def quality_format(quality: DownloadQuality = "best") -> str:
+    """Keep the best source, or the best format at/below the selected height."""
+    if quality == "best":
+        return "bv*+ba/b"
+    if quality not in {"2160", "1440", "1080", "720", "480"}:
+        raise ValueError("不支援的下載畫質，請重新選擇。")
+    return f"bv*[height<={quality}]+ba/b[height<={quality}]"
 
 
 def javascript_runtime() -> str:

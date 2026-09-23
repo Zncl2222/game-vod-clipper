@@ -31,6 +31,12 @@ export default function TimelineZoom({ duration, view, current, selection, onCha
   return <div className="timeline-navigation" role="group" aria-label="時間軸縮放與導航">
     <div className="timeline-toolbar">
       <div className="timeline-view-label"><strong>剪輯與原片對照</strong><span>{time(view.from)}–{time(view.to)}</span></div>
+      <div className="timeline-shortcuts">
+        {children}
+        <button type="button" aria-label="放大片段" title="讓選取範圍填滿時間軸" disabled={!validSelection} onClick={() => onChange(timelineWindow(selection.from - 5, selection.to - selection.from + 10, duration))}>目前剪輯</button>
+        <button type="button" aria-label="定位播放頭" title="移到目前播放位置" onClick={() => onChange(timelineWindow(current - span / 2, span, duration))}><LocateFixed size={14} /></button>
+        <button type="button" aria-label="看全片" title="重設為全片" onClick={() => onChange({ from: 0, to: duration })}><Maximize2 size={13} />全片</button>
+      </div>
       <div className="timeline-zoom-controls">
         <button type="button" aria-label="縮小時間軸" title="縮小時間軸" disabled={level <= .001} onClick={() => zoom(.5)}><Minus size={14} /></button>
         <input type="range" aria-label="時間軸縮放倍率" min={0} max={maxLevel} step="any" value={level}
@@ -38,12 +44,6 @@ export default function TimelineZoom({ duration, view, current, selection, onCha
           onChange={e => zoom(2 ** (Number(e.target.value) - level))} />
         <button type="button" aria-label="放大時間軸" title="放大時間軸" disabled={level >= maxLevel - .001} onClick={() => zoom(2)}><Plus size={14} /></button>
         <output>{(duration / span).toFixed(level > 3 ? 0 : 1)}×</output>
-      </div>
-      <div className="timeline-shortcuts">
-        {children}
-        <button type="button" aria-label="放大片段" title="讓選取範圍填滿時間軸" disabled={!validSelection} onClick={() => onChange(timelineWindow(selection.from - 5, selection.to - selection.from + 10, duration))}>目前剪輯</button>
-        <button type="button" aria-label="定位播放頭" title="移到目前播放位置" onClick={() => onChange(timelineWindow(current - span / 2, span, duration))}><LocateFixed size={14} /></button>
-        <button type="button" aria-label="看全片" title="重設為全片" onClick={() => onChange({ from: 0, to: duration })}><Maximize2 size={13} />全片</button>
       </div>
     </div>
     {level > .001 && <div className="timeline-pan-row">

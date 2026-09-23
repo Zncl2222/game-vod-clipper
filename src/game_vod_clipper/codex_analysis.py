@@ -757,7 +757,8 @@ def _run_analysis(store: Store, job: dict, project: dict, progress: AnalysisProg
                         effort_policy=effort_policy)
         prompt = review_prompt(manifest=manifest, purpose=purpose, start=start, end=end,
             duration=project["duration"], last=last, records=registry.records,
-            history=history, exhausted=tracker.exhausted(), focus=registry.records.get(focus_id))
+            history=history, exhausted=tracker.exhausted(), focus=registry.records.get(focus_id),
+            review_target=bounds.get("review_target"))
         (packet_work / "prompt.txt").write_text(prompt, encoding="utf-8")
         model_started = time.monotonic()
         data, tokens = invoke_codex(packet_work, images, prompt, MODEL_CALL_TIMEOUT,

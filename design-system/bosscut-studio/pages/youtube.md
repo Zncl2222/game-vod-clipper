@@ -18,8 +18,18 @@ primary/secondary buttons and native dialog interaction.
   with an explicit show-all action, individual cancel/retry and open-workspace
   controls. Closing the dialog preserves queued work. Failed submissions retain
   selection. Selection itself never starts work.
+  Show real per-stage progress with video/audio labels, bytes, transfer rate and
+  estimated time remaining. Unknown totals and merging use indeterminate bars.
+  Preview encoding has its own percentage. Explain queue positions and waiting
+  reasons; delayed retries do not hold later eligible videos. Show missing updates
+  as waiting for a response, without presenting an old speed or ETA as current.
 - The visible AI checkbox and model select apply to imports. Future-stream watching
   is an optional disclosure, off by default, with its saved model shown when enabled.
+- A labeled **保留畫質** select defaults to highest available on every new import dialog.
+  Offer explicit resolution caps including 1440p and 2160p; explain that the 720p
+  preview does not limit export resolution. URL, single, batch and future-stream imports
+  share these choices. Queue entries retain their submitted choice through retry and
+  restart, and show the actual source height once prepared. Existing sources stay intact.
 - Put **上傳 YouTube** next to download on each completed clip. Pre-fill the title
   and source range, default privacy to private, and require the audience choice.
   Show the destination channel and selected privacy beside the confirm action.

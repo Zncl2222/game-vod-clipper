@@ -38,7 +38,7 @@ export default function BossReviewDock({ jobs, segmentCount, onSearch, onReset, 
       <button className="secondary" disabled={busy || resetting} onClick={() => act(working ? "cancel" : retry ? "retry" : undefined)}>
         {busy ? "處理中…" : working ? "停止搜尋" : retry ? (job?.resumable || result?.can_continue ? "接續細查" : "重新搜尋") : "一鍵搜尋成功挑戰"}
       </button>
-      <button className="text-button reset-analysis" disabled={busy || resetting} onClick={() => act("reset")} aria-label="重置分析結果" title="停止分析並清除這支影片的查看進度、候選與剪輯草稿；保留原片與成品。">清除全部</button>
+      <button className="text-button reset-analysis" disabled={busy || resetting} onClick={() => act("reset")} aria-label="重置分析結果" title="停止分析並清除這支影片的查看進度、候選與剪輯草稿；保留原片與成品。">重置分析</button>
     </div>
     <details className="dock-details"><summary>分析詳情</summary>
     <p>{working ? job.stage : result?.summary}</p>

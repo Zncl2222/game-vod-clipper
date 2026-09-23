@@ -16,6 +16,8 @@ from urllib.parse import urlencode, urlparse
 import httpx
 
 SCOPES = {"https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/youtube.upload"}
+PLAYLIST_SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
+PLAYLIST_ID = re.compile(r"[A-Za-z0-9_-]{1,150}\Z")
 API = "https://www.googleapis.com/youtube/v3/"
 TOKEN = "https://oauth2.googleapis.com/token"
 VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}\Z")
@@ -88,7 +90,11 @@ def google_error(response: httpx.Response):
                            "再由「帳號選項」中斷連接並重新授權。", 403, code="insufficientLivePermissions")
     if reasons & {"insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}:
         raise YouTubeError("YouTube 授權缺少這項操作所需的權限。請中斷連接後重新登入，"
-                           "同意讀取 YouTube 資料及上傳影片兩項權限。", 403, code="insufficientPermissions")
+                           "同意操作需要的 YouTube 權限；加入清單請使用「授權播放清單」。", 403, code="insufficientPermissions")
+    if reasons & {"playlistNotFound", "playlistForbidden", "playlistItemsNotAccessible", "playlistOperationUnsupported"}:
+        raise YouTubeError("這個播放清單已不存在或無法編輯，請到 YouTube 確認清單與頻道權限。", 422)
+    if "playlistContainsMaximumNumberOfVideos" in reasons:
+        raise YouTubeError("播放清單已滿，請先在 YouTube 整理清單後重試。", 422)
     if "youtubeSignupRequired" in reasons:
         raise YouTubeError("這個 Google 帳號尚未建立 YouTube 頻道。請先在 YouTube 建立頻道，或重新登入並選擇已有的頻道。", 403,
                            code="youtubeSignupRequired")
@@ -114,7 +120,8 @@ class YouTubeAccount:
             self.error = "登入已逾時，請重新連接 YouTube。"
         return {"configured": bool(self.files.read("client")), "connected": bool(account.get("channel")),
                 "channel": account.get("channel"), "pending": bool(self.pending), "error": self.error,
-                "reconnect_required": bool(account.get("reconnect_required"))}
+                "reconnect_required": bool(account.get("reconnect_required")),
+                "playlist_write_enabled": PLAYLIST_SCOPE in account.get("scopes", [])}
 
     def configure(self, config: dict):
         if self.status()["connected"] or self.pending:
@@ -130,7 +137,7 @@ class YouTubeAccount:
         self.files.write("client", {"kind": kind, "client_id": data["client_id"], "client_secret": data["client_secret"]})
         self.error = None
 
-    def begin(self, redirect_uri: str):
+    def begin(self, redirect_uri: str, *, playlists: bool = False):
         config = self.files.read("client")
         if not config:
             raise YouTubeError("請先選擇 Google OAuth 設定檔。", 422)
@@ -144,7 +151,8 @@ class YouTubeAccount:
         self.error = None
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         query = {"client_id": config["client_id"], "redirect_uri": redirect_uri, "response_type": "code",
-                 "scope": " ".join(sorted(SCOPES)), "access_type": "offline", "prompt": "consent",
+                 "scope": " ".join(sorted(SCOPES | ({PLAYLIST_SCOPE} if playlists or self.status()["playlist_write_enabled"] else set()))),
+                 "access_type": "offline", "prompt": "consent",
                  "state": state, "code_challenge": challenge, "code_challenge_method": "S256"}
         return {"url": "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(query), "state": state}
 
@@ -186,6 +194,7 @@ class YouTubeAccount:
         item = items[0]
         self.files.write("account", {"access_token": token["access_token"], "refresh_token": token["refresh_token"],
             "expires": time.time() + float(token.get("expires_in", 3600)),
+            "scopes": token.get("scope", "").split(),
             "channel": {"id": item["id"], "title": item["snippet"]["title"]}})
         self.error = None
 
@@ -210,6 +219,8 @@ class YouTubeAccount:
                     google_error(response)
                 token = response.json()
                 data.update(access_token=token["access_token"], expires=time.time() + float(token.get("expires_in", 3600)))
+                if "scope" in token:
+                    data["scopes"] = token["scope"].split()
                 self.files.write("account", data)
             return data["access_token"]
 
@@ -227,6 +238,43 @@ class YouTubeAccount:
         if response.status_code != 200:
             google_error(response)
         return response.json()
+
+    def require_playlist_access(self):
+        if not self.status()["playlist_write_enabled"]:
+            raise YouTubeError("請先按「授權播放清單」，同意管理播放清單的權限。仍可選擇不加入清單直接上傳。", 403,
+                               code="playlistPermissionRequired")
+
+    async def playlists(self, channel_id: str, page_token: str = ""):
+        result = await self.api("playlists", part="snippet,status,contentDetails", mine="true", maxResults=50,
+                                **({"pageToken": page_token} if page_token else {}))
+        return {"items": [{"id": item["id"], "title": item["snippet"]["title"],
+                           "privacy": item.get("status", {}).get("privacyStatus", "private"),
+                           "count": item.get("contentDetails", {}).get("itemCount", 0)}
+                          for item in result.get("items", []) if item.get("snippet", {}).get("channelId") == channel_id],
+                "next_page_token": result.get("nextPageToken", "")}
+
+    async def owned_playlist(self, playlist_id: str, channel_id: str):
+        if not PLAYLIST_ID.fullmatch(playlist_id):
+            raise YouTubeError("播放清單編號無效。", 422)
+        result = await self.api("playlists", part="snippet", id=playlist_id)
+        item = next((item for item in result.get("items", []) if item.get("id") == playlist_id), None)
+        if not item or item.get("snippet", {}).get("channelId") != channel_id:
+            raise YouTubeError("請選擇目前 YouTube 頻道擁有的播放清單，或重新整理清單。", 422)
+        return item
+
+    async def add_to_playlist(self, playlist_id: str, video_id: str, channel_id: str):
+        self.require_playlist_access()
+        await self.owned_playlist(playlist_id, channel_id)
+        # Check before every insertion, including retries after a lost response.
+        existing = await self.api("playlistItems", part="id", playlistId=playlist_id, videoId=video_id, maxResults=1)
+        if existing.get("items"):
+            return
+        response = await self.authorized("POST", API + "playlistItems", params={"part": "snippet"},
+            json={"snippet": {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}})
+        if response.status_code not in {200, 201}:
+            google_error(response)
+        if not response.json().get("id"):
+            raise YouTubeError("尚未確認加入播放清單的結果，請稍後重試。", 502)
 
     async def broadcasts(self, page_token: str = ""):
         result = await self.api("liveBroadcasts", part="snippet,status", broadcastStatus="completed", broadcastType="all",

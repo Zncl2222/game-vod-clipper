@@ -1,8 +1,9 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import BossReviewDock from "./BossReviewDock";
+import MediaProgress from "./MediaProgress";
 import FinishedClips from "./FinishedClips";
 import EditorTools from "./EditorTools";
-import { draftStorageKey, readWorkingDraft } from "./editorDrafts";
+import { candidateDraftStorageKey, draftStorageKey, readCandidateDrafts, readWorkingDraft } from "./editorDrafts";
 import { validSelection } from "./SelectionOverlay";
 import { timelineWindow, type TimeWindow } from "./TimelineZoom";
 import ClipWorkspace, { candidates } from "./ClipWorkspace";
@@ -79,12 +80,13 @@ export default function App() {
   const editorChat = useRef<EditorChatHandle>(null);
   const aiChat = useRef<ChatHandle>(null);
   const deletedProjects = useRef(new Set<string>());
+  const deletedClips = useRef(new Set<string>());
   useEffect(() => {
     const stream = new EventSource("/api/events");
     stream.onmessage = (event) => {
       const incoming: State = JSON.parse(event.data);
       setState({ projects: incoming.projects.filter(project => !deletedProjects.current.has(project.id)),
-        jobs: incoming.jobs.filter(job => !deletedProjects.current.has(job.project_id)) });
+        jobs: incoming.jobs.filter(job => !deletedProjects.current.has(job.project_id) && !deletedClips.current.has(job.id)) });
       setConnected(true);
     };
     stream.onerror = () => setConnected(false);
@@ -118,6 +120,12 @@ export default function App() {
       if (next) localStorage.setItem("bosscut:selected", next.id);
       else localStorage.removeItem("bosscut:selected");
     }
+  }
+  function deleteClip(projectId: string, id: string) {
+    deletedClips.current.add(id);
+    setState(previous => ({ ...previous, jobs: previous.jobs.filter(job => job.id !== id) }));
+    try { localStorage.removeItem(draftStorageKey(projectId, id)); }
+    catch { /* The server has already removed the clip. */ }
   }
   const projectJobs = state.jobs.filter((j) => j.project_id === project?.id);
   const mediaJobs = projectJobs.filter((job) => job.kind !== "analyze");
@@ -187,9 +195,9 @@ export default function App() {
         <header className="topbar">
           <WorkflowSteps ready={!!project?.ready} exported={exported} />
           <div className="topbar-right">
-            {project?.ready && <button type="button" className="topbar-tools" aria-label="更多工具" aria-haspopup="dialog"
+            {project?.ready && <button type="button" className="topbar-tools" aria-label="專案工具" title="草稿管理、Agent 匯入與處理紀錄" aria-haspopup="dialog"
               aria-controls="editor-tools" aria-describedby={mediaJobStatus ? "tools-job-status" : undefined} onClick={() => setToolsOpen(true)}>
-              <SlidersHorizontal size={16} aria-hidden="true" />更多工具
+              <SlidersHorizontal size={16} aria-hidden="true" />專案工具
               {mediaJobStatus && <span id="tools-job-status" className="tools-job-status">{mediaJobStatus}</span>}
             </button>}
             <button className="topbar-help" onClick={() => setGuide(true)}><CircleHelp size={16} />操作指南</button>
@@ -246,6 +254,10 @@ export default function App() {
               onJobAction={action}
               chatRef={editorChat}
               onSearch={async () => { await aiChat.current?.search(); }}
+              onRecheck={async (candidateId, start, end) => {
+                if (!aiChat.current) throw new Error("AI 助理尚未就緒，請稍後再試。");
+                return aiChat.current.reviewCandidate(candidateId, start, end);
+              }}
               onContext={setEditorContext}
               onError={setError}
             />
@@ -253,7 +265,9 @@ export default function App() {
             <div className="preparing" role="status">
               {projectJobs.some(active) ? <LoaderCircle className="spin" size={36} /> : <CircleHelp size={36} />}
               <h2>{project.title}</h2>
-              <p>{projectJobs.some(active) ? "正在準備影片預覽與時間軸縮圖。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>
+              <p>{projectJobs.some(active) ? "依序下載原片、製作預覽與時間軸縮圖。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>
+              {mediaJobs.filter(job => job.kind === "prepare" && active(job)).slice(0, 1).map(job =>
+                <MediaProgress key={job.id} status={job.status} stage={job.stage} detail={job.media_progress} />)}
               <small>{projectJobs.some(active) ? "準備完成後會自動開啟剪輯。你可以先處理其他專案。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
             </div>
           )}
@@ -267,6 +281,7 @@ export default function App() {
       <ChatPanel
         clips={project?.ready ? <FinishedClips key={project.id} project={project} jobs={projectJobs}
           onUpload={job => { setUploadTarget({ job, project }); setYoutubeOpen(true); }}
+          onDeleted={id => deleteClip(project.id, id)}
           selected={editorContext?.project_id === project.id ? editorContext.clip_id : null}
           onSelect={id => {
             editorChat.current?.loadClip(id);
@@ -315,9 +330,10 @@ function ProcessingHistory({ jobs, ready, onAction }: {
         <div className="job-info">
           <strong>{job.kind === "prepare" ? "準備預覽" : `匯出剪輯 · 版本 ${job.draft?.revision}`}</strong>
           <small>{job.error || ({ succeeded: "已完成", failed: "處理失敗", cancelled: "已取消", interrupted: "服務曾中斷，請重試" }[job.status] ?? job.stage)}</small>
+          {active(job) && job.kind === "prepare" && <MediaProgress status={job.status} stage={job.stage} detail={job.media_progress} label="準備影片進度" />}
         </div>
         {active(job) && <>
-          <div className="progress-track"><div style={{ width: `${job.progress}%` }} /></div>
+          {job.kind !== "prepare" && <div className="progress-track"><div style={{ width: `${job.progress}%` }} /></div>}
           <button className="text-button" onClick={() => onAction(job, "cancel")}>取消</button>
         </>}
         {["failed", "cancelled", "interrupted"].includes(job.status) && !(job.kind === "prepare" && ready) &&
@@ -336,6 +352,7 @@ function Editor({
   chatRef,
   onContext,
   onSearch,
+  onRecheck,
   onReset,
   onResetProgress,
   previewExpanded,
@@ -350,6 +367,7 @@ function Editor({
   onError: (message: string) => void;
   chatRef: Ref<EditorChatHandle>;
   onSearch: () => Promise<void>;
+  onRecheck: (candidateId: string, start: number, end: number) => Promise<string>;
   onReset: () => Promise<void>;
   onResetProgress: () => Promise<void>;
   previewExpanded: boolean;
@@ -364,6 +382,9 @@ function Editor({
   const [draft, setDraft] = useState<Draft>(() => readWorkingDraft(project.id, null, project.draft!));
   const workingDraft = useRef(draft);
   workingDraft.current = draft;
+  const candidateCacheKey = candidateDraftStorageKey(project.id, project.editor_generation ?? project.analysis_generation ?? 0);
+  const candidateDrafts = useRef<Map<string, Draft> | null>(null);
+  if (!candidateDrafts.current) candidateDrafts.current = readCandidateDrafts(candidateCacheKey);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [editingExportId, setEditingExportId] = useState<string | null>(null);
@@ -371,6 +392,8 @@ function Editor({
   const editorIdentity = useRef({ clipId: editingExportId, generation: 0 });
   editorIdentity.current = { clipId: editingExportId, generation: selectionGeneration.current };
   const finished = finishedClips(project.id, jobs);
+  const liveClipIds = useRef(new Set<string>());
+  liveClipIds.current = new Set(finished.map(job => job.id));
   const currentRangeExported = finished.some(job => sameClipRange(job.draft!, draft));
   const draftCandidate = reviewCandidates(project, jobs).find(candidate => candidate.id === draft.candidate_id);
   const candidatePreviouslyExported = !!draftCandidate && candidateExports(project.id, draftCandidate, jobs).length > 0;
@@ -379,7 +402,7 @@ function Editor({
   const serverBaseline = editingExport ? editableClipDraft(editingExport) : project.draft!;
   const acknowledged = savedDrafts.current.get(editingExportId);
   const baseline = acknowledged && acknowledged.revision > serverBaseline.revision ? acknowledged : serverBaseline;
-  type Snapshot = { draft: Draft; view: TimeWindow; current: number; selectedClip: string | null; selectedSegment: string | null };
+  type Snapshot = { draft: Draft; view: TimeWindow; current: number; selectedClip: string | null };
   const snapshots = useRef(new Map<string | null, Snapshot>());
   const pendingSave = useRef<{ clipId: string | null; revision: number } | null>(null);
   const [timelineView, setTimelineView] = useState<TimeWindow>(() => validSelection(draft, duration)
@@ -390,7 +413,7 @@ function Editor({
   const initialSourceTime = useRef(validSelection(draft, duration) ? draft.start : 0);
   const [selectedClip, setSelectedClip] = useState<string | null>(() => draft.origin === "agent"
     ? candidates(project, jobs).find(j => j.result!.start === draft.start && j.result!.victory === draft.victory && j.result!.postroll === draft.postroll)?.id ?? null : null);
-  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const selectedSegment = draftCandidate?.id ?? null;
   const seenCandidates = useRef(new Set<string>());
   const candidateBaseline = useRef<string | null>(!draft.reviewed && draft.revision === 0 && JSON.stringify(draft) === JSON.stringify(project.draft) ? JSON.stringify(draft) : null);
   const [current, setCurrent] = useState(0);
@@ -435,15 +458,25 @@ function Editor({
     end <= duration;
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
   useEffect(() => {
-    try { localStorage.setItem(draftStorageKey(project.id, editingExportId), JSON.stringify(draft)); }
+    if (editingExportId && !editingExport) return;
+    try {
+      localStorage.setItem(draftStorageKey(project.id, editingExportId), JSON.stringify(draft));
+      if (!editingExportId && draft.candidate_id) {
+        candidateDrafts.current!.set(draft.candidate_id, draft);
+        localStorage.setItem(candidateCacheKey, JSON.stringify(Object.fromEntries(candidateDrafts.current!)));
+      }
+    }
     catch { onError("無法暫存瀏覽器草稿；離開前請按「儲存草稿」。"); }
-  }, [draft, project.id, editingExportId, onError]);
+  }, [draft, project.id, editingExportId, editingExport, candidateCacheKey, onError]);
   useEffect(() => {
     onContext({ project_id: project.id, title: project.title, duration, draft, clip_id: editingExportId,
       selection_generation: selectionGeneration.current, analysis_generation: project.analysis_generation ?? 0 });
   }, [draft, editingExportId, project.id, project.title, project.analysis_generation, duration, onContext]);
   useImperativeHandle(chatRef, () => ({
-    loadClip: id => switchWorkspace(id),
+    loadClip: id => {
+      switchWorkspace(id);
+      focusTiming();
+    },
     apply(action, expected) {
       if (resetPending.current || resetting) return "影片正在重置，未套用舊操作。";
       if ((expected.analysis_generation ?? 0) !== (project.analysis_generation ?? 0)) return "影片已重置，未套用舊操作。";
@@ -453,9 +486,9 @@ function Editor({
       if (action.kind === "select_candidate") {
         const segment = reviewCandidates(project, jobs).find(c => c.id === action.candidate_id);
         if (!segment) return "候選片段已不存在，請重新選取。";
-        selectSegment(segment);
-        markAI(`已選取片段 #${segment.number}，可在時間軸預覽與核對`, ["seek"]);
-        return `已選取 #${segment.number} · ${time(segment.start)}–${time(segment.end)}`;
+        const selectedDraft = selectSegment(segment)!;
+        markAI(`正在編輯片段 #${segment.number}，預覽與匯出使用同一區間`, ["seek"]);
+        return `已選取 #${segment.number} · ${time(selectedDraft.start)}–${time(selectedDraft.victory + selectedDraft.postroll)}`;
       }
       if (action.kind === "seek") {
         if (action.seconds === null || !Number.isFinite(action.seconds) || action.seconds < 0 || action.seconds > duration) return "時間無效，未跳轉。";
@@ -487,7 +520,7 @@ function Editor({
     if (clipId === editingExportId || resetPending.current) return;
     const job = clipId ? finished.find(item => item.id === clipId) : null;
     if (clipId && !job) { onError("這個成品已不存在，請重新整理清單。"); return; }
-    snapshots.current.set(editingExportId, { draft, view: timelineView, current, selectedClip, selectedSegment });
+    snapshots.current.set(editingExportId, { draft, view: timelineView, current, selectedClip });
     const base = job ? editableClipDraft(job) : project.draft!;
     const known = savedDrafts.current.get(clipId);
     const nextBase = known && known.revision > base.revision ? known : base;
@@ -503,7 +536,6 @@ function Editor({
     setEditingExportId(clipId);
     setDraft(nextDraft);
     setSelectedClip(restored?.selectedClip ?? null);
-    setSelectedSegment(restored?.selectedSegment ?? null);
     setTimelineView(restored?.view ?? (validSelection(nextDraft, duration)
       ? timelineWindow(nextDraft.start - 5, nextDraft.victory + nextDraft.postroll - nextDraft.start + 10, duration)
       : { from: 0, to: duration }));
@@ -514,13 +546,23 @@ function Editor({
     previewPanel.current?.scrollIntoView({ block: "start" });
     previewPanel.current?.querySelector<HTMLButtonElement>(".source-workspace-button")?.focus({ preventScroll: true });
   }
+  useEffect(() => {
+    // Deletion can arrive through our dialog or a different browser tab.
+    const cached = new Set([editingExportId, ...snapshots.current.keys(), ...savedDrafts.current.keys()]);
+    if (editingExportId && !liveClipIds.current.has(editingExportId)) switchWorkspace(null);
+    for (const id of cached) {
+      if (!id || liveClipIds.current.has(id)) continue;
+      snapshots.current.delete(id);
+      savedDrafts.current.delete(id);
+      try { localStorage.removeItem(draftStorageKey(project.id, id)); } catch { /* Cache only. */ }
+    }
+  }, [jobs, editingExportId]);
   function change(values: Partial<Draft>) {
     setAiFeedback(null);
     setSelectedClip(null);
     setDraft(d => {
       const timingChanged = (["start", "victory", "postroll"] as const).some(key => values[key] !== undefined && values[key] !== d[key]);
-      const aiReplacement = values.origin === "agent" && values.candidate_id === undefined;
-      return { ...d, ...(aiReplacement ? { candidate_id: null, candidate_revision: null, manually_adjusted: false } : {}),
+      return { ...d,
         ...(timingChanged && values.origin === undefined ? { origin: "manual" as const, manually_adjusted: true } : {}),
         ...values, reviewed: false };
     });
@@ -530,6 +572,9 @@ function Editor({
     const rebase = (value: Draft) => value.candidate_id === id && (value.candidate_revision ?? 0) === previousRevision
       ? { ...value, candidate_revision: revision } : value;
     setDraft(rebase);
+    for (const [key, cached] of candidateDrafts.current!) candidateDrafts.current!.set(key, rebase(cached));
+    try { localStorage.setItem(candidateCacheKey, JSON.stringify(Object.fromEntries(candidateDrafts.current!))); }
+    catch { /* Saved candidate corrections remain available on the server. */ }
     for (const [key, snapshot] of snapshots.current) snapshots.current.set(key, { ...snapshot, draft: rebase(snapshot.draft) });
     // A range save may finish while a different source/clip workspace is open.
     for (const target of [null, ...finished.map(job => job.id)]) {
@@ -600,6 +645,7 @@ function Editor({
         "PUT",
         submitted,
       );
+      if (!mounted.current || (target && !liveClipIds.current.has(target))) return;
       savedDrafts.current.set(target, saved);
       // The response belongs to the submitted workspace, even if the user switched.
       const snapshot = snapshots.current.get(target);
@@ -659,6 +705,7 @@ function Editor({
         victory: candidate.victory,
         postroll: candidate.postroll,
         origin: "agent",
+        candidate_id: null, candidate_revision: null, manually_adjusted: false,
       });
       seek(candidate.start);
     } catch (e) {
@@ -667,7 +714,7 @@ function Editor({
   }
   const searchingId = jobs.find(j => j.kind === "analyze" && active(j))?.id;
   useEffect(() => {
-    if (searchingId) candidateBaseline.current = editingExportId || draft.reviewed ? null : JSON.stringify(draft);
+    if (searchingId) candidateBaseline.current = editingExportId || draft.reviewed || draft.candidate_id ? null : JSON.stringify(draft);
   }, [searchingId]);
   function selectClip(job: Job, navigate = true) {
     if (!candidates(project, [job]).length) return;
@@ -675,6 +722,11 @@ function Editor({
     const candidate = reviewCandidates(project, jobs).find(segment => segment.victory !== null && sameClipRange(
       { start: segment.start, victory: segment.victory, postroll: segment.postroll ?? 8 },
       { start: result.start!, victory: result.victory!, postroll: result.postroll }));
+    if (navigate && candidate) {
+      selectSegment(candidate);
+      setSelectedClip(job.id);
+      return;
+    }
     if (navigate) video.current?.pause();
     setDraft(d => ({ ...d, start: result.start!, victory: result.victory!, postroll: result.postroll, origin: "agent", reviewed: false,
       candidate_id: candidate?.id ?? null, candidate_revision: candidate?.manual_edit?.revision ?? null, manually_adjusted: false }));
@@ -685,10 +737,44 @@ function Editor({
     markAI("候選片段已放入時間軸，可直接預覽與拖曳調整。", ["start", "victory", "postroll"]);
   }
   function selectSegment(segment: NumberedCandidate, seconds?: number) {
+    if (resetPending.current) return;
     video.current?.pause();
-    setSelectedSegment(segment.id);
-    if (seconds === undefined) setTimelineView(timelineWindow(segment.start - 5, segment.end - segment.start + 10, duration));
-    seek(seconds ?? segment.start);
+    if (!editingExportId && draft.candidate_id === segment.id) {
+      seek(seconds ?? draft.start);
+      return draft;
+    }
+    if (!editingExportId && draft.candidate_id) candidateDrafts.current!.set(draft.candidate_id, draft);
+    // Candidate selection always edits the source workspace. Keep any completed
+    // clip's independent draft intact so returning to it restores its changes.
+    const sourceBase = savedDrafts.current.get(null) ?? project.draft!;
+    const sourceDraft = editingExportId
+      ? snapshots.current.get(null)?.draft ?? readWorkingDraft(project.id, null, sourceBase) : draft;
+    if (editingExportId) snapshots.current.set(editingExportId, { draft, view: timelineView, current, selectedClip });
+    const postroll = Math.max(5, Math.min(10, segment.postroll ?? 8));
+    const victory = segment.victory ?? Math.min(duration - postroll, Math.max(segment.start + 1 / 30, segment.end - postroll));
+    const cached = candidateDrafts.current!.get(segment.id);
+    const next: Draft = cached && (cached.candidate_revision ?? 0) >= (segment.manual_edit?.revision ?? 0)
+      ? { ...cached, revision: sourceDraft.revision }
+      : { ...sourceDraft, title: "", start: segment.start, victory, postroll, reviewed: false,
+        candidate_id: segment.id, candidate_revision: segment.manual_edit?.revision ?? 0,
+        manually_adjusted: !!segment.manual_edit, origin: segment.manual_edit || segment.verification !== "verified" ? "manual" : "agent" };
+    selectionGeneration.current++;
+    editorIdentity.current = { clipId: null, generation: selectionGeneration.current };
+    setEditingExportId(null);
+    setDraft(next);
+    setSelectedClip(null);
+    setSavedMessage("");
+    setAiFeedback(null);
+    candidateBaseline.current = null;
+    // Keep the time scale stable during pointer scrubbing.
+    if (seconds === undefined) setTimelineView(timelineWindow(next.start - 5, next.victory + next.postroll - next.start + 10, duration));
+    seek(seconds ?? next.start);
+    return next;
+  }
+  function focusTiming() {
+    const input = previewPanel.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
+    input?.scrollIntoView({ block: "nearest" });
+    input?.focus({ preventScroll: true });
   }
   useEffect(() => {
     const candidate = candidates(project, jobs)[0];
@@ -750,7 +836,7 @@ function Editor({
                 }
               }}
             />
-            <span className="preview-badge">{editingExport ? `成品 #${finished.findIndex(job => job.id === editingExport.id) + 1} · 編輯中` : "原片 · 編輯中"}</span>
+            <span className="preview-badge">{editingExport ? `成品 #${finished.findIndex(job => job.id === editingExport.id) + 1} · 編輯中` : draftCandidate ? `片段 #${draftCandidate.number} · 編輯中` : "原片 · 編輯中"}</span>
           </div>
           <div className="transport">
             <button className="icon-button transport-play" aria-label={playing ? "暫停原片" : "播放原片"}
@@ -804,22 +890,28 @@ function Editor({
           <ClipWorkspace project={project} jobs={jobs} draft={draft} selected={selectedClip}
             view={timelineView} onViewChange={setTimelineView}
             selectedSegment={selectedSegment} onSelectSegment={selectSegment} onError={onError}
+            onRecheck={onRecheck}
+            candidateActions={<BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />}
             onCandidateSaved={candidateSaved}
             onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current}
             onResetProgress={() => reset(true)} resetting={resetting} highlightedFields={aiFeedback?.fields} />
           </div>
-          <div className="compact-export">
+          <div className="compact-export" role="group" aria-label="片段命名與匯出">
             <div className="export-review">
-            <div className="draft-status" role="status"><span className={`tiny-dot ${currentRangeExported ? "is-exported" : ""}`} />
-              {savedMessage || (dirty ? "修改已暫存於此瀏覽器" : "草稿已儲存")}
-              <span className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</span>
+            <div className="clip-name-field">
+              <label htmlFor="clip-title">片段名稱 <span>選填</span></label>
+              <input id="clip-title" type="text" maxLength={100} value={draft.title ?? ""}
+                placeholder="例如：瑪蓮妮亞・無傷通關" aria-describedby="clip-title-help"
+                onChange={event => change({ title: event.target.value })} />
+              <small id="clip-title-help" className="sr-only">隨草稿儲存，匯出後用於成品名稱與下載檔名。</small>
             </div>
-            <p className={`export-range-status ${currentRangeExported ? "is-exported" : ""}`} role="status">
-              {currentRangeExported ? <><Check size={14} aria-hidden="true" />目前區間已匯出</>
-                : candidatePreviouslyExported ? "此片段曾匯出，目前區間有修改" : "匯出會自動儲存目前區間"}
-            </p>
+            <div className="active-edit-target" role="group" aria-label="目前編輯與匯出區間">
+              <strong>{editingExport ? `正在編輯成品 #${finished.findIndex(job => job.id === editingExport.id) + 1}`
+                : draftCandidate ? `正在編輯 #${draftCandidate.number}` : "目前剪輯"}</strong>
+              <span>{time(draft.start, true)} → {time(end, true)}</span>
+              <button type="button" onClick={focusTiming}>調整時間</button>
             </div>
-            <BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />
+            </div>
             <div className="export-action-group">
             <button
               className="primary export-button"
@@ -839,6 +931,16 @@ function Editor({
               {busy ? "正在提交…" : jobs.some(j => j.kind === "export" && active(j)) ? "正在匯出…" : editingExportId ? "另存新成品" : "匯出 MP4"}
             </button>
             <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : editingExportId ? "保留原成品，不覆寫原檔" : "MP4 影片 · 含原片音訊"}</p>
+            </div>
+            <div className="export-status-row">
+              <div className="draft-status" role="status"><span className={`tiny-dot ${currentRangeExported ? "is-exported" : ""}`} />
+                {savedMessage || (dirty ? "修改已暫存於此瀏覽器" : "草稿已儲存")}
+              </div>
+              <span className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</span>
+              <p className={`export-range-status ${currentRangeExported ? "is-exported" : ""}`} role="status">
+                {currentRangeExported ? <><Check size={14} aria-hidden="true" />目前區間已匯出</>
+                  : candidatePreviouslyExported ? "此片段曾匯出，目前區間有修改" : "匯出會自動儲存目前區間"}
+              </p>
             </div>
           </div>
         </section>

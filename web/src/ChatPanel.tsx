@@ -20,7 +20,7 @@ export type EditorChatHandle = {
   loadClip: (id: string) => void;
   apply: (action: ChatAction, expected: EditorContext) => string;
 };
-export type ChatHandle = { search: () => Promise<void> };
+export type ChatHandle = { search: () => Promise<void>; reviewCandidate: (candidateId: string, start: number, end: number) => Promise<string> };
 type Message = { project_id?: string; analysis_generation?: number; id: string; role: "user" | "assistant"; content: string; model?: string; operation?: string; failed?: boolean };
 type Reply = { type: string; reply?: string; model?: string; action?: ChatAction | null; project_id?: string; detail?: string };
 type Conversation = { messages: Message[]; input: string };
@@ -122,7 +122,21 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
     }
     previousGeneration.current = generation;
   }, [context?.project_id, context?.analysis_generation]);
-  useImperativeHandle(searchRef, () => ({ search: async () => { setDrawerTab("ai"); await send(true); } }));
+  useImperativeHandle(searchRef, () => ({
+    search: async () => { setDrawerTab("ai"); await send(true); },
+    reviewCandidate: async (candidateId, start, end) => {
+      if (!context || !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= end || end > context.duration)
+        throw new Error("請先選擇原片內的有效候選區間。");
+      if (!connection?.available || !model) { setSettings(true); throw new Error("請先連接 AI 帳號並選擇模型。"); }
+      if (jobs.some(job => job.project_id === context.project_id && currentAnalysis(job) && active(job)))
+        throw new Error("此影片正在分析，請等候完成或先停止目前任務。");
+      const job = await api<Job>(`/projects/${context.project_id}/analyze`, "POST", {
+        start, end, candidate_id: candidateId, analysis_generation: context.analysis_generation ?? 0,
+        model, effort: effectiveEffort || null,
+      });
+      return job.id;
+    },
+  }));
   const searchValid = !!context && Number.isFinite(searchStart) && Number.isFinite(searchEnd)
     && searchStart >= 0 && searchStart < searchEnd && searchEnd <= context.duration;
 

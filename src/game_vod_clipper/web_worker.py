@@ -9,12 +9,16 @@ import sys
 from pathlib import Path
 
 from .media import clip_video
+from .media_progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
 from .process import resolve_tool_command
 from .web_store import Store
-from .youtube import youtube_command
+from .youtube import quality_format, youtube_command
 
+SOURCE_PREFIX = "__BOSSCUT_SOURCE__"
 
-def command(args: list[str]) -> str:
+def command(args: list[str], *, on_line=None) -> str:
+    if on_line is not None:
+        return streamed_command(args, on_line)
     result = subprocess.run(
         args, capture_output=True, text=True, timeout=6 * 3600, check=False
     )
@@ -46,14 +50,16 @@ def run(root: Path, job_id: str):
     work = root / "runs" / "web" / project["id"]
     work.mkdir(parents=True, exist_ok=True)
 
-    def progress(stage: str, percent: int):
-        store.patch("jobs", job_id, stage=stage, progress=percent)
+    def progress(stage: str, percent: float | None, detail=None):
+        store.patch("jobs", job_id, stage=stage, progress=percent or 0, media_progress=detail)
+
+    reporter = MediaProgress(progress)
 
     if job["kind"] == "prepare":
         progress("檢查來源", 5)
         source = root / project["source"] if project.get("source") else None
         if source is None:
-            progress("下載 YouTube 影片", 10)
+            reporter.emit("正在連接 YouTube，取得影片資訊", "download")
             folder = root / "downloads" / "web" / project["id"]
             folder.mkdir(parents=True, exist_ok=True)
             output = command(
@@ -61,7 +67,11 @@ def run(root: Path, job_id: str):
                 + [
                     "--ignore-config",
                     "--no-playlist",
-                    "--no-progress",
+                    "--newline",
+                    "--progress",
+                    "--progress-delta", "1",
+                    "--progress-template", DOWNLOAD_TEMPLATE,
+                    "--progress-template", POSTPROCESS_TEMPLATE,
                     "--socket-timeout",
                     "30",
                     "--retries",
@@ -71,17 +81,19 @@ def run(root: Path, job_id: str):
                     "--match-filter",
                     "duration <= 21600 & !is_live",
                     "-f",
-                    "bv*[height<=1080]+ba/b[height<=1080]",
+                    quality_format(project.get("download_quality", "best")),
+                    "-S",
+                    "res,fps",
                     "--merge-output-format",
-                    "mp4",
+                    "mkv",
                     "--print",
-                    "after_move:filepath",
+                    f"after_move:{SOURCE_PREFIX}%(filepath)s",
                     "-o",
                     str(folder / "source.%(ext)s"),
                     project["url"],
-                ]
+                ], on_line=reporter.download,
             )
-            paths = [Path(line) for line in output.splitlines() if line.strip()]
+            paths = [Path(line[len(SOURCE_PREFIX):]) for line in output.splitlines() if line.startswith(SOURCE_PREFIX)]
             source = next(
                 (
                     p
@@ -96,7 +108,7 @@ def run(root: Path, job_id: str):
                 )
             store.patch("projects", project["id"], source=str(source.relative_to(root)))
         metadata = probe(source)
-        progress("製作 720p 預覽影片", 25)
+        reporter.emit("製作 720p 預覽影片", "preview", 0)
         preview = work / "preview.mp4"
         command(
             resolve_tool_command("ffmpeg")
@@ -104,6 +116,7 @@ def run(root: Path, job_id: str):
                 "-hide_banner",
                 "-loglevel",
                 "error",
+                "-nostats", "-progress", "pipe:1", "-stats_period", "1",
                 "-y",
                 "-i",
                 str(source),
@@ -132,9 +145,9 @@ def run(root: Path, job_id: str):
                 "-movflags",
                 "+faststart",
                 str(preview),
-            ]
+            ], on_line=reporter.ffmpeg("製作 720p 預覽影片", "preview", metadata["duration"]),
         )
-        progress("建立時間軸縮圖", 80)
+        reporter.emit("建立時間軸縮圖", "thumbnails")
         interval = metadata["duration"] / 24
         # One decode pass, bounded output; no fixed contact sheet that can hide frames.
         command(

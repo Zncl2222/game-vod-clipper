@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, iso_duration
 from .youtube_imports import YouTubeImports
 from .youtube_uploads import YouTubeUploads
+from .youtube import DownloadQuality
 
 ACTIVE = {"queued", "running"}
 
@@ -26,6 +27,7 @@ class ImportBroadcast(BaseModel):
     channel_id: str = Field(min_length=1, max_length=100)
     auto_analyze: bool = True
     model: str = Field(default="", max_length=120)
+    download_quality: DownloadQuality = "best"
 
 
 class WatchSettings(ImportBroadcast):
@@ -50,6 +52,7 @@ class UploadClip(BaseModel):
     privacy: Literal["private", "unlisted", "public"] = "private"
     made_for_kids: bool
     notify_subscribers: bool = False
+    playlist_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,150}$")
 
     @field_validator("title", "description")
     @classmethod
@@ -90,8 +93,9 @@ class YouTubeWorkspace:
         self.stopped = asyncio.Event()
 
     def preferences(self):
-        return self.account.files.read("watch", {"enabled": False, "auto_analyze": True, "model": "", "since": 0,
-                                                  "last_checked": None, "error": None})
+        defaults = {"enabled": False, "auto_analyze": True, "model": "", "download_quality": "best", "since": 0,
+                    "last_checked": None, "error": None}
+        return defaults | self.account.files.read("watch", {})
 
     def status(self):
         return {**self.account.status(), "watch": self.preferences(),
@@ -158,7 +162,7 @@ class YouTubeWorkspace:
             raise YouTubeError("請等直播結束、存檔處理完成後再匯入。", 422)
         if not 10 <= iso_duration(item.get("contentDetails", {}).get("duration", "")) <= 21600:
             raise YouTubeError("目前支援 10 秒至 6 小時的直播存檔。", 422)
-        result = await self.import_source(video_id)
+        result = await self.import_source(video_id, options.download_quality)
         project_id = result["project"]["id"]
         self.store.patch("projects", project_id, title=item["snippet"].get("title", "YouTube 直播"),
             youtube_video_id=video_id, youtube_channel_id=options.channel_id,
@@ -206,10 +210,10 @@ class YouTubeWorkspace:
                     seen = f"{settings['channel_id']}:{item['id']}" in self.account.files.read("imports", {})
                     if ended < settings["since"] or not item["available"] or seen or item["project_id"]:
                         continue
-                    if sum(j["status"] in ACTIVE for j in self.store.all("jobs")) >= 8:
+                    if sum(j["status"] in ACTIVE and j["kind"] == "analyze" for j in self.store.all("jobs")) >= 8:
                         # Revisit this page instead of skipping unqueued videos.
                         raise YouTubeError("工作佇列已滿，下一次檢查會接著匯入。", 429)
-                    imported = await self.import_video(item["id"], ImportBroadcast(**{k: settings[k] for k in ("channel_id", "auto_analyze", "model")}),
+                    imported = await self.import_video(item["id"], ImportBroadcast(**{k: settings[k] for k in ("channel_id", "auto_analyze", "model", "download_quality")}),
                                                        watch_settings=settings)
                     if imported is None:
                         break
@@ -226,7 +230,7 @@ class YouTubeWorkspace:
         for project in self.store.all("projects"):
             if not project.get("ready") or project.get("youtube_analysis_state") != "waiting":
                 continue
-            if sum(j["status"] in ACTIVE for j in self.store.all("jobs")) >= 8:
+            if sum(j["status"] in ACTIVE and j["kind"] == "analyze" for j in self.store.all("jobs")) >= 8:
                 break
             # Persist before awaiting dispatch; its deterministic request ID prevents duplicates.
             self.store.patch("projects", project["id"], youtube_analysis_state="starting")
@@ -241,8 +245,8 @@ class YouTubeWorkspace:
     async def loop(self):
         while not self.stopped.is_set():
             try:
-                await self.advance()
                 await self.imports.advance()
+                await self.advance()
                 watch = self.preferences()
                 if watch["enabled"] and time.time() - (watch["last_checked"] or 0) >= (30 if watch.get("cursor") else 600):
                     await self.sync()
@@ -302,14 +306,14 @@ class YouTubeWorkspace:
             return self.status()
 
         @app.post("/api/youtube/login")
-        async def login(request: Request):
+        async def login(request: Request, playlists: bool = False):
             async with self.lock:
                 self.ensure_idle()
                 origin = request.headers.get("origin") or str(request.base_url).rstrip("/")
                 parsed = urlparse(origin)
                 if parsed.scheme not in {"http", "https"} or parsed.path not in {"", "/"} or parsed.query or parsed.fragment or parsed.username or parsed.password:
                     raise YouTubeError("工作區網址無效。", 422)
-                result = self.account.begin(origin.rstrip("/") + "/api/youtube/callback")
+                result = self.account.begin(origin.rstrip("/") + "/api/youtube/callback", playlists=playlists)
                 response = JSONResponse({"url": result["url"]})
                 response.set_cookie("bosscut_youtube_state", result["state"], httponly=True, samesite="lax",
                                     secure=parsed.scheme == "https", max_age=600, path="/api/youtube/callback")
@@ -400,6 +404,23 @@ class YouTubeWorkspace:
         @app.get("/api/youtube/uploads")
         async def uploads():
             return self.uploads.public_records()
+
+        @app.get("/api/youtube/playlists")
+        async def playlists(channel_id: str, page_token: str = ""):
+            if len(page_token) > 2000:
+                raise YouTubeError("分頁參數無效。", 422)
+            async with self.lock:
+                self.ensure_channel(channel_id)
+                if self.account.pending:
+                    raise YouTubeError("請先完成或取消 YouTube 授權。", 409)
+                return await self.account.playlists(channel_id, page_token)
+
+        @app.post("/api/youtube/uploads/{upload_id}/playlist/retry")
+        async def retry_playlist(upload_id: str):
+            async with self.lock:
+                if self.account.pending:
+                    raise YouTubeError("請先完成或取消 YouTube 授權。", 409)
+                return await self.uploads.retry_playlist(upload_id)
 
         @app.post("/api/youtube/uploads/{export_id}", status_code=202)
         async def upload(export_id: str, body: UploadClip):

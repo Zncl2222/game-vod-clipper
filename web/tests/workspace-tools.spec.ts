@@ -12,7 +12,8 @@ async function workspace(page: Page) {
   const storage: VideoStorage = { bytes: 12_500_000_000, files: 8, incomplete: false, updated_at: 1,
     categories: { sources: { bytes: 10_000_000_000, files: 2 }, exports: { bytes: 500_000_000, files: 4 }, previews: { bytes: 2_000_000_000, files: 2 } } };
   const state: State = { projects: [project], jobs: [] };
-  const controls = { failStorage: false, malformedStorage: false, failSave: false, gate: null as Promise<void> | null, saves: 0, exports: 0, tags: 0 };
+  const controls = { failStorage: false, malformedStorage: false, failSave: false, gate: null as Promise<void> | null,
+    saves: 0, exports: 0, tags: 0, rechecks: [] as { start: number; end: number; candidate_id: string; model: string; analysis_generation: number }[] };
   await page.addInitScript(() => {
     const Native = window.EventSource;
     window.EventSource = class extends Native {
@@ -23,6 +24,8 @@ async function workspace(page: Page) {
       set onerror(_handler: unknown) {}
     };
     window.addEventListener("error", event => { if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation(); }, true);
+    Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value() { this.dataset.played = String(this.currentTime); return Promise.resolve(); } });
+    Object.defineProperty(HTMLMediaElement.prototype, "pause", { configurable: true, value() { this.dataset.pausedAt = String(this.currentTime); } });
   });
   await page.route("**/api/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -32,6 +35,14 @@ async function workspace(page: Page) {
     if (path === "/api/storage") return controls.failStorage ? route.fulfill({ status: 503 })
       : route.fulfill({ json: controls.malformedStorage ? { available: true } : storage });
     if (path.endsWith("/candidate-review")) { controls.tags++; return route.fulfill({ json: {} }); }
+    if (path.endsWith("/analyze") && route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      controls.rechecks.push(body);
+      const job: State["jobs"][number] = { id: `recheck-${controls.rechecks.length}`, project_id: project.id, kind: "analyze",
+        status: "queued", stage: "等待判讀", progress: 0, error: null, draft: null, analysis: body };
+      state.jobs.unshift(job);
+      return route.fulfill({ status: 202, json: job });
+    }
     if (path.endsWith("/draft") && route.request().method() === "PUT") {
       const body = route.request().postDataJSON();
       project.draft = { ...body, revision: body.revision + 1 };
@@ -66,10 +77,48 @@ async function workspace(page: Page) {
     publish: () => page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), state) };
 }
 
+test("selected candidate can be rechecked with its current range and see a separate AI finding", async ({ page }) => {
+  const { controls, state, publish } = await workspace(page);
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  await page.getByLabel("開始時間").fill("22");
+  await page.getByLabel("勝利時間").fill("65");
+  await page.getByRole("button", { name: "請 AI 複判片段 #1" }).click();
+  await expect.poll(() => controls.rechecks.length).toBe(1);
+  expect(controls.rechecks[0]).toMatchObject({ start: 22, end: 73, candidate_id: "scan:one", model: "test-model", analysis_generation: 0 });
+  expect(state.jobs[0].analysis?.candidate_id).toBe("scan:one");
+  await publish();
+  await expect(page.getByRole("group", { name: "片段 #1 AI 複判結果" })).toContainText("等待判讀");
+  await expect(page.getByRole("button", { name: "請 AI 複判片段 #1" })).toBeDisabled();
+  state.jobs[0].status = "succeeded";
+  state.jobs[0].result = { status: "uncertain", start: null, victory: null, postroll: 8,
+    boss: "", summary: "發現疑似死亡後重新挑戰，勝利仍未確認。", warnings: ["需核對重試畫面"],
+    evidence: [{ time: 44, event: "玩家倒下" }], model: "test-model", frames: 30, rounds: 2 };
+  await publish();
+  const result = page.getByRole("group", { name: "片段 #1 AI 複判結果" });
+  await expect(result).toContainText("仍有疑點");
+  await expect(result).toContainText("發現疑似死亡後重新挑戰");
+  await result.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "../runs/candidate-recheck-desktop.png" });
+  expect((await new AxeBuilder({ page }).include(".candidate-detail").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await result.getByRole("button", { name: /玩家倒下/ }).click();
+  await expect(page.locator(".video-wrap video")).toHaveJSProperty("currentTime", 44);
+  await page.getByRole("button", { name: /時間軸片段 #2 / }).click();
+  await expect(page.getByRole("group", { name: "片段 #2 AI 複判結果" })).toHaveCount(0);
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  await expect(result).toContainText("仍有疑點");
+  state.jobs[0].result = { ...state.jobs[0].result!, status: "candidate", start: 80, victory: 130, postroll: 8 };
+  await publish();
+  await expect(result).toContainText("找到可能成功挑戰");
+  await expect(page.getByLabel("開始時間")).toHaveValue("22");
+  await expect(page.getByLabel("勝利時間")).toHaveValue("65");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.getByRole("button", { name: "請 AI 複判片段 #1" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("export needs no keep tag or checkbox and only successful exports leave a persistent mark", async ({ page }) => {
   const { controls, state, publish } = await workspace(page);
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await page.getByRole("button", { name: "編輯片段 #1 區間" }).click();
   await page.getByLabel("開始時間").fill("22");
   await page.getByLabel("勝利時間").fill("65");
   await expect(page.locator(".compact-export input[type=checkbox]")).toHaveCount(0);
@@ -123,6 +172,74 @@ test("export marks respect candidate aliases and exact legacy boundaries, never 
   await expect(page.getByRole("group", { name: "片段 #1 詳情", exact: true }).getByText("已匯出", { exact: true })).toBeVisible();
 });
 
+test("single-click candidate editing preserves each range and previews exactly what will export", async ({ page }) => {
+  const { controls, state } = await workspace(page);
+  const target = page.getByRole("group", { name: "目前編輯與匯出區間", exact: true });
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  await expect(target).toContainText("正在編輯 #1");
+  await expect(page.getByLabel("開始時間")).toHaveValue("20");
+  await target.getByRole("button", { name: "調整時間" }).click();
+  await expect(page.getByLabel("開始時間")).toBeFocused();
+  await page.getByLabel("開始時間").fill("22");
+  await page.getByLabel("勝利時間").fill("65");
+  await expect(target).toContainText("00:00:22.000 → 00:01:13.000");
+  await page.getByRole("button", { name: "下一段", exact: true }).click();
+  await expect(target).toContainText("正在編輯 #2");
+  await page.getByLabel("開始時間").fill("82");
+  await page.getByRole("button", { name: "上一段", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("22");
+  await expect(page.getByLabel("勝利時間")).toHaveValue("65");
+  // Clicking the same annotation or its shortcut must not reset an edited range.
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  await page.getByRole("button", { name: "編輯片段 #1 區間" }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("22");
+  await page.getByRole("button", { name: "預覽 #1", exact: true }).click();
+  await expect(page.locator(".video-wrap video")).toHaveAttribute("data-played", "22");
+  await page.locator(".video-wrap video").evaluate((video: HTMLVideoElement) => {
+    video.currentTime = 73; video.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(page.locator(".video-wrap video")).toHaveAttribute("data-paused-at", "73");
+  await page.reload();
+  await expect(target).toContainText("正在編輯 #1");
+  await page.getByRole("button", { name: "下一段", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("82");
+  await page.route("**/api/codex/chat", route => route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({
+    type: "reply", project_id: "manual-project", reply: "查看第一段", action: { kind: "select_candidate", candidate_id: "scan:one",
+      start: null, victory: null, postroll: null, seconds: null } }) + "\n" }));
+  await page.getByLabel("輸入訊息").fill("查看 #1");
+  await page.getByRole("button", { name: "送出訊息" }).click();
+  await expect(page.locator(".chat-operation")).toContainText("已選取 #1 · 00:00:22–00:01:13");
+  await expect(target).toContainText("正在編輯 #1");
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
+  await expect.poll(() => controls.exports).toBe(1);
+  expect(state.jobs[0].draft).toMatchObject({ candidate_id: "scan:one", start: 22, victory: 65, postroll: 8 });
+  expect(controls.saves).toBe(0);
+  await target.getByRole("button", { name: "調整時間" }).click();
+  await page.screenshot({ path: "../runs/direct-candidate-edit-desktop.png" });
+  expect((await new AxeBuilder({ page }).include(".compact-export").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+});
+
+test("late AI edits are rejected after a candidate round trip", async ({ page }) => {
+  await workspace(page);
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/api/codex/chat", async route => {
+    await gate;
+    await route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", project_id: "manual-project",
+      reply: "調整開始", action: { kind: "set_draft", start: 18, victory: 62, postroll: 8, seconds: null } }) + "\n" });
+  });
+  await page.getByLabel("輸入訊息").fill("開始提前兩秒");
+  const request = page.waitForRequest(request => request.url().endsWith("/codex/chat"));
+  await page.getByRole("button", { name: "送出訊息" }).click();
+  await request;
+  await page.getByRole("button", { name: "下一段", exact: true }).click();
+  await page.getByRole("button", { name: "上一段", exact: true }).click();
+  release();
+  await expect(page.locator(".chat-operation")).toContainText("編輯對象已切換");
+  await expect(page.getByLabel("開始時間")).toHaveValue("20");
+});
+
 test("local capacity shows real totals, keeps stale values on failure and can recover", async ({ page }) => {
   const { controls, storage } = await workspace(page);
   const usage = page.getByLabel("本地影片容量", { exact: true });
@@ -152,7 +269,7 @@ test("local capacity shows real totals, keeps stale values on failure and can re
 test("a candidate with no victory time can be edited, marked, saved and reopened", async ({ page }) => {
   const { project, controls } = await workspace(page);
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("10");
+  await expect(page.getByLabel("開始時間")).toHaveValue("20");
   const edit = page.getByRole("button", { name: "編輯片段 #1 區間" });
   await edit.scrollIntoViewIfNeeded();
   await page.screenshot({ path: "../runs/candidate-edit-button.png" });

@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from urllib.parse import unquote
 from pathlib import Path
 from unittest.mock import patch
 
@@ -113,6 +114,31 @@ class ClipDraftTest(unittest.TestCase):
         self.assertNotEqual(original["id"], edited["id"])
         self.assertIsNone(original["source_job_id"])
         self.assertEqual(edited["source_job_id"], "clip")
+
+    def test_names_persist_in_source_clip_and_export_snapshots(self):
+        title = "瑪蓮妮亞・無傷通關"
+        saved = self.client.put(self.url, json=self.draft | {"title": title}).json()
+        exported = self.client.post("/api/projects/one/exports", json={"revision": saved["revision"], "source_job_id": "clip"}).json()
+        self.assertEqual(exported["draft"]["title"], title)
+        self.assertNotIn("title", self.store.get("jobs", "clip")["draft"])
+        self.assertEqual(Store(self.root).get("jobs", "clip")["edit_draft"]["title"], title)
+        response = self.client.put("/api/projects/one/draft", json=self.original | {"title": "原片草稿"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(Store(self.root).get("projects", "one")["draft"]["title"], "原片草稿")
+        for invalid in ["x" * 101, "名稱\n換行", "名稱\x00", 123]:
+            with self.subTest(title=invalid):
+                self.assertEqual(self.client.put(self.url, json=saved | {"title": invalid}).status_code, 422)
+
+    def test_named_download_uses_safe_filename_without_renaming_stored_media(self):
+        output = self.root / "clips/web/one/clip.mp4"
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"fixture")
+        self.store.patch("jobs", "clip", output="clips/web/one/clip.mp4",
+                         draft=self.original | {"title": "Boss / 瑪蓮妮亞"})
+        response = self.client.get("/api/jobs/clip/download")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Boss _ 瑪蓮妮亞.mp4", unquote(response.headers["content-disposition"]))
+        self.assertEqual(output.read_bytes(), b"fixture")
 
 
 if __name__ == "__main__":

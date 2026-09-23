@@ -83,6 +83,17 @@ class Store:
             db.executemany("DELETE FROM jobs WHERE id=?", keys)
             db.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
+    def delete_clip(self, project_id: str, job_id: str):
+        """Remove only a completed export belonging to this project."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT data FROM jobs WHERE id=?", (job_id,)).fetchone()
+            job = json.loads(row[0]) if row else None
+            if (not job or job["project_id"] != project_id or job["kind"] != "export"
+                    or job["status"] != "succeeded"):
+                raise KeyError(job_id)
+            db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+
     def set_candidate_edit(self, project_id: str, candidate_id: str, edit: dict):
         from .candidates import project_candidates
 

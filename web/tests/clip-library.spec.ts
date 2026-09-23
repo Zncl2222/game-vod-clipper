@@ -33,6 +33,11 @@ async function workspace(page: Page) {
       return route.fulfill({ json: draft });
     }
     if (path.endsWith("/exports")) return route.fulfill({ status: 202, json: { id: "new-export" } });
+    if (route.request().method() === "DELETE" && path.includes("/clips/")) {
+      const id = path.split("/").at(-1)!;
+      state.jobs = state.jobs.filter(job => job.id !== id);
+      return route.fulfill({ json: { deleted: true, id } });
+    }
     return route.fulfill({ status: 204 });
   });
   await page.goto("/");
@@ -88,6 +93,26 @@ test("saving and exporting clip drafts never change the original project or MP4"
   await expect(page.getByLabel("開始時間")).toHaveValue("120");
 });
 
+test("selecting a candidate from a finished clip edits the source and preserves the clip draft", async ({ page }) => {
+  const state = await workspace(page);
+  state.projects[0].review_candidates = [{ id: "scan:one", number: 1, start: 30, end: 70, victory: 62, postroll: 8,
+    kind: "possible_win", confidence: "medium", boss: "第一場", summary: "候選", evidence: [], warnings: [], review: "pending" }];
+  await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), state);
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await page.getByLabel("開始時間").fill("495");
+  await page.getByRole("button", { name: "看全片", exact: true }).click();
+  await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("30");
+  await expect(page.getByRole("button", { name: "原片編輯台", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByLabel("開始時間").fill("31");
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("495");
+  await page.getByRole("button", { name: "回到原片", exact: true }).click();
+  await expect(page.getByLabel("開始時間")).toHaveValue("31");
+  expect(state.jobs[0].draft).toEqual(exports[0].draft);
+});
+
 test("a save response updates its own draft even after switching away and back", async ({ page }) => {
   await workspace(page);
   let release!: () => void;
@@ -99,10 +124,10 @@ test("a save response updates its own draft even after switching away and back",
   await page.getByRole("tab", { name: "成品 2" }).click();
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await page.getByLabel("開始時間").fill("495");
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "專案工具", exact: true }).click();
   const requested = page.waitForRequest(request => request.url().includes("/clips/clip-1/draft"));
   await page.getByRole("button", { name: "儲存草稿", exact: true }).click();await requested;
-  await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "關閉專案工具", exact: true }).click();
   await page.getByRole("button", { name: "回到原片", exact: true }).click();
   await page.getByLabel("開始時間").fill("125");
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
@@ -146,10 +171,10 @@ test("SSE preceding a save response does not discard more recent clip edits", as
   await page.getByRole("tab", { name: "成品 2" }).click();
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await page.getByLabel("開始時間").fill("495");
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "專案工具", exact: true }).click();
   const request = page.waitForRequest(request => request.url().includes("/clips/clip-1/draft"));
   await page.getByRole("button", { name: "儲存草稿", exact: true }).click();await request;
-  await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "關閉專案工具", exact: true }).click();
   await page.getByLabel("開始時間").fill("494");
   await page.getByRole("button", { name: "回到原片", exact: true }).click();
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), state);
@@ -202,6 +227,7 @@ test("drawer keyboard navigation, accessibility, counts and narrow editing", asy
       return button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
     })).toBe(true);
     await expect(page.getByRole("button", { name: "另存新成品", exact: true })).toBeInViewport();
+    await expect(page.getByLabel("片段名稱")).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
   await page.screenshot({ path: "../runs/clip-library-desktop.png" });
@@ -234,4 +260,131 @@ test("source return remains clickable when the editor header wraps on small phon
     await expect(page.getByLabel("開始時間")).toHaveValue("120");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
+});
+
+test("the pencil button edits and refocuses the selected clip", async ({ page }) => {
+  await workspace(page);
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  const edit = page.getByRole("button", { name: "編輯成品 #1", exact: true });
+  await edit.locator("svg").click();
+  await expect(page.getByLabel("開始時間")).toBeFocused();
+  await expect(page.getByLabel("開始時間")).toHaveValue("500");
+  await page.getByLabel("開始時間").fill("495");
+  await edit.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("開始時間")).toBeFocused();
+  await expect(page.getByLabel("開始時間")).toHaveValue("495");
+});
+
+test("delete confirms, restores the source draft and ignores stale events", async ({ page }) => {
+  const state = await workspace(page), stale = structuredClone(state);
+  await page.getByLabel("片段名稱").fill("原片草稿名稱");
+  await page.getByLabel("開始時間").fill("125");
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await page.getByLabel("片段名稱").fill("選錯的成品");
+  const remove = page.getByRole("button", { name: "刪除成品 #1", exact: true });
+  await remove.click();
+  const dialog = page.getByRole("dialog", { name: "刪除成品？" });
+  await expect(dialog.getByRole("button", { name: "取消" })).toBeFocused();
+  await expect(dialog).toContainText("本機 MP4");
+  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(remove).toBeFocused();
+  expect(state.jobs).toHaveLength(2);
+  await remove.click();
+  await dialog.getByRole("button", { name: "刪除成品", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("tab", { name: "成品 1" })).toBeVisible();
+  await expect(page.getByLabel("片段名稱")).toHaveValue("原片草稿名稱");
+  await expect(page.getByLabel("開始時間")).toHaveValue("125");
+  await expect(page.getByRole("button", { name: "原片編輯台", exact: true })).toHaveAttribute("aria-pressed", "true");
+  expect(await page.evaluate(() => localStorage.getItem("bosscut:clip-draft:clips-project:clip-1"))).toBeNull();
+  await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), stale);
+  await expect(page.getByRole("tab", { name: "成品 1" })).toBeVisible();
+  await page.reload();
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await expect(page.locator(".finished-clip-card")).toHaveCount(1);
+  await page.getByRole("button", { name: "刪除成品 #1", exact: true }).click();
+  await page.getByRole("button", { name: "刪除成品", exact: true }).click();
+  await expect(page.getByText("這個專案還沒有成品")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "成品 0" })).toBeFocused();
+});
+
+test("failed deletion keeps the clip and supports retry without changing another draft", async ({ page }) => {
+  await workspace(page);
+  let attempts = 0;
+  await page.route("**/api/projects/clips-project/clips/clip-2", async route => {
+    attempts++;
+    return attempts === 1 ? route.fulfill({ status: 409, json: { detail: "這個成品正在上傳 YouTube，請先暫停上傳再刪除。" } })
+      : route.fulfill({ json: { deleted: true, id: "clip-2" } });
+  });
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await page.getByLabel("片段名稱").fill("保留這份編輯");
+  await page.getByRole("button", { name: "刪除成品 #2", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "刪除成品？" });
+  await dialog.getByRole("button", { name: "刪除成品", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("請先暫停上傳");
+  await expect(page.locator(".finished-clip-card")).toHaveCount(2);
+  await dialog.getByRole("button", { name: "刪除成品", exact: true }).click();
+  await expect(page.locator(".finished-clip-card")).toHaveCount(1);
+  await expect(page.getByLabel("片段名稱")).toHaveValue("保留這份編輯");
+  await expect(page.getByLabel("開始時間")).toHaveValue("500");
+});
+
+test("external deletion and a late save cannot restore a deleted clip draft", async ({ page }) => {
+  const state = await workspace(page);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => release = resolve);
+  await page.route("**/clips/clip-1/draft", async route => {
+    const body = route.request().postDataJSON(); await gate;
+    await route.fulfill({ json: { ...body, revision: body.revision + 1 } });
+  });
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await page.getByLabel("片段名稱").fill("即將刪除");
+  const request = page.waitForRequest(request => request.url().endsWith("/clip-1/draft"));
+  await page.getByRole("button", { name: "另存新成品", exact: true }).click();
+  await request;
+  state.jobs = state.jobs.filter(job => job.id !== "clip-1");
+  await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), state);
+  await expect(page.getByLabel("開始時間")).toHaveValue("120");
+  release();
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => localStorage.getItem("bosscut:clip-draft:clips-project:clip-1"))).toBeNull();
+  await expect(page.getByLabel("片段名稱")).toHaveValue("");
+});
+
+test("clip names survive switching, saving, reload and export and can be searched", async ({ page }) => {
+  const state = await workspace(page);
+  const name = "瑪蓮妮亞・無傷通關";
+  await page.getByLabel("片段名稱").fill("原片自己的名稱");
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await page.getByLabel("片段名稱").fill(name);
+  await page.getByRole("button", { name: "編輯成品 #2", exact: true }).click();
+  await expect(page.getByLabel("片段名稱")).toHaveValue("");
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await expect(page.getByLabel("片段名稱")).toHaveValue(name);
+  await page.getByRole("button", { name: "專案工具", exact: true }).click();
+  await page.getByRole("button", { name: "儲存草稿", exact: true }).click();
+  await expect.poll(() => state.jobs[0].edit_draft?.title).toBe(name);
+  await page.reload();
+  await expect(page.getByLabel("片段名稱")).toHaveValue("原片自己的名稱");
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
+  await expect(page.getByLabel("片段名稱")).toHaveValue(name);
+  await page.route("**/api/projects/clips-project/exports", async route => {
+    const job = { ...exports[0], id: "named-export", created: 3, draft: structuredClone(state.jobs[0].edit_draft!) };
+    state.jobs.push(job);
+    await route.fulfill({ status: 202, json: job });
+  });
+  await page.getByRole("button", { name: "另存新成品", exact: true }).click();
+  await expect.poll(() => state.jobs.length).toBe(3);
+  await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), state);
+  await expect(page.locator(".finished-clip-title").getByText(name, { exact: true })).toBeVisible();
+  await page.getByLabel("搜尋成品片段").fill("瑪蓮");
+  await expect(page.locator(".finished-clip-card")).toHaveCount(1);
+  await page.screenshot({ path: "../runs/clip-library-named.png" });
 });

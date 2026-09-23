@@ -37,6 +37,45 @@ def video(**changes):
 
 
 class RouteTest(unittest.TestCase):
+    def test_playlist_pages_require_current_channel_and_filter_foreign_playlists(self):
+        self.account.files.write("account", account_data())
+        items = [{"id": "PLmine", "snippet": {"channelId": CHANNEL["id"], "title": "Boss 勝利"},
+                  "status": {"privacyStatus": "private"}, "contentDetails": {"itemCount": 8}},
+                 {"id": "PLforeign", "snippet": {"channelId": "another", "title": "其他頻道"}}]
+        with patch.object(self.account, "api", AsyncMock(return_value={"items": items, "nextPageToken": "page-two"})) as call:
+            response = self.client.get("/api/youtube/playlists", params={"channel_id": CHANNEL["id"], "page_token": "page-one"})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), {"items": [{"id": "PLmine", "title": "Boss 勝利", "privacy": "private", "count": 8}],
+                                               "next_page_token": "page-two"})
+            self.assertEqual(call.call_args.kwargs["mine"], "true")
+            self.assertEqual(call.call_args.kwargs["pageToken"], "page-one")
+            self.assertEqual(self.client.get("/api/youtube/playlists", params={"channel_id": "another"}).status_code, 409)
+            self.assertEqual(call.call_count, 1)
+        self.assertEqual(self.client.post("/api/youtube/uploads/source", json={"channel_id": CHANNEL["id"],
+            "title": "Clip", "made_for_kids": False, "playlist_id": "../bad"}).status_code, 422)
+
+    def test_playlist_authorization_is_optional_and_granted_scopes_are_persisted(self):
+        from game_vod_clipper.youtube_account import PLAYLIST_SCOPE
+        self.account.configure(CONFIG)
+        plain = self.client.post("/api/youtube/login").json()["url"]
+        self.assertNotIn(PLAYLIST_SCOPE, parse_qs(urlparse(plain).query)["scope"][0].split())
+        self.client.post("/api/youtube/login/cancel")
+        enabled = self.client.post("/api/youtube/login?playlists=true").json()["url"]
+        query = parse_qs(urlparse(enabled).query)
+        self.assertIn(PLAYLIST_SCOPE, query["scope"][0].split())
+        async def handler(request):
+            if request.url.path == "/token":
+                return httpx.Response(200, json={"access_token": "secret", "refresh_token": "secret", "expires_in": 3600,
+                    "scope": " ".join(SCOPES | {PLAYLIST_SCOPE})})
+            return httpx.Response(200, json={"items": [{"id": CHANNEL["id"], "snippet": {"title": CHANNEL["title"]}}]})
+        self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        response = self.client.get("/api/youtube/callback", params={"state": query["state"][0], "code": "code"})
+        self.assertEqual(response.status_code, 200)
+        status = self.client.get("/api/youtube").json()
+        self.assertTrue(status["playlist_write_enabled"])
+        self.assertNotIn("secret", json.dumps(status))
+        self.assertIn(PLAYLIST_SCOPE, self.account.files.read("account")["scopes"])
+
     def setUp(self):
         (ROOT / "runs").mkdir(exist_ok=True)
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "runs", prefix="youtube-test-")
@@ -95,7 +134,7 @@ class RouteTest(unittest.TestCase):
 
     def test_import_deduplicates_while_queued_and_binds_owned_channel(self):
         self.account.files.write("account", account_data())
-        body = {"channel_id": CHANNEL["id"], "auto_analyze": False, "model": ""}
+        body = {"channel_id": CHANNEL["id"], "auto_analyze": False, "model": "", "download_quality": "1440"}
         with patch.object(self.app.state.jobs, "submit", return_value={"id": "prepare-job"}) as submit:
             first = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
             second = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
@@ -108,6 +147,7 @@ class RouteTest(unittest.TestCase):
         project = self.app.state.store.get("projects", first.json()["project_id"])
         self.assertEqual(project["title"], "直播測試")
         self.assertEqual(project["youtube_analysis_state"], "manual")
+        self.assertEqual(project["download_quality"], "1440")
 
     def test_upload_requires_audience_and_rejects_source_jobs(self):
         self.account.files.write("account", account_data())
@@ -170,8 +210,8 @@ class GoogleErrorTest(unittest.TestCase):
         cases = [
             ("liveStreamingNotEnabled", "liveStreamingNotEnabled", "尚未啟用直播", 403),
             ("insufficientLivePermissions", "insufficientLivePermissions", "擁有直播存檔的頻道", 403),
-            ("insufficientPermissions", "insufficientPermissions", "同意讀取", 403),
-            ("ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficientPermissions", "同意讀取", 403),
+            ("insufficientPermissions", "insufficientPermissions", "授權播放清單", 403),
+            ("ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficientPermissions", "授權播放清單", 403),
             ("accessNotConfigured", "accessNotConfigured", "同一個 Google Cloud 專案", 422),
             ("SERVICE_DISABLED", "accessNotConfigured", "同一個 Google Cloud 專案", 422),
             ("youtubeSignupRequired", "youtubeSignupRequired", "尚未建立 YouTube 頻道", 403),
@@ -203,6 +243,110 @@ class GoogleErrorTest(unittest.TestCase):
 
 
 class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
+    def playlist_access(self):
+        from game_vod_clipper.youtube_account import PLAYLIST_SCOPE
+        self.account.files.write("account", account_data() | {"scopes": list(SCOPES | {PLAYLIST_SCOPE})})
+
+    async def test_playlist_addition_follows_upload_and_preserves_video_privacy(self):
+        self.export()
+        self.playlist_access()
+        requests = []
+        def handler(request):
+            requests.append(request)
+            if request.url.path.endswith("/playlists"):
+                return httpx.Response(200, json={"items": [{"id": "PLwins", "snippet": {"channelId": CHANNEL["id"], "title": "完整勝利"}}]})
+            if request.url.path.endswith("/playlistItems"):
+                if request.method == "GET":
+                    self.assertEqual(request.url.params["videoId"], "uploaded123")
+                    return httpx.Response(200, json={"items": []})
+                self.assertEqual(json.loads(request.content), {"snippet": {"playlistId": "PLwins", "resourceId": {
+                    "kind": "youtube#video", "videoId": "uploaded123"}}})
+                return httpx.Response(200, json={"id": "playlist-item"})
+            if request.method == "POST":
+                self.assertEqual(json.loads(request.content)["status"]["privacyStatus"], "private")
+                return httpx.Response(200, headers={"location": UPLOAD + "?upload_id=clip"})
+            if request.method == "PUT":
+                return httpx.Response(201, json={"id": "uploaded123"})
+            return httpx.Response(200, json={"items": [{"status": {"uploadStatus": "processed", "privacyStatus": "private"}}]})
+        self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False,
+                    "notify_subscribers": False, "playlist_id": "PLwins"}
+        record = await self.uploads.start("export", metadata, CHANNEL["id"])
+        await asyncio.gather(*list(self.uploads.tasks.values()))
+        result = self.uploads.get(record["id"])
+        self.assertEqual((result["status"], result["playlist_status"], result["privacy"]), ("succeeded", "added", "private"))
+        self.assertEqual(self.uploads.public(result)["playlist_title"], "完整勝利")
+        posts = [r for r in requests if r.method == "POST"]
+        self.assertEqual(len(posts), 2)
+        self.assertTrue(posts[-1].url.path.endswith("/playlistItems"))
+
+    async def test_playlist_failure_retries_without_uploading_or_inserting_a_duplicate(self):
+        output = self.export()
+        self.playlist_access()
+        counts = {"upload": 0, "insert": 0, "lookup": 0}
+        remote_added = False
+        def handler(request):
+            nonlocal remote_added
+            if request.url.path.endswith("/playlists"):
+                return httpx.Response(200, json={"items": [{"id": "PLwins", "snippet": {"channelId": CHANNEL["id"], "title": "勝利"}}]})
+            if request.url.path.endswith("/playlistItems"):
+                if request.method == "GET":
+                    counts["lookup"] += 1
+                    return httpx.Response(200, json={"items": [{"id": "existing"}] if remote_added else []})
+                counts["insert"] += 1
+                remote_added = True
+                raise httpx.ReadTimeout("lost-response-secret", request=request)
+            if request.method == "POST":
+                counts["upload"] += 1
+                return httpx.Response(200, headers={"location": UPLOAD + "?upload_id=clip"})
+            if request.method == "PUT":
+                return httpx.Response(201, json={"id": "uploaded123"})
+            return httpx.Response(200, json={"items": [{"status": {"uploadStatus": "processed"}}]})
+        self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False,
+                    "notify_subscribers": False, "playlist_id": "PLwins"}
+        record = await self.uploads.start("export", metadata, CHANNEL["id"])
+        await asyncio.gather(*list(self.uploads.tasks.values()))
+        result = self.uploads.get(record["id"])
+        self.assertEqual((result["status"], result["playlist_status"]), ("succeeded", "failed"))
+        self.assertNotIn("secret", result["playlist_error"])
+        output.unlink()  # Playlist retries need only the already uploaded video.
+        restored = YouTubeUploads(self.store, self.account)
+        try:
+            await restored.retry_playlist(record["id"])
+            await asyncio.gather(*list(restored.tasks.values()))
+            self.assertEqual(restored.get(record["id"])["playlist_status"], "added")
+            self.assertEqual(counts, {"upload": 1, "insert": 1, "lookup": 2})
+        finally:
+            await restored.close()
+
+    async def test_foreign_playlist_or_missing_permission_is_rejected_before_upload(self):
+        self.export()
+        metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False,
+                    "notify_subscribers": False, "playlist_id": "PLforeign"}
+        with patch.object(self.account, "api", AsyncMock(return_value={"items": [{"id": "PLforeign",
+                "snippet": {"channelId": "someone-else", "title": "Foreign"}}]})) as call:
+            with self.assertRaisesRegex(YouTubeError, "授權播放清單"):
+                await self.uploads.start("export", metadata, CHANNEL["id"])
+            call.assert_not_called()
+            self.playlist_access()
+            with self.assertRaisesRegex(YouTubeError, "目前 YouTube 頻道"):
+                await self.uploads.start("export", metadata, CHANNEL["id"])
+        self.assertEqual(self.uploads.tasks, {})
+        self.assertEqual(self.uploads.all(), {})
+
+    async def test_interrupted_playlist_work_recovers_without_a_new_video_upload(self):
+        self.playlist_access()
+        self.uploads.save({"id": "pending-list", "channel": CHANNEL, "video_id": "uploaded123", "video_processed": True,
+            "playlist_id": "PLwins", "playlist_status": "adding", "status": "adding_to_playlist"})
+        self.uploads.recover()
+        self.assertEqual(self.uploads.get("pending-list")["status"], "paused")
+        with patch.object(self.account, "add_to_playlist", AsyncMock()) as add:
+            await self.uploads.resume("pending-list")
+            await asyncio.gather(*list(self.uploads.tasks.values()))
+            add.assert_awaited_once_with("PLwins", "uploaded123", CHANNEL["id"])
+        self.assertEqual(self.uploads.get("pending-list")["playlist_status"], "added")
+
     async def asyncSetUp(self):
         (ROOT / "runs").mkdir(exist_ok=True)
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / "runs", prefix="youtube-async-")
@@ -350,7 +494,7 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
     async def test_watcher_only_queues_new_available_streams_and_preserves_pagination(self):
         workspace = YouTubeWorkspace(self.store, AsyncMock(), AsyncMock(), AsyncMock())
         workspace.account.files.write("account", account_data())
-        settings = await workspace.set_watch(WatchSettings(channel_id=CHANNEL["id"], enabled=True, auto_analyze=False))
+        settings = await workspace.set_watch(WatchSettings(channel_id=CHANNEL["id"], enabled=True, auto_analyze=False, download_quality="720"))
         self.assertGreater(settings["since"], time.time() - 5)
         new_time = datetime.fromtimestamp(settings["since"] + 1, timezone.utc).isoformat()
         old_time = datetime.fromtimestamp(settings["since"] - 10, timezone.utc).isoformat()
@@ -365,6 +509,8 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         await workspace.sync()
         await workspace.sync()
         workspace.import_video.assert_awaited_once()
+        self.assertEqual(workspace.import_video.await_args.args[1].download_quality, "720")
+        self.assertEqual(workspace.preferences()["download_quality"], "720")
         self.assertEqual(workspace.preferences()["cursor"], "next")
         self.assertEqual(workspace.broadcasts.await_args.args, ("next",))
         await workspace.set_watch(WatchSettings(channel_id=CHANNEL["id"], enabled=False, auto_analyze=False))

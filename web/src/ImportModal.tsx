@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, X, Youtube } from "lucide-react";
 import { api, type Project, type Source } from "./api";
+import DownloadQuality, { type DownloadQualityValue } from "./DownloadQuality";
 
 export default function ImportModal({ onClose, onImport, onYouTube }: { onClose: () => void; onImport: (id: string) => void; onYouTube?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -9,6 +10,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
   const [sources, setSources] = useState<Source[]>([]);
   const [source, setSource] = useState("");
   const [url, setUrl] = useState("");
+  const [quality, setQuality] = useState<DownloadQualityValue>("best");
   const [loading, setLoading] = useState(true);
   const [sourceError, setSourceError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -47,7 +49,8 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
     if (invalid) { dialog.current?.querySelector<HTMLElement>(kind === "local" ? "#source" : "#youtube")?.focus(); return; }
     setBusy(true); setError("");
     try {
-      const result = await api<{ project: Project }>("/projects", "POST", { kind, source: kind === "local" ? source : url.trim() });
+      const result = await api<{ project: Project }>("/projects", "POST", { kind, source: kind === "local" ? source : url.trim(),
+        ...(kind === "youtube" ? { download_quality: quality } : {}) });
       onImport(result.project.id);
     } catch (reason) { setError((reason as Error).message); }
     finally { setBusy(false); }
@@ -79,6 +82,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
         <input id="youtube" type="url" value={url} disabled={busy} placeholder="https://www.youtube.com/watch?v=…" autoComplete="off"
           aria-describedby="youtube-help import-field-error" aria-invalid={!!fieldError} onChange={event => { setUrl(event.target.value); setFieldError(""); }} />
         <p id="youtube-help" className="field-help">支援已結束的公開影片。若來源需要登入或無法下載，可以改用本機錄影。</p>
+        <DownloadQuality value={quality} onChange={setQuality} disabled={busy} />
         {onYouTube && <button type="button" className="import-youtube-account" disabled={busy} onClick={onYouTube}><Youtube size={18} aria-hidden="true" />從我的 YouTube 選直播<ArrowRight size={16} aria-hidden="true" /></button>}
       </>}
       <p id="import-field-error" className="inline-error" role={fieldError ? "alert" : undefined}>{fieldError}</p>

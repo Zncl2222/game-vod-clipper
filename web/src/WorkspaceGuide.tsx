@@ -60,7 +60,7 @@ export function WorkspaceGuide({ onClose }: { onClose: () => void }) {
     <ol className="guide-steps">
       <li><FolderOpen aria-hidden="true" size={20} /><div><h3>01 · 帶入影片</h3><p>按「我的 YouTube」連接頻道、選取直播，勾選「匯入後自動找片段」即可接著分析。也能按「匯入影片」貼上網址或選擇 downloads/ 裡的本機錄影。</p></div></li>
       <li><Sparkles aria-hidden="true" size={20} /><div><h3>02 · 尋找成功挑戰</h3><p>按「一鍵搜尋成功挑戰」，或開啟 AI 對話指定範圍。第一次使用 AI，先到「帳號設定」連接帳號並選擇模型。也可以直接手動剪輯。</p></div></li>
-      <li><Scissors aria-hidden="true" size={20} /><div><h3>03 · 逐段核對與調整</h3><p>上方「目前剪輯」的實框是匯出範圍，分別標示開始、勝利與結束；結束＝勝利時間＋收尾秒數。點選候選預覽，按「編輯區間」載入草稿，再拖曳邊界或輸入時間。保留／排除只用來整理候選，不影響匯出。點「目前剪輯」放大、點「全片」找其他位置，按「證據」查看探索進度。</p></div></li>
+      <li><Scissors aria-hidden="true" size={20} /><div><h3>03 · 點選片段直接編輯</h3><p>點選候選就會載入該段，預覽、時間調整與匯出都使用同一區間。拖曳邊界或按「調整時間」輸入時間；切換候選會保留各段在此瀏覽器的修改。底部固定顯示正在編輯的編號與匯出起迄時間。結束＝勝利時間＋收尾秒數。保留／排除只用來整理候選，不影響匯出。</p></div></li>
       <li><ArrowDownToLine aria-hidden="true" size={20} /><div><h3>04 · 匯出與上傳</h3><p>調整好區間、保留勝利後 5–10 秒，直接按「匯出 MP4」，會自動儲存草稿。匯出成功後，對應候選會標記「已匯出」。到右側「成品」選擇下載，或按「上傳 YouTube」確認標題與觀看權限後上傳；預設為私人影片。</p></div></li>
     </ol>
     <div className="guide-shortcuts"><h3><Keyboard aria-hidden="true" size={17} />桌面快捷操作</h3>

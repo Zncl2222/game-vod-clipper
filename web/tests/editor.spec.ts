@@ -24,6 +24,7 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     )
     .toBeGreaterThanOrEqual(1);
   await page.getByLabel("開始時間").fill("1.25");
+  await page.getByLabel("片段名稱").fill("測試 Boss・完整勝利");
   await page.getByLabel("勝利時間").fill("8");
   await page.getByLabel("勝利後收尾").fill("5");
   await page.getByRole("button", { name: /預覽這段/ }).click();
@@ -60,27 +61,29 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeAttached({
     timeout: 30_000,
   });
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "專案工具", exact: true }).click();
   await page.locator(".jobs-details > summary").click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
   const downloadPromise = page.waitForEvent("download");
   await page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true }).click();
   const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("測試 Boss・完整勝利.mp4");
   await download.saveAs(path.resolve("../runs/web-poc-browser-export.mp4"));
   expect(await download.failure()).toBeNull();
   const metadata = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_format", "-of", "json", path.resolve("../runs/web-poc-browser-export.mp4")], { encoding: "utf8" }));
   expect(Number(metadata.format.duration)).toBeCloseTo(11.5, 0);
-  await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "關閉專案工具", exact: true }).click();
   await page.getByRole("tab", { name: "成品 1" }).click();
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
   await expect(player).toHaveAttribute("data-instance", "original-playing-video");
+  await expect(page.getByLabel("片段名稱")).toHaveValue("測試 Boss・完整勝利");
   await page.getByLabel("開始時間").fill("1.75");
   await page.getByRole("button", { name: "回到原片", exact: true }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
   await page.reload();
   await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "專案工具", exact: true }).click();
   await page.locator(".jobs-details > summary").click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
   const projectId = await page.evaluate(async () => {
@@ -116,9 +119,9 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByRole("button", { name: "儲存草稿" }).click();
   await expect(
-    page.getByRole("dialog", { name: "更多工具", exact: true }).getByText("草稿已儲存", { exact: false }),
+    page.getByRole("dialog", { name: "專案工具", exact: true }).getByText("草稿已儲存", { exact: false }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "關閉更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "關閉專案工具", exact: true }).click();
   await page.getByRole("button", { name: "跳到開始", exact: true }).click();
   await expect
     .poll(() =>
@@ -173,5 +176,15 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await page.getByRole("button", { name: /套用候選/ }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("3");
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  const exportedJob = analysisState.jobs.find((job: { kind: string }) => job.kind === "export");
+  await page.getByRole("button", { name: "刪除成品 #1", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "刪除成品？" })).toContainText("測試 Boss・完整勝利");
+  await page.getByRole("button", { name: "刪除成品", exact: true }).click();
+  await expect(page.getByText("這個專案還沒有成品")).toBeVisible();
+  expect((await page.request.get(`/api/jobs/${exportedJob.id}/download`)).status()).toBe(404);
+  const remaining = await (await page.request.get("/api/state")).json();
+  expect(remaining.jobs.some((job: { id: string }) => job.id === exportedJob.id)).toBe(false);
+  expect(remaining.projects[0].id).toBe(projectId);
   expect(consoleErrors).toEqual([]);
 });

@@ -42,7 +42,7 @@ async function setup(page: Page, projects: unknown[] = [], options: { chat?: boo
   if (projects.length) await page.getByRole("button", { name: "看全片", exact: true }).click();
   if (options.chat === false) await page.getByLabel("關閉 AI 對話").click();
   else if (!await page.getByLabel("輸入訊息").isVisible()) await page.getByRole("button", { name: "AI 對話", exact: true }).click();
-  if (projects.length && options.settings === true) await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  if (projects.length && options.settings === true) await page.getByRole("button", { name: "專案工具", exact: true }).click();
   if (options.chat !== false) await expect(page.getByLabel("選擇 AI 模型")).toHaveText("Model A");
 }
 
@@ -917,7 +917,7 @@ test("unfinished inspection stays previewable and continues the saved task", asy
   await expect.poll(() => resumed).toBe(true);
 });
 
-test("candidate bars seek at the clicked position and scrub video without changing drafts", async ({ page }) => {
+test("candidate bars load their range once and scrub without changing its boundaries", async ({ page }) => {
   await setup(page, [project], { chat: false });
   const segment = { id: "scrub:one", start: 20, end: 100, victory: null, kind: "fight", confidence: "low",
     boss: "可拖曳候選", summary: "測試定位", warnings: [], evidence: [] };
@@ -953,10 +953,10 @@ test("candidate bars seek at the clicked position and scrub video without changi
   await expect.poll(current).toBe(20);
   await page.keyboard.press("ArrowRight");
   await expect.poll(current).toBe(21);
-  await expect(page.getByLabel("開始時間")).toHaveValue("10");
+  await expect(page.getByLabel("開始時間")).toHaveValue("20");
 });
 
-test("source comparison candidates seek and drag across the track without changing the draft", async ({ page }) => {
+test("candidate selection and scrubbing use the same source range as the draft", async ({ page }) => {
   await setup(page, [project], { chat: false });
   const segment = { id: "source:one", start: 20, end: 100, victory: null, kind: "fight", confidence: "low",
     boss: "原片候選", summary: "測試原片定位", warnings: [], evidence: [] };
@@ -998,8 +998,8 @@ test("source comparison candidates seek and drag across the track without changi
   const updated = (await row.boundingBox())!;
   await page.mouse.click(updated.x + updated.width * 75 / 180, updated.y + updated.height / 2);
   await expect.poll(current).toBeCloseTo(75, 0);
-  await expect(page.getByLabel("開始時間")).toHaveValue("10");
-  await expect(page.getByLabel("勝利時間")).toHaveValue("100");
+  await expect(page.getByLabel("開始時間")).toHaveValue("20");
+  await expect(page.getByLabel("勝利時間")).toHaveValue("92");
 });
 
 test("zoomed source comparison maps positions to the visible source window", async ({ page }) => {
@@ -1031,10 +1031,10 @@ test("zoomed source comparison maps positions to the visible source window", asy
   await expect.poll(current).toBe(from);
   await expect(source).toHaveAttribute("min", String(from));
   await expect(source).toHaveAttribute("max", String(to));
-  await expect(page.getByLabel("開始時間")).toHaveValue("10");
+  await expect(page.getByLabel("開始時間")).toHaveValue("0");
 });
 
-test("uncertain candidates appear live, keep stable numbers, preview, tag and explicitly become drafts", async ({ page }) => {
+test("uncertain candidates keep stable numbers and become editable as soon as selected", async ({ page }) => {
   await page.addInitScript(() => {
     window.addEventListener("error", event => { if (event.target instanceof HTMLMediaElement) event.stopImmediatePropagation(); }, true);
     Object.defineProperty(HTMLMediaElement.prototype, "play", { configurable: true, value() { this.dataset.played = String(this.currentTime); return Promise.resolve(); } });
@@ -1053,7 +1053,7 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   await timeline.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await expect(page.getByLabel("片段 #1 詳情")).toContainText("戰鬥尚未確認結果");
   await expect(page.getByRole("button", { name: "編輯片段 #1 區間" })).toBeVisible();
-  await expect(page.getByLabel("開始時間")).toHaveValue("10");
+  await expect(page.getByLabel("開始時間")).toHaveValue("20");
   await page.getByRole("button", { name: "下一段", exact: true }).click();
   await page.getByRole("button", { name: "預覽 #2", exact: true }).click();
   await expect(page.locator(".video-wrap video")).toHaveAttribute("data-played", "60");
@@ -1073,7 +1073,7 @@ test("uncertain candidates appear live, keep stable numbers, preview, tag and ex
   await expect(page.getByLabel("片段 #2 詳情")).toContainText("00:01:02.000");
   await expect(page.getByLabel("片段 #2 詳情")).toContainText("尚未驗證");
   await page.getByRole("button", { name: "編輯片段 #2 區間" }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("62");
+  await expect(page.getByLabel("開始時間")).toHaveValue("60");
   await expect(page.getByLabel("勝利時間")).toHaveValue("107");
   await page.screenshot({ path: "../runs/candidate-review-desktop.png", fullPage: true });
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify(nextState)}\n\n` }));
@@ -1120,7 +1120,7 @@ test("desktop keeps editing visible and mobile uses one unclipped workspace", as
       await expect(core.getByRole("button", { name: "匯出 MP4" })).toBeInViewport();
     }
     expect(await page.locator(".main-shell").evaluate(el => el.scrollTop)).toBe(0);
-    await expect(page.getByRole("dialog", { name: "更多工具", exact: true })).not.toBeVisible();
+    await expect(page.getByRole("dialog", { name: "專案工具", exact: true })).not.toBeVisible();
     await expect(page.getByLabel("輸入訊息")).not.toBeVisible();
     await page.screenshot({ path: `../runs/simple-editor-${viewport.width}.png` });
   }
@@ -1414,7 +1414,8 @@ test("large source preview stays visible while candidate review scrolls independ
   expect(before.height).toBeGreaterThan(250);
   const track = (await page.locator(".clip-range-track").boundingBox())!;
   expect(track.y).toBeGreaterThan(before.y + before.height);
-  expect(track.y - (before.y + before.height)).toBeLessThan(160);
+  // The viewing shortcuts and zoom/pan now occupy two distinct navigation rows.
+  expect(track.y - (before.y + before.height)).toBeLessThan(200);
   const segments = Array.from({ length: 12 }, (_, i) => ({ id: `large:c${i}`, start: 10 + i, end: 100 + i,
     victory: null, kind: "fight", confidence: "low", boss: `Boss ${i}`, summary: "需要查看", warnings: [], evidence: [] }));
   await page.evaluate(state => window.dispatchEvent(new CustomEvent("fixture:state", { detail: state })), {

@@ -46,8 +46,9 @@ class BatchImportTest(unittest.IsolatedAsyncioTestCase):
             "status": {"privacyStatus": "unlisted", "uploadStatus": "processed"},
             "contentDetails": {"duration": "PT1H"}, "liveStreamingDetails": {"actualEndTime": "2026-09-20T00:00:00Z"}}]}
 
-    async def prepare(self, key):
-        project = {"id": key, "ready": False, "url": f"https://www.youtube.com/watch?v={key}", "title": key}
+    async def prepare(self, key, download_quality="best"):
+        project = {"id": key, "ready": False, "url": f"https://www.youtube.com/watch?v={key}", "title": key,
+                   "download_quality": download_quality}
         self.store.put("projects", project)
         self.store.put("jobs", {"id": "prepare-" + key, "project_id": key, "kind": "prepare", "status": "queued", "progress": 0})
         return {"project": project}
@@ -95,7 +96,7 @@ class BatchImportTest(unittest.IsolatedAsyncioTestCase):
     async def test_full_media_queue_waits_without_losing_the_selection(self):
         self.queue.add(choices(1), OPTIONS, CHANNEL)
         for number in range(8):
-            self.store.put("jobs", {"id": str(number), "project_id": "other", "kind": "analyze", "status": "running"})
+            self.store.put("jobs", {"id": str(number), "project_id": "other", "kind": "export", "status": "queued"})
         await self.queue.advance()
         self.source.assert_not_awaited()
         self.assertEqual(self.queue.public_records()[0]["status"], "queued")
@@ -119,14 +120,68 @@ class BatchImportTest(unittest.IsolatedAsyncioTestCase):
         self.account.api.side_effect = YouTubeError("暫時無法連線", 502)
         await self.queue.advance()
         calls = self.account.api.await_count
+        self.account.api.side_effect = original
         await self.queue.advance()
-        self.assertEqual(self.account.api.await_count, calls)
+        self.assertEqual(self.account.api.await_count, calls + 1)
+        self.source.assert_awaited_once_with(videos[2]["id"], "best")
+        self.finish(videos[2]["id"])
+        await self.queue.advance()
+        self.assertEqual(self.account.api.await_count, calls + 1)
         retrying = next(item for item in self.queue.records.values() if item["video_id"] == videos[1]["id"])
         self.assertGreater(retrying["retry_at"], time.time())
         self.queue.save(retrying | {"retry_at": 0})
         self.account.api.side_effect = original
         await self.queue.advance()
-        self.source.assert_awaited_once_with(videos[1]["id"])
+        self.source.assert_awaited_with(videos[1]["id"], "best")
+
+    async def test_full_ai_queue_does_not_hold_downloads(self):
+        for number in range(8):
+            self.store.put("jobs", {"id": str(number), "project_id": "other", "kind": "analyze", "status": "queued"})
+        self.queue.add(choices(1), OPTIONS, CHANNEL)
+        await self.queue.advance()
+        self.source.assert_awaited_once()
+
+    async def test_retry_limit_and_manual_retry_and_live_progress_are_exposed(self):
+        self.queue.add(choices(2), OPTIONS, CHANNEL)
+        key = next(iter(self.queue.records))
+        self.account.api.side_effect = YouTubeError("暫時失敗", 502)
+        for _ in range(3):
+            self.queue.save(self.queue.get(key) | {"retry_at": 0})
+            await self.queue.advance()
+        self.assertEqual(self.queue.get(key)["status"], "failed")
+        self.queue.retry(key)
+        self.assertEqual(self.queue.get(key)["attempts"], 0)
+        self.account.api.side_effect = self.metadata
+        await self.queue.advance()
+        project_id = self.source.await_args.args[0]
+        detail = {"phase": "download", "percent": 42, "downloaded_bytes": 420, "total_bytes": 1000}
+        self.store.patch("jobs", "prepare-" + project_id, status="running", stage="下載 YouTube 影像", media_progress=detail)
+        rows = self.queue.public_records()
+        self.assertEqual(rows[0]["media_progress"], detail)
+        self.assertEqual(rows[0]["stage"], "下載 YouTube 影像")
+        waiting = next(row for row in rows if row["status"] == "queued")
+        self.assertEqual(waiting["queue_position"], 1)
+        self.assertIn("前一部", waiting["waiting_reason"])
+
+    async def test_quality_survives_queue_restart_cancel_and_retry(self):
+        videos = choices(2)
+        self.queue.add([videos[0]], OPTIONS | {"download_quality": "1440"}, CHANNEL)
+        self.queue.add([videos[1]], OPTIONS | {"download_quality": "720"}, CHANNEL)
+        first = next(iter(self.queue.records))
+        self.queue.cancel(first)
+        recovered = YouTubeImports(self.store, self.account, self.workspace.lock, self.queue.import_video)
+        recovered.retry(first)
+        # The original choices persist even if a later submission asks for best.
+        recovered.add(videos, OPTIONS | {"download_quality": "best"}, CHANNEL)
+        for _ in videos:
+            await recovered.advance()
+            latest = self.source.await_args.args
+            self.finish(latest[0])
+        self.assertEqual(set(call.args for call in self.source.await_args_list),
+                         {(videos[0]["id"], "1440"), (videos[1]["id"], "720")})
+        rows = {row["video_id"]: row for row in recovered.public_records()}
+        self.assertEqual(rows[videos[0]["id"]]["download_quality"], "1440")
+        self.assertEqual(rows[videos[1]["id"]]["download_quality"], "720")
 
     async def test_reboot_and_account_changes_preserve_waiting_and_project_deduplication(self):
         videos = choices(2)

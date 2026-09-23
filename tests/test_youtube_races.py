@@ -41,7 +41,7 @@ class Races(unittest.IsolatedAsyncioTestCase):
                 "status": {"privacyStatus": "unlisted", "uploadStatus": "processed"},
                 "liveStreamingDetails": {"actualEndTime": "2026-09-20T00:00:00Z"}, "contentDetails": {"duration": "PT1M"}}]})
 
-            async def source_import(_video_id):
+            async def source_import(_video_id, _quality):
                 store.put("projects", {"id": "p"})
                 return {"project": {"id": "p"}}
 

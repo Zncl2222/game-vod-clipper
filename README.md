@@ -58,10 +58,16 @@ testing, and current limitations.
 
 **我的 YouTube** connects your own Google OAuth client and channel, lists completed
 livestreams, and imports public/unlisted archives with optional automatic AI review.
+URL and channel imports default to the highest available source quality, with optional
+2160p, 1440p, 1080p, 720p or 480p caps. Exports retain the downloaded source resolution
+and frame rate; the 720p preview does not limit finished clips.
 An opt-in watcher imports new completed streams while the backend is running.
 After reviewing and exporting a clip, use **上傳 YouTube** in **成品** to confirm its
 metadata and upload it privately by default. Upload progress, pause/resume and
-duplicate prevention persist locally. Only completed, validated clip exports can be uploaded;
+duplicate prevention persist locally. **加入播放清單（選填）** can add the uploaded clip
+to an owned playlist after processing; **授權播放清單** requests the additional permission
+on first use. Playlist errors can be retried independently without uploading again.
+Only completed, validated clip exports can be uploaded;
 source VODs cannot. See the [YouTube setup and workflow guide](docs/youtube-workflow.md).
 
 ### Chat and control the editor
@@ -162,9 +168,17 @@ occupy separate rows; the colored bars show their actual time spans.
 Each segment retains its ID and display number when a continued analysis refines
 its boundaries. **待核對／保留／排除** tags are saved to the project and survive reloads.
 Chat understands references such as **查看 #2**, using the same stored candidates.
-Selecting or tagging an annotation does not change or approve the export draft.
-Use **編輯區間** to load any selected candidate into the existing editor, then drag
-its boundaries or change the start/victory times and 5–10 second postroll. For an
+After selecting a candidate, use **請 AI 複判這段** to analyze its currently displayed
+range again with the model selected in the AI sidebar. The candidate detail shows
+the separate task's progress, conclusion, timestamped evidence and warnings. This
+check looks for a complete win as well as deaths, retries and uncertain transitions;
+it may add new annotations but does not silently replace the selected edit range.
+Selecting an annotation directly loads it into the editor; preview and export use
+that same range. The fixed footer identifies the current candidate and export
+boundaries. **調整時間** focuses the timing fields without resetting edits. Each
+candidate's working edits stay in this browser across switches and reloads; completed
+clip drafts remain separate. Tags only organize candidates. Drag the boundaries or
+change the start/victory times and 5–10 second postroll. For an
 unknown victory, the editor explicitly labels its initial victory time as
 provisional; locate the actual victory before exporting. Timing changes display
 **已手動調整**. **儲存區間** persists the corrected candidate separately from AI
@@ -223,9 +237,9 @@ The current draft's solid frame is the export range. Text labels distinguish
 Hatching belongs only to that retained ending. The adjacent AI track uses numbered
 reference cards and a light dashed draft guide on the same source-time scale;
 it does not repeat the filled selection or postroll hatching. Selecting a card
-previews it; applying it to the draft is explicit. The selected candidate reports
-the overlapping duration or no overlap. Trimming and zooming update the guide
-without changing the AI candidate. With no candidates, the filmstrip still shows
+loads its editable range immediately; its preview uses the current edits. The
+original AI annotation remains available for comparison. Trimming and zooming update
+the guide without changing the AI candidate. With no candidates, the filmstrip still shows
 the selection. Numeric controls sit below these two adjacent tracks.
 The **證據** button reveals aligned exploration coverage, the active sampling range,
 and evidence markers. Completed clips have their own list and player below the editor.

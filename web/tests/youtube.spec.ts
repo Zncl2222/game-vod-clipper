@@ -14,9 +14,10 @@ const live = [
 
 test.beforeAll(async () => { await mkdir("../runs/youtube-ux", { recursive: true }); });
 
-async function setup(page: Page, connected = true) {
+async function setup(page: Page, connected = true, clipTitle?: string) {
   const errors: string[] = [], writes: { path: string; body: any }[] = [];
   const account = { configured: connected, connected, channel: connected ? channel : null, pending: false, reconnect_required: false, error: null,
+    playlist_write_enabled: connected,
     watch: { enabled: false, auto_analyze: true, model: "vision", last_checked: null, error: null }, uploads: [] as any[], imports: [] as any[] };
   let rejectImport = false, rejectUpload = false, rejectBatch = false;
   page.on("pageerror", error => errors.push(error.message));
@@ -29,7 +30,7 @@ async function setup(page: Page, connected = true) {
   await page.route("**/api/**", async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     if (request.method() !== "GET") writes.push({ path, body: request.postDataJSON() });
-    if (path === "/api/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ projects: [project], jobs: [exported] })}\n\n` });
+    if (path === "/api/events") return route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify({ projects: [project], jobs: [{ ...exported, draft: { ...exported.draft, title: clipTitle } }] })}\n\n` });
     if (path === "/api/codex") return route.fulfill({ json: { available: true, auth_mode: "chatgpt", detail: "已連接" } });
     if (path === "/api/codex/models") return route.fulfill({ json: { models: [{ id: "vision", name: "目前的影像模型", is_default: true, input_modalities: ["text", "image"] }] } });
     if (path === "/api/youtube") return route.fulfill({ json: account });
@@ -38,6 +39,9 @@ async function setup(page: Page, connected = true) {
     if (path === "/api/youtube/login") { account.pending = true; return route.fulfill({ json: { url: "https://accounts.google.com/o/oauth2/v2/auth?state=test" } }); }
     if (path === "/api/youtube/disconnect") { account.connected = false; account.channel = null; return route.fulfill({ json: { ...account, message: "已中斷連接" } }); }
     if (path === "/api/youtube/broadcasts") return route.fulfill({ json: { items: live, next_page_token: "" } });
+    if (path === "/api/youtube/playlists") return route.fulfill({ json: { items: [
+      { id: "PLboss", title: "艾爾登法環・完整勝利", privacy: "private", count: 12 },
+    ], next_page_token: "" } });
     if (path === "/api/youtube/imports") {
       if (rejectBatch) return route.fulfill({ status: 429, json: { detail: "等待匯入的影片已滿，請稍後再試。" } });
       const body = request.postDataJSON();
@@ -45,7 +49,7 @@ async function setup(page: Page, connected = true) {
       for (const video of body.videos) {
         if (account.imports.some(item => item.video_id === video.id)) { existing++; continue; }
         account.imports.push({ id: video.id, video_id: video.id, title: video.title, channel,
-          status: "queued", project_id: null, error: null, auto_analyze: body.auto_analyze, progress: 0 });
+          status: "queued", project_id: null, error: null, auto_analyze: body.auto_analyze, progress: 0, download_quality: body.download_quality });
         added++;
       }
       await new Promise(resolve => setTimeout(resolve, 180));
@@ -67,10 +71,15 @@ async function setup(page: Page, connected = true) {
     if (path === "/api/youtube/uploads/finished-clip") {
       if (rejectUpload) return route.fulfill({ status: 503, json: { detail: "網路暫時中斷，請再試一次。" } });
       const upload = { ...request.postDataJSON(), channel, id: "upload-1", export_id: exported.id, project_id: project.id,
+        playlist_title: "艾爾登法環・完整勝利", playlist_status: request.postDataJSON().playlist_id ? "pending" : null,
         status: "uploading", progress: 35, error: null, video_id: null, created: 1 };
       account.uploads = [upload];
       await new Promise(resolve => setTimeout(resolve, 180));
       return route.fulfill({ status: 202, json: upload });
+    }
+    if (path.endsWith("/playlist/retry")) {
+      account.uploads[0].playlist_status = "added"; account.uploads[0].playlist_error = null;
+      return route.fulfill({ json: account.uploads[0] });
     }
     if (path.endsWith("/pause")) { account.uploads[0].status = "paused"; return route.fulfill({ json: account.uploads[0] }); }
     if (path.endsWith("/resume")) { account.uploads[0].status = "succeeded"; account.uploads[0].video_id = "uploaded123"; return route.fulfill({ json: account.uploads[0] }); }
@@ -138,6 +147,8 @@ test("selecting a stream queues one import with explicit AI choice; failures ret
   const state = await setup(page);
   await open(page);
   await expect(page.getByLabel("直播分析模型")).toHaveValue("vision");
+  await expect(page.getByLabel("保留畫質")).toHaveValue("best");
+  await page.getByLabel("保留畫質").selectOption("1440");
   await expect(page.getByRole("button", { name: "匯入直播：私人存檔" })).toBeDisabled();
   await page.getByLabel("搜尋直播存檔").fill("沒有這個遊戲");
   await expect(page.getByText("沒有符合的直播")).toBeVisible();
@@ -145,13 +156,14 @@ test("selecting a stream queues one import with explicit AI choice; failures ret
   state.failImport(true);
   await page.getByRole("button", { name: "匯入直播：艾爾登法環｜終於打贏女武神！" }).click();
   await expect(page.getByRole("alert")).toContainText("佇列已滿");
+  await expect(page.getByLabel("保留畫質")).toHaveValue("1440");
   await expect(page.getByText("黑暗靈魂 3｜無名王練習", { exact: true })).toBeVisible();
   state.failImport(false);
   await page.getByRole("button", { name: "匯入直播：艾爾登法環｜終於打贏女武神！" }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); button.click(); });
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const imports = state.writes.filter(item => item.path.endsWith("/import"));
   expect(imports).toHaveLength(2); // one rejected attempt, then one accepted despite rapid clicks
-  expect(imports[1].body).toEqual({ channel_id: channel.id, auto_analyze: true, model: "vision" });
+  expect(imports[1].body).toEqual({ channel_id: channel.id, auto_analyze: true, model: "vision", download_quality: "1440" });
   expect(state.errors).toEqual([]);
 });
 
@@ -162,6 +174,7 @@ test("batch selection survives search, pagination and rejection; rapid submit qu
   await page.route("**/api/youtube/broadcasts*", route => route.fulfill({ json: new URL(route.request().url()).searchParams.has("page_token")
     ? { items: [third], next_page_token: "" } : { items: [...live, second], next_page_token: "next" } }));
   await open(page);
+  await page.getByLabel("保留畫質").selectOption("720");
   await page.getByLabel("全選目前清單", { exact: true }).check();
   await expect(page.getByRole("button", { name: "匯入所選（2）", exact: true })).toBeEnabled();
   await expect(page.getByRole("checkbox", { name: `選取直播：${live[1].title}`, exact: true })).toBeDisabled();
@@ -187,11 +200,13 @@ test("batch selection survives search, pagination and rejection; rapid submit qu
   await expect(page.getByRole("checkbox", { name: `選取直播：${live[0].title}`, exact: true })).toBeDisabled();
   const batches = state.writes.filter(item => item.path === "/api/youtube/imports");
   expect(batches).toHaveLength(2);
-  expect(batches[1].body).toEqual({ channel_id: channel.id, auto_analyze: false, model: "vision",
+  expect(batches[1].body).toEqual({ channel_id: channel.id, auto_analyze: false, model: "vision", download_quality: "720",
     videos: [live[0], second, third].map(({ id, title }) => ({ id, title })) });
   await page.keyboard.press("Escape");
   await open(page);
   await expect(page.getByRole("article", { name: `匯入進度：${third.title}`, exact: true })).toContainText("等待匯入");
+  await expect(page.getByRole("article", { name: `匯入進度：${third.title}`, exact: true })).toContainText("最高 720p");
+  await expect(page.getByLabel("保留畫質")).toHaveValue("best");
   expect(state.writes).toHaveLength(2);
   expect(state.errors).toEqual([]);
 });
@@ -201,11 +216,21 @@ test("batch queue exposes progress, cancel and individual retry with accessible 
   state.account.imports = Array.from({ length: 7 }, (_, index) => ({ id: `task-${index}`, video_id: `video${index.toString().padStart(6, "0")}`,
     title: `直播 ${index + 1}｜${"艾爾登法環與夥伴一起挑戰高難度頭目".repeat(index === 0 ? 3 : 1)}`, channel,
     status: index === 0 ? "preparing" : index === 1 ? "failed" : "queued", project_id: index === 0 ? project.id : null,
-    error: index === 1 ? "這部直播存檔尚未處理完成，請稍後重試。" : null, auto_analyze: true, progress: index === 0 ? 35 : 0 }));
+    error: index === 1 ? "這部直播存檔尚未處理完成，請稍後重試。" : null, auto_analyze: true, progress: index === 0 ? 35 : 0,
+    queue_position: index > 1 ? index - 1 : undefined, waiting_reason: "前一部影片仍在下載或製作預覽，完成後會自動接續。",
+    stage: "下載 YouTube 影像", job_status: "running", media_progress: index === 0 ? {
+      phase: "download", percent: 35, downloaded_bytes: 700_000_000, total_bytes: 2_000_000_000,
+      speed_bps: 10_000_000, eta_seconds: 130, updated_at: Date.now() / 1000,
+    } : null }));
   await open(page);
   const queue = page.locator(".yt-import-queue");
   await expect(queue.getByRole("article")).toHaveCount(5);
   await expect(queue.getByRole("progressbar")).toHaveAttribute("value", "35");
+  await expect(queue).toContainText("35.0%");
+  await expect(queue).toContainText("700.0 MB / 2.0 GB");
+  await expect(queue).toContainText("10.0 MB/s");
+  await expect(queue).toContainText("本階段約剩 3 分鐘");
+  await expect(queue).toContainText("排隊第 1 部");
   await expect(queue).toContainText("1 部需處理");
   await page.getByRole("button", { name: "顯示全部 7 部", exact: true }).click();
   await expect(queue.getByRole("article")).toHaveCount(7);
@@ -227,6 +252,18 @@ test("batch queue exposes progress, cancel and individual retry with accessible 
     if (viewport.width === 375) await page.screenshot({ path: "../runs/youtube-ux/batch-import-mobile.png", fullPage: true });
   }
   await page.setViewportSize({ width: 1440, height: 900 });
+  // Polling updates actual transfer data and later stages without reopening the dialog.
+  state.account.imports[0].media_progress.percent = null;
+  state.account.imports[0].media_progress.total_bytes = null;
+  state.account.imports[0].media_progress.updated_at = Date.now() / 1000 - 90;
+  await expect(queue.getByRole("progressbar")).not.toHaveAttribute("value");
+  await expect(queue).toContainText("正在等待回應");
+  await expect(queue).not.toContainText("10.0 MB/s");
+  state.account.imports[0].stage = "製作 720p 預覽影片";
+  state.account.imports[0].media_progress = { phase: "preview", percent: 58.5, updated_at: Date.now() / 1000 };
+  await expect(queue.getByRole("progressbar")).toHaveAttribute("value", "58.5");
+  await expect(queue).toContainText("原片已就緒");
+  await expect(queue).not.toContainText("正在等待回應");
   state.account.imports[0].status = "ready";
   state.account.imports[0].progress = 100;
   await expect(queue.getByRole("article", { name: `匯入進度：${state.account.imports[0].title}`, exact: true })).toContainText("已匯入");
@@ -282,16 +319,142 @@ test("upload defaults private, requires audience, preserves failed form and supp
   expect(state.errors).toEqual([]);
 });
 
+test("a named clip supplies the upload title without starting an upload", async ({ page }) => {
+  const state = await setup(page, true, "瑪蓮妮亞・無傷通關");
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  await expect(page.getByLabel("影片標題", { exact: true })).toHaveValue("瑪蓮妮亞・無傷通關");
+  expect(state.writes).toEqual([]);
+});
+
+test("playlist choice survives failed submission and joining can retry without uploading again", async ({ page }) => {
+  const state = await setup(page);
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await expect(picker).toHaveValue("");
+  await picker.selectOption("PLboss");
+  await page.getByLabel("這部影片是否為兒童打造？").selectOption("no");
+  state.failUpload(true);
+  await page.getByRole("button", { name: "確認並上傳", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("網路暫時中斷");
+  await expect(picker).toHaveValue("PLboss");
+  await page.getByRole("tab", { name: "上傳紀錄", exact: true }).click();
+  await page.getByRole("tab", { name: "上傳這段成品", exact: true }).click();
+  await expect(picker).toHaveValue("PLboss");
+  await picker.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "../runs/youtube-ux/playlist-selection.png" });
+  expect((await new AxeBuilder({ page }).include(".yt-dialog").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  state.failUpload(false);
+  await page.getByRole("button", { name: "確認並上傳", exact: true }).click();
+  await expect(page.getByRole("progressbar", { name: "YouTube 上傳進度" })).toBeVisible();
+  expect(state.writes.filter(item => item.path.endsWith("/finished-clip")).at(-1)!.body).toMatchObject({ playlist_id: "PLboss", privacy: "private" });
+  Object.assign(state.account.uploads[0], { status: "succeeded", video_id: "uploaded123", playlist_status: "failed", playlist_error: "網路暫時中斷" });
+  await expect(page.getByText("影片已上傳，尚未加入播放清單", { exact: false })).toBeVisible();
+  const uploadsBefore = state.writes.filter(item => item.path.endsWith("/finished-clip")).length;
+  await page.getByRole("button", { name: "重試加入播放清單", exact: true }).click();
+  await expect(page.getByText("已加入播放清單：艾爾登法環・完整勝利", { exact: true })).toBeVisible();
+  expect(state.writes.filter(item => item.path.endsWith("/finished-clip"))).toHaveLength(uploadsBefore);
+  expect(state.writes.filter(item => item.path.endsWith("/playlist/retry"))).toHaveLength(1);
+  expect(state.errors).toEqual([]);
+});
+
+test("legacy connections can authorize playlists without losing upload fields", async ({ page }) => {
+  const state = await setup(page);
+  state.account.playlist_write_enabled = false;
+  await page.context().route("https://accounts.google.com/**", route => route.fulfill({ body: "Test authorization" }));
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await expect(picker).toBeDisabled();
+  await page.getByLabel("影片標題", { exact: true }).fill("保留我的標題");
+  await page.getByLabel("這部影片是否為兒童打造？").selectOption("no");
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeEnabled();
+  const request = page.waitForRequest(request => request.url().includes("/youtube/login?playlists=true"));
+  const popup = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "授權播放清單", exact: true }).click();
+  await request;
+  await (await popup).close();
+  await expect(page.getByRole("button", { name: "取消授權", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeDisabled();
+  state.account.pending = false;
+  state.account.playlist_write_enabled = true;
+  await expect(picker).toBeEnabled();
+  await expect(page.getByLabel("影片標題", { exact: true })).toHaveValue("保留我的標題");
+  await expect(page.getByLabel("這部影片是否為兒童打造？")).toHaveValue("no");
+  await picker.selectOption("PLboss");
+  expect(state.writes.filter(item => item.path.includes("/uploads/"))).toHaveLength(0);
+});
+
+test("playlist loading failures and empty lists still allow uploading without a playlist", async ({ page }) => {
+  const state = await setup(page);
+  let fail = true;
+  await page.route("**/api/youtube/playlists?*", route => fail ? route.fulfill({ status: 503, json: { detail: "清單暫時無法使用" } })
+    : route.fulfill({ json: { items: [], next_page_token: "" } }));
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  await expect(page.getByRole("alert")).toContainText("播放清單讀取失敗");
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeEnabled();
+  fail = false;
+  await page.getByRole("button", { name: "重試讀取播放清單", exact: true }).click();
+  await expect(page.getByText("這個頻道還沒有播放清單。", { exact: false })).toBeVisible();
+  await page.getByLabel("這部影片是否為兒童打造？").selectOption("no");
+  await page.getByRole("button", { name: "確認並上傳", exact: true }).click();
+  await expect(page.getByRole("progressbar", { name: "YouTube 上傳進度" })).toBeVisible();
+  expect(state.writes.find(item => item.path.endsWith("/finished-clip"))!.body.playlist_id).toBeNull();
+});
+
+test("playlist pagination preserves selection across tabs and fits a small screen", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/youtube/playlists?*", route => {
+    const next = new URL(route.request().url()).searchParams.get("page_token") === "second";
+    return route.fulfill({ json: { items: [{ id: next ? "PLsecond" : "PLfirst", title: next ? "Dark Souls・Boss 戰與完整勝利合集" : "Elden Ring",
+      privacy: next ? "public" : "private", count: next ? 40 : 2 }], next_page_token: next ? "" : "second" } });
+  });
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  await page.getByRole("button", { name: "載入更多播放清單", exact: true }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await picker.selectOption("PLsecond");
+  await page.getByRole("tab", { name: "上傳紀錄", exact: true }).click();
+  await page.getByRole("tab", { name: "上傳這段成品", exact: true }).click();
+  await expect(picker).toHaveValue("PLsecond");
+  await expect(picker.locator('option:checked')).toContainText("Dark Souls");
+  await page.setViewportSize({ width: 320, height: 844 });
+  await picker.scrollIntoViewIfNeeded();
+  const box = (await picker.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(320);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: "../runs/youtube-ux/playlist-mobile.png" });
+});
+
 test("watcher is opt-in and clearly explains future streams and human review", async ({ page }) => {
   const state = await setup(page);
   await open(page);
   expect(state.writes).toHaveLength(0);
+  await page.getByLabel("保留畫質").selectOption("1440");
   await page.getByText("自動匯入新直播", { exact: false }).click();
   await expect(page.getByText(/每 10 分鐘檢查一次/)).toBeVisible();
   await page.getByRole("button", { name: "使用上方設定開啟" }).click();
   await expect(page.getByRole("button", { name: "關閉自動匯入" })).toBeVisible();
+  await expect(page.getByText(/目前設定：最高 1440p/)).toBeVisible();
   await page.getByRole("button", { name: "關閉自動匯入" }).click();
   expect(state.writes.map(item => item.body.enabled)).toEqual([true, false]);
+  expect(state.writes[0].body.download_quality).toBe("1440");
+});
+
+test("new imports default to the highest quality and choosing a cap does not start work", async ({ page }) => {
+  const state = await setup(page);
+  await open(page);
+  const quality = page.getByLabel("保留畫質");
+  await expect(quality).toHaveValue("best");
+  await expect(quality.locator("option")).toHaveCount(6);
+  for (const value of ["2160", "1440", "1080", "720", "480", "best"]) await quality.selectOption(value);
+  expect(state.writes).toEqual([]);
+  await page.getByRole("button", { name: "匯入直播：艾爾登法環｜終於打贏女武神！" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(state.writes[0].body.download_quality).toBe("best");
 });
 
 test("desktop and small-screen views have readable contrast and no clipped controls", async ({ page }) => {
@@ -303,6 +466,8 @@ test("desktop and small-screen views have readable contrast and no clipped contr
   expect(results.violations).toEqual([]);
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.getByLabel("保留畫質").scrollIntoViewIfNeeded();
+  await expect(page.getByLabel("保留畫質")).toBeInViewport();
   await page.screenshot({ path: "../runs/youtube-ux/mobile.png", fullPage: true });
   expect(await page.locator(".yt-dialog").evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy();
   await expect(page.locator(".yt-dialog").getByRole("button", { name: "回到工作區", exact: true })).toBeInViewport();

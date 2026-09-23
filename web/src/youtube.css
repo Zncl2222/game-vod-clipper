@@ -89,6 +89,13 @@
 .yt-export-summary p { font-size: 13px; color: var(--muted); }
 .yt-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 8px; }
 .yt-form-grid > div { display: grid; gap: 8px; }
+.yt-playlist-field { display: grid; gap: 8px; padding-block: 12px; }
+.yt-playlist-label { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.yt-playlist-label button { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.yt-playlist-access { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; background: var(--surface-subtle); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 8px; }
+.yt-playlist-access p { flex: 1; min-width: 180px; color: var(--muted); font-size: 13px; }
+.yt-playlist-field .yt-hint { display: flex; align-items: center; gap: 6px; }
+.yt-playlist-error { display: block; margin-top: 4px; }
 .yt-footer-upload .yt-actions { margin-left: auto; }
 .yt-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 28px; border-top: 1px solid var(--line); flex-shrink: 0; }
 .yt-history { display: grid; gap: 16px; }

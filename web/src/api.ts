@@ -1,4 +1,7 @@
+import type { MediaProgressInfo } from "./MediaProgress";
+
 export type Draft = {
+  title?: string | null;
   start: number;
   victory: number;
   postroll: number;
@@ -21,10 +24,12 @@ export type Project = {
   duration?: number;
   width?: number;
   height?: number;
+  download_quality?: "best" | "2160" | "1440" | "1080" | "720" | "480";
   thumbnails: { file: string; time: number }[];
   draft?: Draft;
 };
 export type Job = {
+  analysis?: { start: number; end: number; candidate_id?: string | null } | null;
   quota_change?: QuotaChange;
   edit_draft?: Draft;
   source_job_id?: string | null;
@@ -37,6 +42,7 @@ export type Job = {
   status: string;
   stage: string;
   progress: number;
+  media_progress?: MediaProgressInfo | null;
   error: string | null;
   draft: Draft | null;
   result?: AnalysisResult;

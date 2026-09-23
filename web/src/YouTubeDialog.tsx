@@ -2,21 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, ExternalLink, Film, Link2, LoaderCircle, RefreshCw, Upload, X, Youtube } from "lucide-react";
 import { api, ApiError, time, type Job, type Project } from "./api";
 import YouTubeImportQueue, { importIsPending, importIsWorking, type ImportRecord } from "./YouTubeImportQueue";
+import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
+import DownloadQuality, { qualityLabel, type DownloadQualityValue } from "./DownloadQuality";
 import "./youtube.css";
 
 type Channel = { id: string; title: string };
-type Watch = { enabled: boolean; auto_analyze: boolean; model: string; last_checked: number | null; error: string | null };
+type Watch = { enabled: boolean; auto_analyze: boolean; model: string; download_quality?: DownloadQualityValue; last_checked: number | null; error: string | null };
 type UploadRecord = { id: string; export_id: string; project_id: string; channel: Channel; title: string; description: string;
-  privacy: string; status: string; progress: number; error: string | null; video_id: string | null; created: number };
+  privacy: string; status: string; progress: number; error: string | null; video_id: string | null; created: number;
+  playlist_id?: string | null; playlist_title?: string | null; playlist_status?: string | null; playlist_error?: string | null };
 type Account = { configured: boolean; connected: boolean; channel: Channel | null; pending: boolean; error: string | null;
-  reconnect_required: boolean; watch: Watch; uploads: UploadRecord[]; imports?: ImportRecord[] };
+  reconnect_required: boolean; playlist_write_enabled?: boolean; watch: Watch; uploads: UploadRecord[]; imports?: ImportRecord[] };
 type Broadcast = { id: string; title: string; duration: number; ended_at: string; privacy: string; available: boolean;
   reason: string; project_id: string | null };
 type Model = { id: string; name: string; is_default?: boolean; input_modalities?: string[] };
 export type UploadTarget = { job: Job; project: Project };
 const privacyLabels: Record<string, string> = { private: "私人", unlisted: "不公開", public: "公開" };
-const uploadLabels: Record<string, string> = { queued: "等待上傳", uploading: "正在上傳", processing: "YouTube 正在處理", succeeded: "上傳完成", paused: "已暫停", failed: "需要重試", needs_review: "請到 YouTube 確認" };
-const isWorking = (item: UploadRecord) => ["queued", "uploading", "processing"].includes(item.status);
+const uploadLabels: Record<string, string> = { queued: "等待上傳", uploading: "正在上傳", processing: "YouTube 正在處理", adding_to_playlist: "影片已上傳，正在加入播放清單", succeeded: "上傳完成", paused: "已暫停", failed: "需要重試", needs_review: "請到 YouTube 確認" };
+const isWorking = (item: UploadRecord) => ["queued", "uploading", "processing", "adding_to_playlist"].includes(item.status);
 const errorLinks: Record<string, { href: string; label: string }> = {
   liveStreamingNotEnabled: { href: "https://www.youtube.com/features", label: "檢查 YouTube 直播功能" },
   accessNotConfigured: { href: "https://console.cloud.google.com/apis/library/youtube.googleapis.com", label: "啟用 YouTube Data API" },
@@ -45,11 +48,14 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState(() => localStorage.getItem("bosscut:chat-model") ?? "");
   const [autoAnalyze, setAutoAnalyze] = useState(true);
-  const [title, setTitle] = useState(target ? `${target.project.title.slice(0, 85)} · 精華片段` : "");
+  const [quality, setQuality] = useState<DownloadQualityValue>("best");
+  const [title, setTitle] = useState(target?.job.draft?.title?.trim() || (target ? `${target.project.title.slice(0, 85)} · 精華片段` : ""));
   const [description, setDescription] = useState(target?.job.draft ? `原片片段：${time(target.job.draft.start)}–${time(target.job.draft.victory + target.job.draft.postroll)}` : "");
   const [privacy, setPrivacy] = useState("private");
   const [audience, setAudience] = useState("");
   const [notify, setNotify] = useState(false);
+  const [playlistId, setPlaylistId] = useState("");
+  const [playlistTitle, setPlaylistTitle] = useState("");
   const [uploadId, setUploadId] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState("");
   const connected = !!account?.connected && !account.reconnect_required;
@@ -57,6 +63,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
   const channelId = account?.channel?.id;
   const errorMessage = error?.message;
   const errorLink = error instanceof ApiError && error.code ? errorLinks[error.code] : undefined;
+  useEffect(() => { setPlaylistId(""); setPlaylistTitle(""); }, [channelId, account?.playlist_write_enabled]);
 
   async function refresh() {
     const data = await api<Account>("/youtube");
@@ -139,13 +146,13 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
       if (alive.current) setNotice("設定完成，現在可以連接你的 Google 帳號。");
     });
   }
-  function login() {
+  function login(playlists = false) {
     if (pendingAction.current) return;
     const popup = window.open("about:blank", "_blank");
     if (popup) popup.opener = null;
     void perform("login", async () => {
       try {
-        const result = await api<{ url: string }>("/youtube/login", "POST");
+        const result = await api<{ url: string }>(`/youtube/login${playlists ? "?playlists=true" : ""}`, "POST");
         if (popup) popup.location.replace(result.url);
         if (alive.current) setLoginUrl(result.url);
         await refresh();
@@ -156,7 +163,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
     if (item.project_id) { onImport(item.project_id); return; }
     await perform(item.id, async () => {
       const result = await api<{ project_id: string }>(`/youtube/broadcasts/${item.id}/import`, "POST", {
-        channel_id: channelId, auto_analyze: autoAnalyze, model,
+        channel_id: channelId, auto_analyze: autoAnalyze, model, download_quality: quality,
       });
       if (alive.current) onImport(result.project_id);
     });
@@ -166,7 +173,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
     if (!choices.length) return;
     await perform("batch", async () => {
       const result = await api<{ added: number; existing: number; items: ImportRecord[] }>("/youtube/imports", "POST", {
-        channel_id: channelId, auto_analyze: autoAnalyze, model,
+        channel_id: channelId, auto_analyze: autoAnalyze, model, download_quality: quality,
         videos: choices.map(item => ({ id: item.id, title: item.title })),
       });
       if (!alive.current) return;
@@ -183,7 +190,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
   }
   async function watch(enabled: boolean) {
     await perform("watch", async () => {
-      await api("/youtube/watch", "PUT", { channel_id: channelId, enabled, auto_analyze: autoAnalyze, model });
+      await api("/youtube/watch", "PUT", { channel_id: channelId, enabled, auto_analyze: autoAnalyze, model, download_quality: quality });
       await refresh();
       if (alive.current) setNotice(enabled ? "已開啟：接下來結束的直播會自動匯入，剪輯仍由你確認。" : "已關閉自動匯入，已建立的任務會繼續。 ");
     });
@@ -197,6 +204,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
     await perform("upload", async () => {
       const result = await api<UploadRecord>(`/youtube/uploads/${target!.job.id}`, "POST", {
         channel_id: channelId, title: title.trim(), description, privacy, made_for_kids: audience === "yes", notify_subscribers: notify,
+        playlist_id: playlistId || null,
       });
       if (alive.current) setUploadId(result.id);
       await refresh();
@@ -246,7 +254,15 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
       <p>{item.channel.title} · <span role="status">{uploadLabels[item.status] ?? item.status}</span></p>
       {isWorking(item) && <progress max={100} value={item.progress} aria-label="YouTube 上傳進度" />}
       {item.error && <p className="yt-record-error">{item.error}</p>}
+      {item.playlist_id && <p className={item.playlist_status === "failed" ? "yt-record-error" : undefined} role="status">
+        {item.playlist_status === "added" ? "已加入播放清單" : item.playlist_status === "failed" ? "影片已上傳，尚未加入播放清單" : "完成後加入播放清單"}：{item.playlist_title || item.playlist_id}
+        {item.playlist_error && <span className="yt-playlist-error">{item.playlist_error}</span>}</p>}
       <div className="yt-actions">
+        {item.playlist_status === "failed" && item.status === "succeeded" && <button type="button" className="secondary"
+          disabled={!!busy || !connected || !!account?.pending || item.channel.id !== channelId}
+          onClick={() => account?.playlist_write_enabled ? void perform(item.id, async () => {
+            await api(`/youtube/uploads/${item.id}/playlist/retry`, "POST"); await refresh();
+          }) : login(true)}>{account?.playlist_write_enabled ? "重試加入播放清單" : "授權播放清單"}</button>}
         {isWorking(item) && <button type="button" className="secondary" disabled={!!busy} onClick={() => void perform(item.id, async () => { await api(`/youtube/uploads/${item.id}/pause`, "POST"); await refresh(); })}>暫停上傳</button>}
         {["failed", "paused"].includes(item.status) && <button type="button" className="primary" disabled={!!busy || !connected || item.channel.id !== channelId}
           onClick={() => void perform(item.id, async () => { await api(`/youtube/uploads/${item.id}/resume`, "POST"); await refresh(); })}>繼續上傳</button>}
@@ -285,12 +301,18 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
           {account.pending ? <div className="yt-login-wait" role="status"><p><LoaderCircle size={18} className="spin" aria-hidden="true" />請在 Google 視窗完成授權，此處會自動更新。</p>
             {loginUrl && <a className="secondary" href={loginUrl} target="_blank" rel="noreferrer">開啟 Google 授權頁<ExternalLink size={15} aria-hidden="true" /></a>}
             <button type="button" className="text-button" disabled={!!busy} onClick={() => void perform("cancel", async () => { await api("/youtube/login/cancel", "POST"); setLoginUrl(""); await refresh(); })}>取消登入</button></div>
-            : <button type="button" className="primary" disabled={!account.configured || !!busy} onClick={login}>{busy === "login" ? "正在開啟 Google…" : "使用 Google 連接"}<ArrowRight size={17} aria-hidden="true" /></button>}
+            : <button type="button" className="primary" disabled={!account.configured || !!busy} onClick={() => login()}>{busy === "login" ? "正在開啟 Google…" : "使用 Google 連接"}<ArrowRight size={17} aria-hidden="true" /></button>}
         </section> : <>
           <div className="yt-channel"><div><span className="yt-connected-dot" /><strong>{account.channel!.title}</strong><span>已連接</span></div>
             <details><summary>帳號選項</summary><button type="button" className="text-button" disabled={!!busy || account.uploads.some(isWorking)} onClick={() => void perform("disconnect", async () => {
               const result = await api<Account & { message: string }>("/youtube/disconnect", "POST"); if (alive.current) { setAccount(result); setNotice(result.message); }
             })}>中斷連接</button><p>先暫停上傳即可中斷；成品會保留。</p></details></div>
+          {account.pending && <div className="yt-playlist-access" role="status"><p>請在 Google 視窗完成播放清單授權，此處會自動更新。請選擇同一個頻道。</p>
+            {loginUrl && <a className="text-button" href={loginUrl} target="_blank" rel="noreferrer">開啟 Google 授權頁</a>}
+            <button type="button" className="text-button" disabled={!!busy} onClick={() => void perform("cancel", async () => {
+              await api("/youtube/login/cancel", "POST"); setLoginUrl(""); await refresh();
+            })}>取消授權</button></div>}
+          {!account.pending && account.error && <p className="inline-error" role="alert">{account.error}</p>}
           <div className="yt-tabs" role="tablist" aria-label="YouTube 工具" onKeyDown={event => {
             if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
@@ -309,6 +331,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
                 onCancel={id => void importQueueAction(id, "cancel")} onRetry={id => void importQueueAction(id, "retry")} />
               <div className="yt-list-toolbar"><label className="sr-only" htmlFor="yt-query">搜尋直播存檔</label><input id="yt-query" type="search" placeholder="搜尋已載入的直播…" value={query} onChange={event => setQuery(event.target.value)} />
                 <button type="button" className="secondary" disabled={listLoading || !!busy} onClick={() => void loadList()}><RefreshCw size={16} className={listLoading ? "spin" : ""} aria-hidden="true" />重新整理直播</button></div>
+              <DownloadQuality value={quality} onChange={setQuality} disabled={!!busy} />
               <div className="yt-analysis-option"><label><input type="checkbox" checked={autoAnalyze} disabled={!!busy} onChange={event => setAutoAnalyze(event.target.checked)} />匯入後自動找片段</label>
                 {autoAnalyze && <><label className="sr-only" htmlFor="yt-model">直播分析模型</label><select id="yt-model" value={model} disabled={!!busy || !models.length} onChange={event => setModel(event.target.value)}><option value="">選擇 AI 模型</option>{models.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></>}
                 {autoAnalyze && !chosenModel && <p>請先在 AI 帳號設定完成連接，或取消勾選以先匯入影片。</p>}</div>
@@ -329,7 +352,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
               </div>
               {nextPage && <button type="button" className="secondary yt-more" disabled={listLoading || !!busy} onClick={() => void loadList(nextPage)}>載入更多直播</button>}
               <details className="yt-watch"><summary>自動匯入新直播 <span>{account.watch.enabled ? "已開啟" : "未開啟"}</span></summary><p>每 10 分鐘檢查一次，只匯入開啟後結束的直播。請讓 BossCut 保持運作；剪輯仍由你確認。</p>
-                {account.watch.enabled && <p>目前設定：{account.watch.auto_analyze ? `匯入後自動分析 · ${account.watch.model}` : "只匯入影片"}</p>}
+                {account.watch.enabled && <p>目前設定：{qualityLabel(account.watch.download_quality)} · {account.watch.auto_analyze ? `匯入後自動分析 · ${account.watch.model}` : "只匯入影片"}</p>}
                 <button type="button" className="secondary" disabled={!!busy || !account.watch.enabled && autoAnalyze && !chosenModel} onClick={() => void watch(!account.watch.enabled)}>{account.watch.enabled ? "關閉自動匯入" : "使用上方設定開啟"}</button>
                 {account.watch.enabled && <button type="button" className="text-button" disabled={!!busy} onClick={() => void perform("sync", async () => { await api("/youtube/sync", "POST"); await refresh(); await loadList(); })}>立即檢查</button>}
                 {account.watch.last_checked && <p>上次檢查：{new Date(account.watch.last_checked * 1000).toLocaleString("zh-TW")}</p>}{account.watch.error && <p className="inline-error">{account.watch.error}</p>}</details>
@@ -340,6 +363,9 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
               <label htmlFor="yt-description">說明 <span>（選填）</span></label><textarea id="yt-description" rows={3} value={description} maxLength={5000} disabled={!!busy} onChange={event => { setDescription(event.target.value); setFieldError(""); }} />
               <div className="yt-form-grid"><div><label htmlFor="yt-privacy">誰可以觀看？</label><select id="yt-privacy" value={privacy} disabled={!!busy} onChange={event => setPrivacy(event.target.value)}><option value="private">私人 · 只有你能看</option><option value="unlisted">不公開 · 知道連結即可觀看</option><option value="public">公開 · 所有人都能看</option></select></div>
                 <div><label htmlFor="yt-audience">這部影片是否為兒童打造？</label><select id="yt-audience" value={audience} required disabled={!!busy} aria-describedby="yt-field-error" onChange={event => { setAudience(event.target.value); setFieldError(""); }}><option value="">請選擇</option><option value="no">否，並非為兒童打造</option><option value="yes">是，專為兒童打造</option></select></div></div>
+              <YouTubePlaylistPicker channelId={channelId!} canWrite={!!account.playlist_write_enabled}
+                disabled={!!busy || account.pending} value={playlistId} selectedTitle={playlistTitle}
+                onChange={(id, name) => { setPlaylistId(id); setPlaylistTitle(name); }} onAuthorize={() => login(true)} />
               <details><summary>更多上傳選項</summary><label className="yt-check"><input type="checkbox" checked={notify} disabled={!!busy} onChange={event => setNotify(event.target.checked)} />通知訂閱者</label></details>
               <p className="yt-hint">尚未通過 YouTube API 審核的專案，上傳會被限制為私人影片。</p>
               {fieldError && <p id="yt-field-error" role="alert" className="inline-error">{fieldError}</p>}
@@ -351,7 +377,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
     </div>
     {connected && tab === "upload" && target && !existing ? <footer className="yt-footer yt-footer-upload"><span>上傳至 <strong>{account!.channel!.title}</strong> · {privacyLabels[privacy]}</span><div className="yt-actions">
       <button type="button" className="secondary" onClick={onClose}>取消</button>
-      <button type="submit" form="yt-upload-form" className="primary" disabled={!!busy}>{busy === "upload" ? <LoaderCircle size={17} className="spin" aria-hidden="true" /> : <Upload size={17} aria-hidden="true" />}{busy === "upload" ? "正在建立上傳…" : "確認並上傳"}</button>
+      <button type="submit" form="yt-upload-form" className="primary" disabled={!!busy || account!.pending}>{busy === "upload" ? <LoaderCircle size={17} className="spin" aria-hidden="true" /> : <Upload size={17} aria-hidden="true" />}{busy === "upload" ? "正在建立上傳…" : "確認並上傳"}</button>
     </div></footer> : connected && tab === "live" ? <footer className="yt-footer yt-footer-batch"><span>已選 <strong>{selected.size}</strong> 部 · 依序匯入</span><div className="yt-actions">
       <button type="button" className="secondary" onClick={onClose}><ArrowLeft size={16} aria-hidden="true" />回到工作區</button>
       <button type="button" className="primary" disabled={!!busy || !selected.size || autoAnalyze && !chosenModel} onClick={() => void importSelected()}>

@@ -33,6 +33,7 @@ from .youtube_routes import YouTubeWorkspace
 from .youtube_account import YouTubeError
 from .usage import quota_change, usage_summary
 from .storage import video_storage
+from .youtube import DownloadQuality
 
 ACTIVE = {"queued", "running"}
 EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
@@ -42,6 +43,7 @@ logger = logging.getLogger(__name__)
 class ImportRequest(BaseModel):
     kind: Literal["local", "youtube"]
     source: str = Field(min_length=1, max_length=2000)
+    download_quality: DownloadQuality = "best"
 
 
 class ProjectUpdate(BaseModel):
@@ -51,6 +53,7 @@ class ProjectUpdate(BaseModel):
 
 class Draft(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
+    title: str | None = Field(default=None, max_length=100, pattern=r"^[^\x00-\x1f\x7f]*$")
     start: float = Field(ge=0)
     victory: float = Field(gt=0)
     postroll: float = Field(ge=5, le=10)
@@ -95,6 +98,8 @@ class AnalysisRequest(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(gt=0)
     model: str = Field(default=MODEL, min_length=1, max_length=120)
+    candidate_id: str | None = Field(default=None, min_length=1, max_length=100)
+    analysis_generation: int | None = Field(default=None, ge=0)
 
 
 def http_origin(value: str):
@@ -150,6 +155,8 @@ class Jobs:
         self.store = store
         self.codex = codex
         self.limit = asyncio.Semaphore(1)
+        # A long AI search must not occupy the download / export worker.
+        self.analysis_limit = asyncio.Semaphore(1)
         self.tasks: dict[str, asyncio.Task] = {}
 
     def submit(
@@ -182,7 +189,8 @@ class Jobs:
 
     async def execute(self, job_id: str):
         try:
-            async with self.limit:
+            job = self.store.get("jobs", job_id)
+            async with self.analysis_limit if job["kind"] == "analyze" else self.limit:
                 job = self.store.get("jobs", job_id)
                 before = None
                 if job["kind"] == "analyze" and self.codex:
@@ -202,6 +210,13 @@ class Jobs:
             current = self.store.get("jobs", job_id)
             if current and current["status"] in ACTIVE:
                 self.store.patch("jobs", job_id, status="cancelled", stage="已取消", finished_at=time.time())
+            if current and (current.get("quota_change") or {}).get("status") == "pending":
+                self.store.patch("jobs", job_id, quota_change={"status": "unavailable", "windows": []})
+        except Exception as exc:
+            logger.exception("Job %s could not complete dispatch", job_id)
+            current = self.store.get("jobs", job_id)
+            if current and current["status"] in ACTIVE:
+                self.store.patch("jobs", job_id, status="failed", error=str(exc), finished_at=time.time())
             if current and (current.get("quota_change") or {}).get("status") == "pending":
                 self.store.patch("jobs", job_id, quota_change={"status": "unavailable", "windows": []})
 
@@ -409,11 +424,21 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     async def enqueue_analysis(project_id: str, body: AnalysisRequest, request_id: str, resume_job: dict | None = None, expected_generation: int | None = None):
         project = get("projects", project_id)
-        generation = project.get("analysis_generation", 0) if expected_generation is None else expected_generation
+        generation = (expected_generation if expected_generation is not None else
+                      body.analysis_generation if body.analysis_generation is not None else
+                      project.get("analysis_generation", 0))
+        if project.get("analysis_generation", 0) != generation:
+            raise HTTPException(409, "影片分析已重置，請重新選取片段。")
         if not project["ready"]:
             raise HTTPException(409, "請先完成影片預覽。")
         if not body.start < body.end <= project["duration"]:
             raise HTTPException(422, "分析範圍須位於原片內。")
+        target = None
+        if body.candidate_id:
+            target = next((candidate for candidate in project_candidates(project, store.all("jobs"))
+                           if candidate["id"] == body.candidate_id), None)
+            if target is None:
+                raise HTTPException(404, "找不到這個影片的候選片段。")
         status = await codex.status()
         if not status["available"]:
             raise ConnectionError(status["detail"])
@@ -438,9 +463,11 @@ def create_app(root: Path | None = None) -> FastAPI:
                 return duplicate
             if any(j["project_id"] == project_id and j["kind"] == "analyze" and j["status"] in ACTIVE for j in current):
                 raise HTTPException(409, "此影片已有搜尋任務，請先等待完成或取消。")
-            if sum(j["status"] in ACTIVE for j in current) >= 8:
+            if sum(j["status"] in ACTIVE and j["kind"] == "analyze" for j in current) >= 8:
                 raise HTTPException(429, "任務佇列已滿。")
-            submitted = jobs.submit(project_id, "analyze", analysis={**body.model_dump(),
+            submitted = jobs.submit(project_id, "analyze", analysis={**body.model_dump(exclude_none=True),
+                **({"review_target": {key: target.get(key) for key in
+                    ("id", "start", "end", "victory", "kind", "boss", "summary")}} if target else {}),
                 "effort": effort,
                 "effort_policy": effort_policy,
                 "request_id": request_id, **({"resume_from": resume_job["id"]} if resume_job else {})})
@@ -562,7 +589,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             url = youtube_url(body.source) if body.kind == "youtube" else None
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
-        if len([j for j in store.all("jobs") if j["status"] in ACTIVE]) >= 8:
+        if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿，請稍後再試。")
         project = {
             "id": uuid4().hex,
@@ -572,6 +599,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             "ready": False,
             "created": time.time(),
             "thumbnails": [],
+            **({"download_quality": body.download_quality} if body.kind == "youtube" else {}),
         }
         store.put("projects", project)
         return {
@@ -675,6 +703,32 @@ def create_app(root: Path | None = None) -> FastAPI:
         store.patch("jobs", job_id, edit_draft=draft)
         return draft
 
+    @app.delete("/api/projects/{project_id}/clips/{job_id}")
+    async def delete_clip(project_id: str, job_id: str):
+        # Serialize with upload startup, which hashes the file before queuing it.
+        async with youtube.uploads.lock:
+            get("projects", project_id)
+            job = clip_for_edit(project_id, job_id)
+            if any(item["export_id"] == job_id and (item["id"] in youtube.uploads.tasks
+                   or item["status"] in {"queued", "uploading", "processing", "adding_to_playlist"})
+                   for item in youtube.uploads.all().values()):
+                raise HTTPException(409, "這個成品正在上傳 YouTube，請先暫停上傳再刪除。")
+            output = root / "clips" / "web" / project_id / f"{job_id}.mp4"
+            files = (output, output.with_suffix(".json"))
+            # Never follow stored paths or symlinks when deleting user media.
+            if (job.get("output", str(output.relative_to(root))) != str(output.relative_to(root))
+                    or any(path.is_symlink() or path.resolve() != path for path in files)):
+                raise HTTPException(409, "成品檔案位置異常，未刪除資料。")
+            if any(p.get("source") and (root / p["source"]).resolve() in files for p in store.all("projects")):
+                raise HTTPException(409, "這個成品正被用作專案原片，請先移除使用它的專案。")
+            try:
+                for path in files:
+                    path.unlink(missing_ok=True)
+            except OSError as error:
+                raise HTTPException(500, "成品檔案刪除未完成，請重試。") from error
+            store.delete_clip(project_id, job_id)
+            return {"deleted": True, "id": job_id}
+
     @app.put("/api/projects/{project_id}/draft")
     async def save_draft(project_id: str, body: Draft):
         project = get("projects", project_id)
@@ -705,7 +759,7 @@ def create_app(root: Path | None = None) -> FastAPI:
                 and job["status"] in ACTIVE | {"succeeded"}
             ):
                 return public_job(job)
-        if len([j for j in store.all("jobs") if j["status"] in ACTIVE]) >= 8:
+        if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
         return jobs.submit(project_id, "export", draft, source_job_id=body.source_job_id)
 
@@ -736,7 +790,8 @@ def create_app(root: Path | None = None) -> FastAPI:
             bounds = job["analysis"]
             checkpoint = store.root / "runs" / "web" / job["project_id"] / "codex" / job["id"] / "checkpoint.json"
             return public_job(await enqueue_analysis(job["project_id"], AnalysisRequest(
-                start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL), effort=bounds.get("effort")), uuid4().hex,
+                start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL), effort=bounds.get("effort"),
+                candidate_id=bounds.get("candidate_id")), uuid4().hex,
                 resume_job=job if checkpoint.is_file() else None))
         if any(
             j["project_id"] == job["project_id"] and j["status"] in ACTIVE
@@ -745,7 +800,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(409, "此專案已有任務執行中。")
         if job["kind"] == "prepare" and get("projects", job["project_id"])["ready"]:
             raise HTTPException(409, "此專案的預覽已完成，無需重新建立。")
-        if len([j for j in store.all("jobs") if j["status"] in ACTIVE]) >= 8:
+        if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
         return jobs.submit(
             job["project_id"], job["kind"], job.get("draft"), job.get("analysis"), job.get("source_job_id")
@@ -801,9 +856,11 @@ def create_app(root: Path | None = None) -> FastAPI:
         job = get("jobs", job_id)
         if job["status"] != "succeeded" or job["kind"] != "export":
             raise HTTPException(404, "尚無可下載的剪輯。")
+        title = (job.get("draft", {}).get("title") or "").strip()
+        filename = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", title).strip(" .")
         return LocalFileResponse(
             root / job["output"],
-            filename=f"boss-fight-{job_id[:8]}.mp4",
+            filename=f"{filename or 'boss-fight-' + job_id[:8]}.mp4",
             media_type="video/mp4",
         )
 
@@ -821,8 +878,9 @@ def create_app(root: Path | None = None) -> FastAPI:
             "draft": project["draft"],
         }
 
-    async def youtube_import(video_id: str):
-        return await import_project(ImportRequest(kind="youtube", source=f"https://www.youtube.com/watch?v={video_id}"))
+    async def youtube_import(video_id: str, download_quality: DownloadQuality = "best"):
+        return await import_project(ImportRequest(kind="youtube", source=f"https://www.youtube.com/watch?v={video_id}",
+                                                  download_quality=download_quality))
 
     async def youtube_check_model(model: str):
         if not model:

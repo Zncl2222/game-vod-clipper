@@ -15,7 +15,7 @@ from .web_store import Store
 from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, google_error
 
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
-BUSY = {"queued", "uploading", "processing"}
+BUSY = {"queued", "uploading", "processing", "adding_to_playlist"}
 CHUNK = 8 * 1024 * 1024
 
 
@@ -65,7 +65,8 @@ class YouTubeUploads:
 
     def public(self, item: dict):
         keys = {"id", "export_id", "project_id", "channel", "title", "description", "privacy", "status", "progress",
-                "error", "video_id", "created", "made_for_kids", "notify_subscribers"}
+                "error", "video_id", "created", "made_for_kids", "notify_subscribers",
+                "playlist_id", "playlist_title", "playlist_status", "playlist_error"}
         return {k: v for k, v in item.items() if k in keys}
 
     def public_records(self):
@@ -124,10 +125,17 @@ class YouTubeUploads:
             if key in self.records:
                 return self.public(self.get(key))
             self.ensure_capacity()
+            playlist_id = metadata.get("playlist_id")
+            playlist_title = None
+            if playlist_id:
+                self.account.require_playlist_access()
+                playlist = await self.account.owned_playlist(playlist_id, channel_id)
+                playlist_title = playlist["snippet"]["title"]
             item = {"id": key, "export_id": export_id, "project_id": job["project_id"], "channel": channel,
                     **metadata, "path": str(path.relative_to(self.store.root)), "sha256": digest, "size": path.stat().st_size,
                     "status": "queued", "progress": 0, "error": None, "created": time.time(), "session": None,
-                    "video_id": None, "offset": 0}
+                    "video_id": None, "offset": 0, "playlist_title": playlist_title,
+                    "playlist_status": "pending" if playlist_id else None, "playlist_error": None}
             self.save(item)
             self.launch(key)
             return self.public(item)
@@ -159,6 +167,21 @@ class YouTubeUploads:
                 self.patch(key, status="paused", error="上傳已暫停，可稍後繼續。")
         return self.public(self.get(key))
 
+    async def retry_playlist(self, key: str):
+        async with self.lock:
+            item = self.get(key)
+            if key in self.tasks:
+                return self.public(item)
+            if not item.get("video_id") or item.get("playlist_status") != "failed" or item["status"] != "succeeded":
+                raise YouTubeError("這筆紀錄沒有需要重試的播放清單操作。", 409)
+            if (self.account.status()["channel"] or {}).get("id") != item["channel"]["id"]:
+                raise YouTubeError("請連回原本的 YouTube 頻道。", 409)
+            self.account.require_playlist_access()
+            self.ensure_capacity()
+            self.patch(key, status="adding_to_playlist", playlist_status="pending", playlist_error=None)
+            self.launch(key)
+            return self.public(self.get(key))
+
     async def restart(self, key: str):
         """Only called after the user explicitly checks Studio for an expired session."""
         async with self.lock:
@@ -181,7 +204,10 @@ class YouTubeUploads:
                 if (self.account.status()["channel"] or {}).get("id") != item["channel"]["id"]:
                     raise YouTubeError("YouTube 頻道已變更，請連回原頻道。", 409)
                 if item.get("video_id"):
-                    await self.processing(key)
+                    if item.get("video_processed"):
+                        await self.finish_playlist(key)
+                    else:
+                        await self.processing(key)
                     return
                 _, path = self.validate_export(item["export_id"])
                 if await asyncio.to_thread(file_hash, path) != item["sha256"]:
@@ -279,10 +305,26 @@ class YouTubeUploads:
                 self.patch(key, status="needs_review", error="YouTube 未完成影片處理，請到 YouTube Studio 查看原因。")
                 return
             if state == "succeeded" or status.get("uploadStatus") == "processed":
-                self.patch(key, status="succeeded", privacy=status.get("privacyStatus", item["privacy"]), progress=100)
+                self.patch(key, video_processed=True, privacy=status.get("privacyStatus", item["privacy"]), progress=100)
+                await self.finish_playlist(key)
                 return
             await asyncio.sleep(5)
         self.patch(key, status="paused", error="影片已上傳，YouTube 仍在處理。稍後按繼續上傳只會查詢狀態。")
+
+    async def finish_playlist(self, key: str):
+        item = self.get(key)
+        if not item.get("playlist_id") or item.get("playlist_status") == "added":
+            self.patch(key, status="succeeded", error=None)
+            return
+        self.patch(key, status="adding_to_playlist", error=None, playlist_status="adding", playlist_error=None)
+        try:
+            await self.account.add_to_playlist(item["playlist_id"], item["video_id"], item["channel"]["id"])
+        except YouTubeError as error:
+            self.patch(key, status="succeeded", playlist_status="failed", playlist_error=str(error))
+        except Exception:
+            self.patch(key, status="succeeded", playlist_status="failed", playlist_error="無法確認播放清單結果，請重試加入。")
+        else:
+            self.patch(key, status="succeeded", playlist_status="added", playlist_error=None)
 
     async def close(self):
         for key in list(self.tasks):

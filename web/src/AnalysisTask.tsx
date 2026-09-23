@@ -11,8 +11,9 @@ export default function AnalysisTask({ job, onError, onApply, onSeek }: {
 }) {
   const [applied, setApplied] = useState<string | null>(null);
   const result = job.status === "succeeded" ? job.result : undefined;
-  return <article className="assistant-task" aria-label="AI 搜尋任務">
-    <header><strong>成功挑戰搜尋</strong><span>{job.model ?? result?.model ?? "Codex"}</span></header>
+  return <article className="assistant-task" aria-label={job.analysis?.candidate_id ? "片段 AI 複判任務" : "AI 搜尋任務"}>
+    <header><strong>{job.analysis?.candidate_id ? "片段 AI 複判" : "成功挑戰搜尋"}</strong><span>{job.model ?? result?.model ?? "Codex"}</span></header>
+    {job.analysis?.candidate_id && <p>送檢區間 {time(job.analysis.start, true)}–{time(job.analysis.end, true)}</p>}
     {!!(job.candidates ?? result?.candidates)?.length && <p>候選片段已標在影片時間軸，可按編號逐段預覽與核對。</p>}
     <details open={active(job) || job.status === "failed"}>
       <summary>搜尋進度與紀錄 · {({ queued: "等待中", running: "執行中", failed: "失敗", succeeded: "完成", cancelled: "已取消", interrupted: "已中斷" } as Record<string, string>)[job.status] ?? job.status}</summary>

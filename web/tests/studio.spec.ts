@@ -26,6 +26,37 @@ async function workspace(page: Page, projects: unknown[] = [], jobs: unknown[] =
   await expect(page.getByText("工作區已連線")).toBeVisible();
 }
 
+test("URL imports show real transfer progress, preparation stages and a distinct queued state", async ({ page }) => {
+  await page.clock.install();
+  const job: any = { id: "prepare-progress", project_id: project.id, kind: "prepare", status: "queued", stage: "等待處理", progress: 0 };
+  await workspace(page, [{ ...project, ready: false }], [job]);
+  const pending = page.locator(".preparing");
+  await expect(pending).toContainText("排隊等待處理");
+  await expect(pending.getByRole("progressbar")).not.toHaveAttribute("value");
+  job.status = "running";
+  job.stage = "下載 YouTube 影像";
+  job.media_progress = { phase: "download", percent: 42.5, downloaded_bytes: 850_000_000, total_bytes: 2_000_000_000,
+    speed_bps: 10_000_000, eta_seconds: 115, updated_at: Date.now() / 1000 };
+  await page.reload();
+  await expect(pending).toContainText("42.5%");
+  await expect(pending).toContainText("850.0 MB / 2.0 GB");
+  await expect(pending).toContainText("10.0 MB/s");
+  await expect(pending.getByRole("progressbar")).toHaveAttribute("value", "42.5");
+  await page.screenshot({ path: "../runs/download-progress-workspace.png" });
+  await page.clock.fastForward(60_000);
+  await expect(pending).toContainText("正在等待回應");
+  await expect(pending).not.toContainText("10.0 MB/s");
+  job.stage = "製作 720p 預覽影片";
+  job.media_progress = { phase: "preview", percent: 61, updated_at: Date.now() / 1000 };
+  await page.reload();
+  await expect(pending).toContainText("原片已就緒");
+  await expect(pending.getByRole("progressbar")).toHaveAttribute("value", "61");
+  await expect(pending).not.toContainText("MB/s");
+  expect((await new AxeBuilder({ page }).include(".main-shell").analyze()).violations).toEqual([]);
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
 test("candidate verification remains visible and rejected ranges load only for manual correction", async ({ page }) => {
   const base = { kind: "possible_win", confidence: "high", summary: "完整成功嘗試", warnings: [], evidence: [], review: "pending" };
   const candidates = [
@@ -101,6 +132,8 @@ test("YouTube form validates inline, preserves failed input, and submits a trimm
   const dialog = page.getByRole("dialog", { name: "帶入你的下一場勝利" });
   await dialog.getByRole("button", { name: "YouTube 網址" }).click();
   const input = dialog.getByLabel("公開影片網址");
+  await expect(dialog.getByLabel("保留畫質")).toHaveValue("best");
+  await dialog.getByLabel("保留畫質").selectOption("1440");
   await input.fill("https://example.com/video");
   let requests = 0;
   await page.route("**/api/projects", route => { requests++; return route.fulfill({ status: 500, json: { detail: "來源暫時無法讀取" } }); });
@@ -112,8 +145,9 @@ test("YouTube form validates inline, preserves failed input, and submits a trimm
   await dialog.getByRole("button", { name: "建立剪輯專案" }).click();
   await expect(dialog.getByRole("alert").filter({ hasText: "來源暫時無法讀取" })).toBeFocused();
   await expect(input).toHaveValue(" https://www.youtube.com/watch?v=example ");
+  await expect(dialog.getByLabel("保留畫質")).toHaveValue("1440");
   await page.route("**/api/projects", route => {
-    expect(route.request().postDataJSON()).toEqual({ kind: "youtube", source: "https://www.youtube.com/watch?v=example" });
+    expect(route.request().postDataJSON()).toEqual({ kind: "youtube", source: "https://www.youtube.com/watch?v=example", download_quality: "1440" });
     return route.fulfill({ json: { project } });
   });
   await dialog.getByRole("button", { name: "建立剪輯專案" }).click();
@@ -162,7 +196,7 @@ test("guide prevents editor shortcuts from changing a draft and reduced motion i
   await workspace(page, [project]);
   await page.getByRole("button", { name: "操作指南", exact: true }).click();
   const guide = page.getByRole("dialog", { name: "從一支實況，到一場勝利。" });
-  await guide.getByRole("heading", { name: "03 · 逐段核對與調整" }).click();
+  await guide.getByRole("heading", { name: "03 · 點選片段直接編輯" }).click();
   await page.keyboard.press("i");
   await page.keyboard.press("o");
   await page.keyboard.press("Escape");
@@ -254,7 +288,7 @@ test("the candidate track aligns a dashed draft reference on the same zoomed tim
   await expect(overlays).toHaveCount(0);
 });
 
-test("source comparison handles exact candidate boundaries and a draft reaching the source end", async ({ page }) => {
+test("selecting candidates synchronizes export boundaries including the source end", async ({ page }) => {
   const candidates = [
     { id: "edge:one", start: 0, end: 60 },
     { id: "edge:two", start: 60, end: 100 },
@@ -268,9 +302,9 @@ test("source comparison handles exact candidate boundaries and a draft reaching 
   expect(await comparison.locator(".source-selection-edge").evaluateAll(elements => elements.map(el => (el as HTMLElement).style.left)))
     .toEqual(["60%", "100%"]);
   await comparison.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await expect(page.locator(".source-candidate-overlap")).toHaveText("與目前剪輯未重疊");
+  await expect(page.locator(".source-candidate-overlap")).toHaveText("預覽與匯出使用目前區間");
   await comparison.getByRole("button", { name: /時間軸片段 #2 / }).click();
-  await expect(page.locator(".source-candidate-overlap")).toHaveText("與目前剪輯重疊 00:00:40.000");
+  await expect(page.locator(".source-candidate-overlap")).toHaveText("預覽與匯出使用目前區間");
   await page.getByRole("button", { name: "精確調整", exact: true }).click();
   await page.getByLabel("開始時間").fill("0");
   await expect(comparison.locator(".source-selection-fill")).toHaveCount(1);
@@ -278,7 +312,7 @@ test("source comparison handles exact candidate boundaries and a draft reaching 
     expect(await overlay.evaluate((el: HTMLElement) => [el.style.left, el.style.width])).toEqual(["0%", "100%"]);
   }
   await comparison.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await expect(page.locator(".source-candidate-overlap")).toHaveText("與目前剪輯重疊 00:01:00.000");
+  await expect(page.locator(".source-candidate-overlap")).toHaveText("預覽與匯出使用目前區間");
 });
 
 test("without AI candidates the selection stays on the existing source track", async ({ page }) => {
@@ -400,7 +434,7 @@ test("desktop workspace, import and guide meet automated accessibility checks", 
   await page.getByRole("tab", { name: "成品 1" }).click();
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
   await check();
-  await page.getByRole("button", { name: "更多工具", exact: true }).click();
+  await page.getByRole("button", { name: "專案工具", exact: true }).click();
   await check();
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "匯入影片", exact: true }).click();
@@ -414,6 +448,10 @@ test("desktop workspace, import and guide meet automated accessibility checks", 
 
 test("unified workbench stays beside a full-height chat with one ruler", async ({ page }) => {
   await workspace(page, [project]);
+  const exportPanel = page.getByRole("group", { name: "片段命名與匯出", exact: true });
+  await expect(exportPanel.getByLabel("片段名稱")).toBeVisible();
+  await expect(exportPanel.getByRole("button", { name: "重置分析結果" })).toHaveCount(0);
+  await expect(page.getByLabel("剪輯與候選檢查區", { exact: true }).getByLabel("影片 AI 助手")).toHaveCount(1);
   const source = page.getByRole("slider", { name: "播放位置", exact: true });
   await expect(source).toHaveAttribute("min", "115");
   await expect(source).toHaveAttribute("max", "333");
@@ -433,6 +471,12 @@ test("unified workbench stays beside a full-height chat with one ruler", async (
     expect(chat.height).toBe(height);
     expect(bench.height).toBe(260);
     await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
+    const name = (await exportPanel.getByLabel("片段名稱").boundingBox())!;
+    const button = (await exportPanel.getByRole("button", { name: "匯出 MP4", exact: true }).boundingBox())!;
+    expect(name.y + name.height).toBeLessThanOrEqual(height);
+    expect(name.x + name.width).toBeLessThan(button.x);
+    expect(Math.abs(name.y - button.y)).toBeLessThan(2);
+    expect(await exportPanel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: `../runs/resizable-workbench-${width}.png` });
   }
   await page.locator(".main-shell").evaluate(element => { element.scrollTop = 400; });
@@ -515,20 +559,20 @@ test("wheel over crowded candidates scrolls only the workbench and keeps the pla
   await page.screenshot({ path: "../runs/single-scroll-candidates.png" });
 });
 
-test("more tools keeps history accessible, contains focus and restores the editor without moving it", async ({ page }) => {
+test("project tools keeps history accessible, contains focus and restores the editor without moving it", async ({ page }) => {
   const jobs = Array.from({ length: 16 }, (_, index) => ({ id: `export:${index}`, project_id: project.id,
     kind: "export", status: "failed", error: "測試匯出失敗，可重試", draft: { ...project.draft, revision: index } }));
   await workspace(page, [project], jobs);
   await page.getByLabel("開始時間").fill("125");
   const player = page.locator(".video-wrap video");
   await player.evaluate((video: HTMLVideoElement) => { video.dataset.instance = "tools-player"; video.currentTime = 160; video.playbackRate = 1.5; });
-  const trigger = page.getByRole("button", { name: "更多工具", exact: true });
+  const trigger = page.getByRole("button", { name: "專案工具", exact: true });
   const bench = page.getByLabel("剪輯與候選檢查區", { exact: true });
   const before = await bench.evaluate(element => element.scrollTop);
   await expect(trigger).toContainText("需處理");
   await expect(trigger).toHaveAccessibleDescription("需處理");
   await trigger.click();
-  const dialog = page.getByRole("dialog", { name: "更多工具", exact: true });
+  const dialog = page.getByRole("dialog", { name: "專案工具", exact: true });
   await expect(dialog).toBeVisible();
   await dialog.locator(".jobs-details > summary").click();
   await dialog.getByRole("button", { name: "重試", exact: true }).last().focus();
@@ -548,7 +592,7 @@ test("more tools keeps history accessible, contains focus and restores the edito
   await page.keyboard.press("Tab");
   // Native dialogs can pass through browser chrome before starting another Tab cycle.
   if (await page.evaluate(() => document.activeElement === document.body)) await page.keyboard.press("Tab");
-  await expect(dialog.getByRole("button", { name: "關閉更多工具", exact: true })).toBeFocused();
+  await expect(dialog.getByRole("button", { name: "關閉專案工具", exact: true })).toBeFocused();
   await page.keyboard.press("i");
   await page.keyboard.press("o");
   await dialog.locator(".editor-tools-content").evaluate(element => { element.scrollTop = 0; });
@@ -579,10 +623,12 @@ test("short windows and phones scroll the page through candidates without an inn
     expect(await page.locator(".candidate-overview").evaluate(element => element.scrollTop)).toBe(0);
     await page.getByRole("button", { name: "匯出 MP4", exact: true }).scrollIntoViewIfNeeded();
     await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
+    await expect(page.getByLabel("片段名稱")).toBeVisible();
+    await page.screenshot({ path: `../runs/export-layout-${width}x${height}.png` });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await scroller.evaluate(element => { element.scrollTop = 0; });
-    await page.getByRole("button", { name: "更多工具", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "更多工具", exact: true })).toBeInViewport();
+    await page.getByRole("button", { name: "專案工具", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "專案工具", exact: true })).toBeInViewport();
     await page.keyboard.press("Escape");
     await page.screenshot({ path: `../runs/single-scroll-${width}x${height}.png` });
   }
@@ -623,7 +669,7 @@ test.describe("touch candidate navigation", () => {
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: dragX + 40, y: dragY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     expect(await player.evaluate((video: HTMLVideoElement) => video.currentTime)).toBeGreaterThan(tapped);
-    await expect(page.getByLabel("開始時間")).toHaveValue("120");
+    await expect(page.getByLabel("開始時間")).toHaveValue(String(crowdedProject.review_candidates[0].start));
     await touch.detach();
   });
 });
