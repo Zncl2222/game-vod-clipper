@@ -166,12 +166,12 @@ test("library search preserves the working draft and valid edits can be exported
   await expect(page.getByRole("status").filter({ hasText: "找不到符合的影片" })).toBeVisible();
   await page.getByRole("button", { name: "清除素材搜尋" }).click();
   await expect(page.locator(".project-card")).toHaveCount(2);
-  await page.getByRole("button", { name: "精確調整", exact: true }).click();
+  await page.getByRole("group", { name: "目前編輯與匯出區間", exact: true }).getByRole("button", { name: "調整時間" }).click();
   await expect(page.getByLabel("開始時間")).toBeFocused();
   await page.getByLabel("開始時間").fill("125");
   await expect(steps.locator('[aria-current="step"]')).toContainText("核對片段");
   await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeEnabled();
-  await expect(page.locator(".compact-export")).toContainText("匯出會自動儲存目前區間");
+  await expect(page.locator(".clip-inspector")).toContainText("匯出會自動儲存目前區間");
 });
 
 test("desktop layouts keep review and export visible and preserve the player in theater mode", async ({ page }) => {
@@ -186,6 +186,8 @@ test("desktop layouts keep review and export visible and preserve the player in 
   await player.evaluate((video: HTMLVideoElement) => { video.dataset.instance = "original"; video.currentTime = 160; });
   await page.getByRole("button", { name: "劇院模式", exact: true }).click();
   await expect(player).toHaveAttribute("data-instance", "original");
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
+  await page.screenshot({ path: "../runs/studio-theater.png" });
   await page.keyboard.press("Escape");
   await expect(player).toHaveAttribute("data-instance", "original");
   expect(await player.evaluate((video: HTMLVideoElement) => video.currentTime)).toBe(160);
@@ -246,7 +248,7 @@ test("the candidate track aligns a dashed draft reference on the same zoomed tim
   await page.getByRole("slider", { name: "勝利位置邊界", exact: true }).press("Shift+ArrowRight");
   await expect(summary).toContainText("00:01:01.000 → 00:03:09.000");
   await expectOverlay(61, 189);
-  await page.getByRole("button", { name: "精確調整", exact: true }).click();
+  await page.getByRole("group", { name: "目前編輯與匯出區間", exact: true }).getByRole("button", { name: "調整時間" }).click();
   await page.getByLabel("勝利後收尾").fill("5");
   await expect(summary).toContainText("片長 00:02:05.000 · 含收尾 5 秒");
   await expectOverlay(61, 186);
@@ -305,7 +307,7 @@ test("selecting candidates synchronizes export boundaries including the source e
   await expect(page.locator(".source-candidate-overlap")).toHaveText("預覽與匯出使用目前區間");
   await comparison.getByRole("button", { name: /時間軸片段 #2 / }).click();
   await expect(page.locator(".source-candidate-overlap")).toHaveText("預覽與匯出使用目前區間");
-  await page.getByRole("button", { name: "精確調整", exact: true }).click();
+  await page.getByRole("group", { name: "目前編輯與匯出區間", exact: true }).getByRole("button", { name: "調整時間" }).click();
   await page.getByLabel("開始時間").fill("0");
   await expect(comparison.locator(".source-selection-fill")).toHaveCount(1);
   for (const overlay of await comparison.locator(".source-selection-fill").all()) {
@@ -368,7 +370,7 @@ test("sidebars collapse independently, preserve editing context and restore save
   await workspace(page, [project]);
   const player = page.locator(".video-wrap video");
   await player.evaluate((video: HTMLVideoElement) => { video.dataset.instance = "retained"; video.currentTime = 160; });
-  await page.getByRole("button", { name: "精確調整", exact: true }).click();
+  await page.getByRole("group", { name: "目前編輯與匯出區間", exact: true }).getByRole("button", { name: "調整時間" }).click();
   await page.getByLabel("開始時間").fill("125");
   await page.getByLabel("搜尋素材庫").fill("女武神");
   await page.getByLabel("輸入訊息").fill("請保留這則尚未送出的訊息");
@@ -416,7 +418,7 @@ test("sidebars collapse independently, preserve editing context and restore save
   await expandChat.click();
   await expect(page.getByRole("separator", { name: "調整素材庫寬度" })).toHaveAttribute("aria-valuenow", "280");
   await expect(page.getByRole("separator", { name: "調整 AI 側欄寬度" })).toHaveAttribute("aria-valuenow", "420");
-  await page.getByRole("button", { name: "精確調整", exact: true }).click();
+  await page.getByRole("group", { name: "目前編輯與匯出區間", exact: true }).getByRole("button", { name: "調整時間" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("125");
 });
 
@@ -448,7 +450,7 @@ test("desktop workspace, import and guide meet automated accessibility checks", 
 
 test("unified workbench stays beside a full-height chat with one ruler", async ({ page }) => {
   await workspace(page, [project]);
-  const exportPanel = page.getByRole("group", { name: "片段命名與匯出", exact: true });
+  const exportPanel = page.getByRole("complementary", { name: "剪輯設定與匯出", exact: true });
   await expect(exportPanel.getByLabel("片段名稱")).toBeVisible();
   await expect(exportPanel.getByRole("button", { name: "重置分析結果" })).toHaveCount(0);
   await expect(page.getByLabel("剪輯與候選檢查區", { exact: true }).getByLabel("影片 AI 助手")).toHaveCount(1);
@@ -471,11 +473,16 @@ test("unified workbench stays beside a full-height chat with one ruler", async (
     expect(chat.height).toBe(height);
     expect(bench.height).toBe(260);
     await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeInViewport();
-    const name = (await exportPanel.getByLabel("片段名稱").boundingBox())!;
-    const button = (await exportPanel.getByRole("button", { name: "匯出 MP4", exact: true }).boundingBox())!;
-    expect(name.y + name.height).toBeLessThanOrEqual(height);
-    expect(name.x + name.width).toBeLessThan(button.x);
-    expect(Math.abs(name.y - button.y)).toBeLessThan(2);
+    // Clip settings and export sit left of the player, top-aligned, above the full-width timeline.
+    const side = (await exportPanel.boundingBox())!;
+    const video = (await page.locator(".video-wrap").boundingBox())!;
+    expect(side.x + side.width).toBeLessThanOrEqual(video.x + 1);
+    expect(Math.abs(side.y - video.y)).toBeLessThan(2);
+    expect(side.width).toBeGreaterThanOrEqual(264);
+    expect(side.y + side.height).toBeLessThanOrEqual(bench.y);
+    await expect(exportPanel.getByLabel("片段名稱")).toBeInViewport();
+    await expect(exportPanel.getByLabel("開始時間")).toBeVisible();
+    await expect(page.getByRole("button", { name: "精確調整", exact: true })).toBeHidden();
     expect(await exportPanel.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: `../runs/resizable-workbench-${width}.png` });
   }
@@ -528,6 +535,41 @@ test("workbench resizes without changing edits or playback, remembers height and
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(divider).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test("the side panel and player share width through a draggable divider", async ({ page }) => {
+  await workspace(page, [project]);
+  const handle = page.getByRole("separator", { name: "調整剪輯設定面板寬度", exact: true });
+  const side = page.getByRole("complementary", { name: "剪輯設定與匯出", exact: true });
+  const video = page.locator(".video-wrap");
+  const player = page.locator(".video-wrap video");
+  await player.evaluate((element: HTMLVideoElement) => { element.dataset.instance = "same"; element.currentTime = 160; });
+  const before = (await side.boundingBox())!.width;
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 100, box.y + box.height / 2, { steps: 6 });
+  await page.mouse.up();
+  expect((await side.boundingBox())!.width).toBeCloseTo(before + 100, 0);
+  const after = (await side.boundingBox())!, player1 = (await video.boundingBox())!;
+  expect(after.x + after.width).toBeLessThanOrEqual(player1.x + 1);
+  await expect(player).toHaveAttribute("data-instance", "same");
+  await handle.hover();
+  await page.screenshot({ path: "../runs/inspector-resize.png" });
+  await page.reload();
+  await expect.poll(async () => Math.round((await side.boundingBox())!.width)).toBe(Math.round(before + 100));
+  await handle.press("End");
+  const stage = (await page.locator(".preview-stage").boundingBox())!;
+  expect((await video.boundingBox())!.width).toBeGreaterThanOrEqual(359);
+  expect((await side.boundingBox())!.width).toBeCloseTo(stage.width - 360, 0);
+  await handle.press("Home");
+  await expect(handle).toHaveAttribute("aria-valuenow", "264");
+  await handle.press("Shift+ArrowRight");
+  await expect(handle).toHaveAttribute("aria-valuenow", "304");
+  await handle.dblclick();
+  await expect.poll(async () => Math.round((await side.boundingBox())!.width)).toBe(Math.round(before));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(handle).toBeHidden();
 });
 
 const crowdedProject = { ...project, review_candidates: Array.from({ length: 20 }, (_, index) => ({

@@ -105,3 +105,20 @@ class DownloadQualityTest(unittest.TestCase):
         stream = metadata["streams"][0]
         self.assertEqual((stream["width"], stream["height"]), (2560, 1440))
         self.assertEqual(stream["r_frame_rate"], "2/1")
+
+
+class ExportQualityTest(unittest.TestCase):
+    def test_presets_map_to_x264_settings_and_default_is_high(self):
+        from game_vod_clipper import media
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.mkv"
+            source.write_bytes(b"x")
+            with patch.object(media, "run_command") as run, patch.object(media, "resolve_tool_command", return_value=["ffmpeg"]):
+                for quality, expected in (("max", ["medium", "12"]), ("high", ["medium", "14"]),
+                                          ("balanced", ["veryfast", "14"]), ("fast", ["veryfast", "18"]), (None, ["medium", "14"])):
+                    media.clip_video(source, Path(folder) / "out.mp4", start="1", end="5", postroll=5,
+                                     **({"quality": quality} if quality else {}))
+                    args = run.call_args.args[0]
+                    self.assertEqual([args[args.index("-preset") + 1], args[args.index("-crf") + 1]], expected)
+                with self.assertRaises(ValueError):
+                    media.clip_video(source, Path(folder) / "out.mp4", start="1", end="5", quality="lossless")

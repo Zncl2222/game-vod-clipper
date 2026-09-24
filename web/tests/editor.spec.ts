@@ -17,7 +17,7 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     timeout: 30_000,
   });
   await expect(page.getByRole("button", { name: "匯出 MP4" })).toBeEnabled();
-  await expect(page.locator(".compact-export input[type=checkbox]")).toHaveCount(0);
+  await expect(page.locator(".clip-inspector input[type=checkbox]")).toHaveCount(0);
   await expect
     .poll(() =>
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.readyState),

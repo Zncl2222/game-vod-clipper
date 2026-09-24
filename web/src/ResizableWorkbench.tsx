@@ -4,7 +4,11 @@ import { Minus, Plus, RotateCcw } from "lucide-react";
 const STORAGE = "bosscut:workbench-height";
 const DEFAULT_HEIGHT = 260;
 const MIN_HEIGHT = 160;
-const canResize = () => window.matchMedia("(min-width: 641px) and (min-height: 701px)").matches;
+// Keep in sync with editor-layout.css: the side panel sits beside the player only at this panel width.
+const SPLIT_MIN_WIDTH = 624;
+const TOP_MIN_HEIGHT = 300;
+const canResize = (panel?: HTMLElement | null) => window.matchMedia("(min-width: 641px) and (min-height: 701px)").matches
+  && (!panel || panel.clientWidth >= SPLIT_MIN_WIDTH);
 const clamp = (value: number, max: number) => Math.max(MIN_HEIGHT, Math.min(max, value));
 
 export function useWorkbenchSize(panel: RefObject<HTMLElement | null>, theater: boolean) {
@@ -15,7 +19,7 @@ export function useWorkbenchSize(panel: RefObject<HTMLElement | null>, theater: 
     } catch { return null; }
   });
   const [max, setMax] = useState(500);
-  const [enabled, setEnabled] = useState(canResize);
+  const [enabled, setEnabled] = useState(() => canResize());
   const [dragging, setDragging] = useState(false);
   const drag = useRef<{ pointer: number; y: number; height: number } | null>(null);
   const height = clamp(preferred ?? DEFAULT_HEIGHT, max);
@@ -23,16 +27,14 @@ export function useWorkbenchSize(panel: RefObject<HTMLElement | null>, theater: 
   useLayoutEffect(() => {
     const element = panel.current;
     if (!element) return;
-    const footer = element.querySelector<HTMLElement>(".compact-export");
     const divider = element.querySelector<HTMLElement>(".workbench-size-bar");
     const measure = () => {
-      setEnabled(canResize());
-      // Keep the source and export controls usable even at the largest saved size.
-      setMax(Math.max(MIN_HEIGHT, Math.floor(element.clientHeight - (footer?.offsetHeight ?? 84) - (divider?.offsetHeight ?? 28) - 240)));
+      setEnabled(canResize(element));
+      // Keep the player and the side panel's export controls usable even at the largest saved size.
+      setMax(Math.max(MIN_HEIGHT, Math.floor(element.clientHeight - (divider?.offsetHeight ?? 32) - TOP_MIN_HEIGHT)));
     };
     const observer = new ResizeObserver(measure);
     observer.observe(element);
-    if (footer) observer.observe(footer);
     if (divider) observer.observe(divider);
     window.addEventListener("resize", measure);
     measure();

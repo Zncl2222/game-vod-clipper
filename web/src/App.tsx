@@ -1,6 +1,10 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
 import BossReviewDock from "./BossReviewDock";
-import MediaProgress from "./MediaProgress";
+import MediaProgress, { remaining } from "./MediaProgress";
+import ExportProgress from "./ExportProgress";
+import PreferencesDialog from "./PreferencesDialog";
+import { exportQualityLabel, usePreferences } from "./preferences";
+import { clipLength, estimateExportSeconds, rememberExportSpeed, requestExportNotifications, useExportNotifications } from "./exportInsights";
 import FinishedClips from "./FinishedClips";
 import EditorTools from "./EditorTools";
 import { candidateDraftStorageKey, draftStorageKey, readCandidateDrafts, readWorkingDraft } from "./editorDrafts";
@@ -15,6 +19,7 @@ import YouTubeDialog, { type UploadTarget } from "./YouTubeDialog";
 import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./WorkspaceGuide";
 import { usePanelLayout, usePanelVisibility } from "./ResizableSidebars";
 import { useWorkbenchSize } from "./ResizableWorkbench";
+import { useInspectorWidth } from "./ResizableInspector";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -38,6 +43,7 @@ import {
   RotateCcw,
   Save,
   Scissors,
+  Settings,
   SlidersHorizontal,
   Sparkles,
   Trophy,
@@ -72,6 +78,7 @@ export default function App() {
   const [uploadTarget, setUploadTarget] = useState<UploadTarget | undefined>();
   const [guide, setGuide] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [error, setError] = useState("");
   const { libraryOpen, chatOpen, toggleLibrary, toggleChat, openChat } = usePanelVisibility();
   const layout = usePanelLayout(chatOpen, libraryOpen);
@@ -94,6 +101,7 @@ export default function App() {
   }, []);
   const project =
     state.projects.find((p) => p.id === selected) ?? state.projects[0];
+  useExportNotifications(state.jobs, state.projects);
   useEffect(() => { setPreviewExpanded(false); setToolsOpen(false); }, [project?.id]);
   useEffect(() => {
     if (!previewExpanded) return;
@@ -200,6 +208,8 @@ export default function App() {
               <SlidersHorizontal size={16} aria-hidden="true" />專案工具
               {mediaJobStatus && <span id="tools-job-status" className="tools-job-status">{mediaJobStatus}</span>}
             </button>}
+            <button type="button" className="topbar-settings" aria-label="偏好設定" title="匯出畫質、下載畫質與通知" aria-haspopup="dialog"
+              aria-controls="preferences" onClick={() => setPreferencesOpen(true)}><Settings size={16} aria-hidden="true" /><span>偏好設定</span></button>
             <button className="topbar-help" onClick={() => setGuide(true)}><CircleHelp size={16} />操作指南</button>
           </div>
         </header>
@@ -252,6 +262,7 @@ export default function App() {
               onCloseTools={() => setToolsOpen(false)}
               toolError={error}
               onJobAction={action}
+              onOpenPreferences={() => setPreferencesOpen(true)}
               chatRef={editorChat}
               onSearch={async () => { await aiChat.current?.search(); }}
               onRecheck={async (candidateId, start, end) => {
@@ -308,6 +319,7 @@ export default function App() {
         />
       )}
       {guide && <WorkspaceGuide onClose={() => setGuide(false)} />}
+      {preferencesOpen && <PreferencesDialog open onClose={() => setPreferencesOpen(false)} />}
       {youtubeOpen && <YouTubeDialog target={uploadTarget} onClose={() => setYoutubeOpen(false)}
         onImport={id => { select(id); setYoutubeOpen(false); }} />}
     </div>
@@ -328,12 +340,12 @@ function ProcessingHistory({ jobs, ready, onAction }: {
             : job.status === "succeeded" ? <Check size={17} aria-hidden="true" /> : <CircleHelp size={17} aria-hidden="true" />}
         </div>
         <div className="job-info">
-          <strong>{job.kind === "prepare" ? "準備預覽" : `匯出剪輯 · 版本 ${job.draft?.revision}`}</strong>
+          <strong>{job.kind === "prepare" ? "準備預覽" : `匯出剪輯 · 版本 ${job.draft?.revision} · ${exportQualityLabel(job.export_quality)}`}</strong>
           <small>{job.error || ({ succeeded: "已完成", failed: "處理失敗", cancelled: "已取消", interrupted: "服務曾中斷，請重試" }[job.status] ?? job.stage)}</small>
-          {active(job) && job.kind === "prepare" && <MediaProgress status={job.status} stage={job.stage} detail={job.media_progress} label="準備影片進度" />}
+          {active(job) && <MediaProgress status={job.status} stage={job.stage} detail={job.media_progress}
+            label={job.kind === "prepare" ? "準備影片進度" : "匯出進度"} startedAt={job.kind === "export" && job.status === "running" ? job.started_at : undefined} />}
         </div>
         {active(job) && <>
-          {job.kind !== "prepare" && <div className="progress-track"><div style={{ width: `${job.progress}%` }} /></div>}
           <button className="text-button" onClick={() => onAction(job, "cancel")}>取消</button>
         </>}
         {["failed", "cancelled", "interrupted"].includes(job.status) && !(job.kind === "prepare" && ready) &&
@@ -361,6 +373,7 @@ function Editor({
   onCloseTools,
   toolError,
   onJobAction,
+  onOpenPreferences,
 }: {
   project: Project;
   jobs: Job[];
@@ -375,6 +388,7 @@ function Editor({
   onCloseTools: () => void;
   toolError: string;
   onJobAction: (job: Job, command: "cancel" | "retry") => Promise<void>;
+  onOpenPreferences: () => void;
   onTogglePreview: () => void;
   onContext: (context: EditorContext) => void;
 }) {
@@ -398,6 +412,49 @@ function Editor({
   const draftCandidate = reviewCandidates(project, jobs).find(candidate => candidate.id === draft.candidate_id);
   const candidatePreviouslyExported = !!draftCandidate && candidateExports(project.id, draftCandidate, jobs).length > 0;
   const editingExport = finished.find(job => job.id === editingExportId);
+  const editorOpenedAt = useRef(Date.now() / 1000);
+  // Side-panel mount points; ClipWorkspace portals its settings and candidate details into them.
+  const [timingSlot, setTimingSlot] = useState<HTMLDivElement | null>(null);
+  const [detailSlot, setDetailSlot] = useState<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const inspectorRef = useRef<HTMLElement>(null);
+  const inspectorWidth = useInspectorWidth(stageRef, inspectorRef);
+  const [submittedExport, setSubmittedExport] = useState<Job | null>(null);
+  const [dismissedExport, setDismissedExport] = useState<string | null>(null);
+  const projectExports = jobs.filter(job => job.project_id === project.id && job.kind === "export")
+    .sort((a, b) => (b.created ?? 0) - (a.created ?? 0));
+  // A POST can finish before the event stream includes its job. Keep that response
+  // ahead of older completed exports until the streamed copy arrives.
+  const pendingSubmission = submittedExport?.project_id === project.id
+    && !projectExports.some(job => job.id === submittedExport.id) ? submittedExport : undefined;
+  const runningExport = projectExports.find(active) ?? (pendingSubmission && active(pendingSubmission) ? pendingSubmission : undefined);
+  const latestExport = runningExport ?? pendingSubmission ?? projectExports[0];
+  const exportNotice = latestExport && latestExport.id !== dismissedExport
+    && (active(latestExport) || latestExport.id === submittedExport?.id || (latestExport.finished_at ?? 0) > editorOpenedAt.current)
+    ? latestExport : null;
+  const [awaitingExport, setAwaitingExport] = useState<string | null>(null);
+  useEffect(() => {
+    if (awaitingExport && jobs.some(job => job.id === awaitingExport)) setAwaitingExport(null);
+  }, [jobs, awaitingExport]);
+  const exporting = !!runningExport || !!awaitingExport;
+  const exportDetail = runningExport?.status === "running" ? runningExport.media_progress : null;
+  const exportPercent = exportDetail?.percent ?? runningExport?.progress ?? 0;
+  const preferences = usePreferences();
+  const estimateQuality = latestExport && active(latestExport) ? latestExport.export_quality ?? "high" : preferences.exportQuality;
+  const exportEstimate = latestExport ? estimateExportSeconds(project, estimateQuality, clipLength(latestExport)) : null;
+  const measuredSpeed = exportDetail?.phase === "export" && (exportDetail.percent ?? 0) >= 20 ? exportDetail.speed_ratio : null;
+  const measuredQuality = runningExport?.export_quality ?? "high";
+  useEffect(() => { rememberExportSpeed(project, measuredQuality, measuredSpeed); }, [project, measuredQuality, measuredSpeed]);
+  const exportLabel = !runningExport || runningExport.status === "queued" ? "排隊中…"
+    : exportDetail?.phase === "verify" ? "驗證成品…"
+    : exportDetail?.phase === "export" ? `匯出中 ${Math.floor(exportPercent)}%` : "準備匯出…";
+  const exportHelp = exportDetail?.eta_seconds != null ? `約剩 ${remaining(exportDetail.eta_seconds)} · 可繼續編輯`
+    : exportEstimate != null ? `預估約 ${remaining(exportEstimate)} · 可繼續編輯` : "詳細進度在下方，可繼續編輯";
+  const submittedStatus = projectExports.find(job => job.id === submittedExport?.id)?.status;
+  useEffect(() => {
+    // The panel now reports the outcome; drop the stale "queued" note beside the draft status.
+    if (submittedStatus && !["queued", "running"].includes(submittedStatus)) setSavedMessage("");
+  }, [submittedStatus]);
   const savedDrafts = useRef(new Map<string | null, Draft>());
   const serverBaseline = editingExport ? editableClipDraft(editingExport) : project.draft!;
   const acknowledged = savedDrafts.current.get(editingExportId);
@@ -475,7 +532,9 @@ function Editor({
   useImperativeHandle(chatRef, () => ({
     loadClip: id => {
       switchWorkspace(id);
-      focusTiming();
+      // Stacked layouts put the timing fields below the timeline; keep the player header in view there.
+      const stage = previewPanel.current?.querySelector(".preview-stage");
+      if (stage && getComputedStyle(stage).display !== "contents") focusTiming();
     },
     apply(action, expected) {
       if (resetPending.current || resetting) return "影片正在重置，未套用舊操作。";
@@ -635,6 +694,8 @@ function Editor({
   async function save(exportNow = false) {
     if (pendingSave.current) return;
     if (exportNow && !valid) { onError("請先修正剪輯時間範圍，再匯出。"); return; }
+    // Ask inside the click so browsers accept the prompt; the result only affects background alerts.
+    if (exportNow) requestExportNotifications();
     const target = editingExportId, generation = selectionGeneration.current, submitted = draft;
     pendingSave.current = { clipId: target, revision: submitted.revision };
     setBusy(true);
@@ -661,10 +722,15 @@ function Editor({
         localStorage.setItem(draftStorageKey(project.id, target), JSON.stringify({ ...(pending ?? saved), revision: saved.revision }));
       } catch { /* The acknowledged server draft remains available on reload. */ }
       if (exportNow) {
-        await api(`/projects/${project.id}/exports`, "POST", {
+        const job = await api<Job>(`/projects/${project.id}/exports`, "POST", {
           revision: saved.revision,
           ...(target ? { source_job_id: target } : {}),
+          quality: preferences.exportQuality,
         });
+        if (mounted.current) {
+          setSubmittedExport(job);
+          if (active(job)) setAwaitingExport(job.id);
+        }
         if (editorIdentity.current.clipId === target && editorIdentity.current.generation === generation)
           setSavedMessage(target ? "已加入匯出佇列，原成品保留" : "已加入匯出佇列");
       }
@@ -786,8 +852,9 @@ function Editor({
     <>
       {aiFeedback && <div className="ai-editor-feedback" role="status" key={aiFeedback.id}><Sparkles size={14} />{aiFeedback.text}</div>}
       <div className="editor-grid">
-        <section ref={previewPanel} style={workbenchSize.style} aria-label="影片與選取範圍" className={`preview-panel ${workbenchSize.dragging ? "is-adjusting-height" : ""} ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
-          <div className="preview-stage">
+        <section ref={previewPanel} style={{ ...workbenchSize.style, "--video-aspect": project.width && project.height ? project.width / project.height : 16 / 9 } as CSSProperties} aria-label="影片與選取範圍" className={`preview-panel ${workbenchSize.dragging ? "is-adjusting-height" : ""} ${aiFeedback?.fields.includes("seek") ? "ai-target" : ""}`}>
+          <div className="preview-stage" ref={stageRef}>
+          <div className={`stage-layout ${inspectorWidth.dragging ? "is-adjusting-width" : ""}`} style={inspectorWidth.style}>
           <div className="panel-heading">
             <span>
               <Film size={16} />
@@ -806,6 +873,65 @@ function Editor({
               </button>
             </div>
           </div>
+            {inspectorWidth.handle}
+            <aside id="clip-inspector" ref={inspectorRef} className="clip-inspector" aria-label="剪輯設定與匯出">
+              <div className="inspector-body">
+                <div className="active-edit-target" role="group" aria-label="目前編輯與匯出區間">
+                  <strong>{editingExport ? `正在編輯成品 #${finished.findIndex(job => job.id === editingExport.id) + 1}`
+                    : draftCandidate ? `正在編輯 #${draftCandidate.number}` : "目前剪輯"}</strong>
+                  <span>{time(draft.start, true)} → {time(end, true)}</span>
+                  <small className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</small>
+                  <button type="button" onClick={focusTiming}>調整時間</button>
+                </div>
+                <div className="clip-name-field">
+                  <label htmlFor="clip-title">片段名稱 <span>選填</span></label>
+                  <input id="clip-title" type="text" maxLength={100} value={draft.title ?? ""}
+                    placeholder="例如：瑪蓮妮亞・無傷通關" aria-describedby="clip-title-help"
+                    onChange={event => change({ title: event.target.value })} />
+                  <small id="clip-title-help" className="sr-only">隨草稿儲存，匯出後用於成品名稱與下載檔名。</small>
+                </div>
+                <div className="inspector-slot" ref={setTimingSlot} />
+                <div className="inspector-slot" ref={setDetailSlot} />
+              </div>
+              <div className="inspector-export" role="group" aria-label="匯出成品">
+                <div className="export-action-group">
+                <button
+                  className={`primary export-button${exporting ? ` is-exporting${runningExport?.status === "running" && exportDetail ? "" : " is-waiting"}` : ""}`}
+                  style={exporting ? { "--export-progress": `${Math.max(0, Math.min(100, exportPercent))}%` } as CSSProperties : undefined}
+                  aria-describedby="export-help"
+                  disabled={
+                    !valid ||
+                    busy ||
+                    exporting ||
+                    jobs.some((j) => j.kind === "export" && active(j))
+                  }
+                  onClick={() => save(true)}
+                >
+                  {busy || exporting ? (
+                    <LoaderCircle size={16} className="spin" />
+                  ) : (
+                    <ArrowDownToLine size={16} />
+                  )}
+                  {busy ? "正在提交…" : exporting ? exportLabel : editingExportId ? "另存新成品" : "匯出 MP4"}
+                </button>
+                <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : exporting ? exportHelp : <>
+                  {editingExportId ? "另存為新成品 · " : "MP4 · "}{exportQualityLabel(preferences.exportQuality)}
+                  {" · "}<button type="button" className="export-quality-link" onClick={onOpenPreferences}>變更</button></>}</p>
+                </div>
+                {exportNotice && <ExportProgress job={exportNotice} onAction={onJobAction} estimate={exportEstimate}
+                  clipNumber={exportNotice.status === "succeeded" ? finished.findIndex(job => job.id === exportNotice.id) + 1 || undefined : undefined}
+                  onDismiss={() => setDismissedExport(exportNotice.id)} />}
+                <div className="export-status-row">
+                  <div className="draft-status" role="status"><span className={`tiny-dot ${currentRangeExported ? "is-exported" : ""}`} />
+                    {savedMessage || (dirty ? "修改已暫存於此瀏覽器" : "草稿已儲存")}
+                  </div>
+                  <p className={`export-range-status ${currentRangeExported ? "is-exported" : ""}`} role="status">
+                    {currentRangeExported ? <><Check size={14} aria-hidden="true" />目前區間已匯出</>
+                      : candidatePreviouslyExported ? "此片段曾匯出，目前區間有修改" : "匯出會自動儲存目前區間"}
+                  </p>
+                </div>
+              </div>
+            </aside>
           <div className="video-wrap">
             <video
               ref={video}
@@ -885,6 +1011,7 @@ function Editor({
             </select>
           </div>
           </div>
+          </div>
           {workbenchSize.divider}
           <div id="clip-workbench-panel" className="preview-editing" role="region" aria-label="剪輯與候選檢查區" tabIndex={0}>
           <ClipWorkspace project={project} jobs={jobs} draft={draft} selected={selectedClip}
@@ -894,54 +1021,8 @@ function Editor({
             candidateActions={<BossReviewDock jobs={jobs} segmentCount={reviewCandidates(project, jobs).length} onSearch={onSearch} onReset={() => reset(false)} resetting={resetting} onError={onError} />}
             onCandidateSaved={candidateSaved}
             onSelect={selectClip} onChange={change} onPlay={playRange} onSeek={seek} current={current}
-            onResetProgress={() => reset(true)} resetting={resetting} highlightedFields={aiFeedback?.fields} />
-          </div>
-          <div className="compact-export" role="group" aria-label="片段命名與匯出">
-            <div className="export-review">
-            <div className="clip-name-field">
-              <label htmlFor="clip-title">片段名稱 <span>選填</span></label>
-              <input id="clip-title" type="text" maxLength={100} value={draft.title ?? ""}
-                placeholder="例如：瑪蓮妮亞・無傷通關" aria-describedby="clip-title-help"
-                onChange={event => change({ title: event.target.value })} />
-              <small id="clip-title-help" className="sr-only">隨草稿儲存，匯出後用於成品名稱與下載檔名。</small>
-            </div>
-            <div className="active-edit-target" role="group" aria-label="目前編輯與匯出區間">
-              <strong>{editingExport ? `正在編輯成品 #${finished.findIndex(job => job.id === editingExport.id) + 1}`
-                : draftCandidate ? `正在編輯 #${draftCandidate.number}` : "目前剪輯"}</strong>
-              <span>{time(draft.start, true)} → {time(end, true)}</span>
-              <button type="button" onClick={focusTiming}>調整時間</button>
-            </div>
-            </div>
-            <div className="export-action-group">
-            <button
-              className="primary export-button"
-              aria-describedby="export-help"
-              disabled={
-                !valid ||
-                busy ||
-                jobs.some((j) => j.kind === "export" && active(j))
-              }
-              onClick={() => save(true)}
-            >
-              {busy ? (
-                <LoaderCircle size={16} className="spin" />
-              ) : (
-                <ArrowDownToLine size={16} />
-              )}
-              {busy ? "正在提交…" : jobs.some(j => j.kind === "export" && active(j)) ? "正在匯出…" : editingExportId ? "另存新成品" : "匯出 MP4"}
-            </button>
-            <p className="export-help" id="export-help">{!valid ? "請先修正剪輯時間範圍" : editingExportId ? "保留原成品，不覆寫原檔" : "MP4 影片 · 含原片音訊"}</p>
-            </div>
-            <div className="export-status-row">
-              <div className="draft-status" role="status"><span className={`tiny-dot ${currentRangeExported ? "is-exported" : ""}`} />
-                {savedMessage || (dirty ? "修改已暫存於此瀏覽器" : "草稿已儲存")}
-              </div>
-              <span className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</span>
-              <p className={`export-range-status ${currentRangeExported ? "is-exported" : ""}`} role="status">
-                {currentRangeExported ? <><Check size={14} aria-hidden="true" />目前區間已匯出</>
-                  : candidatePreviouslyExported ? "此片段曾匯出，目前區間有修改" : "匯出會自動儲存目前區間"}
-              </p>
-            </div>
+            onResetProgress={() => reset(true)} resetting={resetting} highlightedFields={aiFeedback?.fields}
+            timingTarget={timingSlot} detailTarget={detailSlot} />
           </div>
         </section>
       </div>

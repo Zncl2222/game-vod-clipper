@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import SelectionOverlay, { validSelection } from "./SelectionOverlay";
 import { type TimeWindow } from "./TimelineZoom";
 import { Check, LoaderCircle, Pencil, Play, Sparkles, Tag } from "lucide-react";
@@ -13,13 +14,14 @@ function ExportBadge({ count }: { count: number }) {
   return count ? <span className="candidate-export-badge"><Check size={13} aria-hidden="true" />已匯出{count > 1 ? ` · ${count} 次` : ""}</span> : null;
 }
 
-export default function CandidateTimeline({ project, jobs, segments, selected, current, onSelect, onSeek, onPlay, onEdit, onError, onRecheck, view, draft }: {
+export default function CandidateTimeline({ project, jobs, segments, selected, current, onSelect, onSeek, onPlay, onEdit, onError, onRecheck, view, draft, detailTarget }: {
   project: Project; jobs: Job[]; segments: NumberedCandidate[]; selected: string | null; current: number;
   onSelect: (segment: NumberedCandidate, seconds?: number) => void; onSeek: (seconds: number) => void; onPlay: (start: number, end: number) => void;
   onEdit: (candidate: NumberedCandidate) => void; onError: (message: string) => void;
   onRecheck: (candidateId: string, start: number, end: number) => Promise<string>;
-  view: TimeWindow; draft: Draft;
+  view: TimeWindow; draft: Draft; detailTarget?: HTMLElement | null;
 }) {
+  const inPanel = (node: ReactNode) => detailTarget === undefined ? node : detailTarget ? createPortal(node, detailTarget) : null;
   const [busy, setBusy] = useState(false);
   const [recheckBusy, setRecheckBusy] = useState(false);
   const [recheckError, setRecheckError] = useState("");
@@ -172,7 +174,7 @@ export default function CandidateTimeline({ project, jobs, segments, selected, c
         <ExportBadge count={exportCounts.get(segment.id) ?? 0} />
       </button>)}
     </div></details>}
-    {candidate && <div className="candidate-detail" role="group" aria-label={`片段 #${candidate.number} 詳情`}>
+    {candidate && inPanel(<div className="candidate-detail" role="group" aria-label={`片段 #${candidate.number} 詳情`}>
       <div className="candidate-heading"><div><strong>#{candidate.number} {candidate.boss || kinds[candidate.kind]}</strong>
         {adjusted(candidate) && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
         <ExportBadge count={exportCounts.get(candidate.id) ?? 0} />
@@ -221,6 +223,6 @@ export default function CandidateTimeline({ project, jobs, segments, selected, c
             <p className="candidate-hint">這是本次送檢範圍的判斷；新標註會加入時間軸，原片段與剪輯時間不會自動改動。</p>
           </> : <p role="alert">{recheckJob.error || "複判未完成。可再次送出這段。"}</p>}
       </div>}
-    </div>}
+    </div>)}
   </section>;
 }

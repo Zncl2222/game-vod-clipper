@@ -85,7 +85,7 @@ test("saving and exporting clip drafts never change the original project or MP4"
   await expect(page.getByRole("button", { name: "另存新成品", exact: true })).toBeEnabled();
   const request = page.waitForRequest(request => request.url().endsWith("/exports"));
   await page.getByRole("button", { name: "另存新成品", exact: true }).click();
-  expect((await request).postDataJSON()).toEqual({ revision: 1, source_job_id: "clip-1" });
+  expect((await request).postDataJSON()).toEqual({ revision: 1, source_job_id: "clip-1", quality: "high" });
   expect(state.projects[0].draft).toEqual(source.draft);
   expect(state.jobs[0].draft).toEqual(exports[0].draft);
   expect(state.jobs[0].edit_draft?.start).toBe(495);

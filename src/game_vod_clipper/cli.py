@@ -6,6 +6,8 @@ from pathlib import Path
 
 from . import __version__
 from .media import (
+    DEFAULT_EXPORT_QUALITY,
+    EXPORT_QUALITY,
     check_tools,
     clip_video,
     create_contact_sheet,
@@ -58,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     clip.add_argument("--postroll", type=float, default=8.0, help="seconds after victory to keep")
     clip.add_argument("-o", "--output", type=Path, required=True)
     clip.add_argument("--copy", action="store_true", help="stream copy instead of re-encoding")
+    clip.add_argument("--quality", choices=list(EXPORT_QUALITY), default=DEFAULT_EXPORT_QUALITY,
+                      help="re-encode preset: max/high (medium CRF 12/14), balanced/fast (veryfast CRF 14/18)")
 
     return parser
 
@@ -120,6 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 end=args.end,
                 postroll=args.postroll,
                 stream_copy=args.copy,
+                quality=args.quality,
             )
             print(output)
             return 0

@@ -1167,7 +1167,7 @@ test("reset viewing progress keeps candidates, unsaved edits and exports while s
   // Persistence must preserve the local edit as well as clear the old task UI.
   await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: `data: ${JSON.stringify(nextState)}\n\n` }));
   await page.reload();
-  await page.getByRole("button", { name: "精確調整", exact: true }).click();
+  await page.getByRole("group", { name: "目前編輯與匯出區間", exact: true }).getByRole("button", { name: "調整時間" }).click();
   await expect(page.getByLabel("開始時間")).toHaveValue("37");
   await expect(page.getByRole("button", { name: "接續細查", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("AI 全片抽樣進度").locator(".ai-coverage")).toHaveCount(0);

@@ -106,6 +106,28 @@ class ClipDraftTest(unittest.TestCase):
         self.assertEqual(retry.status_code, 202, retry.text)
         self.assertEqual(retry.json()["source_job_id"], "clip")
 
+    def test_export_quality_defaults_high_is_validated_and_scopes_deduplication(self):
+        export = "/api/projects/one/exports"
+        # The fixture "clip" export predates presets; it was encoded with today's "fast" settings.
+        self.assertEqual(self.client.post(export, json=dict(revision=4, quality="fast")).json()["id"], "clip")
+        high = self.client.post(export, json=dict(revision=4)).json()
+        self.assertNotEqual(high["id"], "clip")
+        self.assertEqual(high["export_quality"], "high")
+        self.assertEqual(self.client.post(export, json=dict(revision=4, quality="high")).json()["id"], high["id"])
+        balanced = self.client.post(export, json=dict(revision=4, quality="balanced")).json()
+        self.assertNotIn(balanced["id"], {"clip", high["id"]})
+        self.assertEqual(balanced["export_quality"], "balanced")
+        self.assertEqual(self.client.post(export, json=dict(revision=4, quality="lossless")).status_code, 422)
+
+    def test_retry_keeps_the_chosen_quality_and_upgrades_legacy_jobs(self):
+        for job_id, quality in (("failed-max", "max"), ("failed-legacy", None)):
+            self.store.put("jobs", dict(id=job_id, project_id="one", kind="export", status="failed", draft=self.original)
+                           | ({"export_quality": quality} if quality else {}))
+            retry = self.client.post(f"/api/jobs/{job_id}/retry")
+            self.assertEqual(retry.status_code, 202, retry.text)
+            self.assertEqual(retry.json()["export_quality"], quality or "high")
+            self.store.patch("jobs", retry.json()["id"], status="failed")
+
     def test_source_and_clip_exports_with_same_revision_are_distinct(self):
         saved = self.client.put(self.url, json=self.draft | dict(reviewed=True)).json()
         self.store.patch("projects", "one", draft=saved)

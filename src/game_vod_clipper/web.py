@@ -65,9 +65,13 @@ class Draft(BaseModel):
     manually_adjusted: bool | None = None
 
 
+ExportQuality = Literal["max", "high", "balanced", "fast"]
+
+
 class ExportRequest(BaseModel):
     revision: int = Field(ge=0)
     source_job_id: str | None = Field(default=None, min_length=1, max_length=100)
+    quality: ExportQuality = "high"
 
 
 class CandidateReviewRequest(BaseModel):
@@ -166,6 +170,7 @@ class Jobs:
         draft: dict | None = None,
         analysis: dict | None = None,
         source_job_id: str | None = None,
+        export_quality: str | None = None,
     ) -> dict:
         job = {
             "id": uuid4().hex,
@@ -178,6 +183,7 @@ class Jobs:
             "draft": draft,
             "analysis": analysis,
             "source_job_id": source_job_id,
+            **({"export_quality": export_quality} if kind == "export" else {}),
             "model": analysis.get("model", MODEL) if analysis else None,
             "error": None,
         }
@@ -756,12 +762,14 @@ def create_app(root: Path | None = None) -> FastAPI:
                 and job["kind"] == "export"
                 and job.get("source_job_id") == body.source_job_id
                 and job.get("draft", {}).get("revision") == body.revision
+                # Jobs from before quality presets were encoded with today's "fast" settings.
+                and job.get("export_quality", "fast") == body.quality
                 and job["status"] in ACTIVE | {"succeeded"}
             ):
                 return public_job(job)
         if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
-        return jobs.submit(project_id, "export", draft, source_job_id=body.source_job_id)
+        return jobs.submit(project_id, "export", draft, source_job_id=body.source_job_id, export_quality=body.quality)
 
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel(job_id: str):
@@ -803,7 +811,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
         return jobs.submit(
-            job["project_id"], job["kind"], job.get("draft"), job.get("analysis"), job.get("source_job_id")
+            job["project_id"], job["kind"], job.get("draft"), job.get("analysis"), job.get("source_job_id"),
+            job.get("export_quality", "high") if job["kind"] == "export" else None,
         )
 
     async def clear_analysis(project_id: str, *, progress_only: bool = False):

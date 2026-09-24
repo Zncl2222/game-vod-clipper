@@ -1,0 +1,33 @@
+.preferences-dialog { width: min(600px, calc(100vw - 32px)); }
+.preferences-content { display: flex; flex-direction: column; gap: 20px; padding-top: 20px; }
+.preference-group { margin: 0; padding: 0; border: 0; min-width: 0; }
+.preference-group legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: var(--ink); }
+.preference-help, .preference-note { margin: 0 0 10px; font-size: 12px; line-height: 1.7; color: var(--muted); }
+.preference-note { margin: 8px 0 0; }
+.preference-note.is-warning { color: var(--danger); }
+.quality-choices { display: grid; gap: 8px; }
+.quality-choice { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); }
+.quality-choice:hover { border-color: var(--control-border); }
+.quality-choice:has(input:checked) { border-color: var(--accent); background: var(--surface-active); }
+.quality-choice:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
+.quality-choice input { margin: 3px 0 0; accent-color: var(--accent); }
+.quality-choice span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.quality-choice strong { font-size: 13px; color: var(--ink); }
+.quality-choice small { font: 11px ui-monospace, monospace; color: var(--muted); }
+.quality-choice em { font-style: normal; font-size: 12px; line-height: 1.6; color: var(--ink); }
+.preference-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--ink); }
+.preference-row select { min-height: 40px; min-width: 200px; padding: 6px 10px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
+.preference-check { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.preference-check input { margin: 3px 0 0; accent-color: var(--accent); }
+.preference-check span { display: flex; flex-direction: column; gap: 2px; }
+.preference-check small { font-size: 12px; color: var(--muted); }
+.topbar-settings { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 10px; font-size: 12px; color: var(--ink); border-radius: var(--radius-sm); }
+.topbar-settings:hover { background: var(--surface-active); color: var(--accent); }
+.export-quality-link { padding: 0 2px; font-size: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; background: none; border: 0; }
+@media (max-width: 640px) {
+  .topbar-settings { min-height: 44px; min-width: 44px; justify-content: center; }
+  .topbar-settings span { display: none; }
+  .preference-row select { width: 100%; }
+}
+@media (pointer: coarse) { .quality-choice { min-height: 44px; } }

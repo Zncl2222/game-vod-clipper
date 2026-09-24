@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Film, ListFilter, Pencil, Play, Save, Trophy } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ChevronRight, Crosshair, Film, ListFilter, Pencil, Play, Save, Trophy } from "lucide-react";
 import { active, api, currentAnalysis, media, reviewCandidates, time, type Draft, type Job, type NumberedCandidate, type Project } from "./api";
 import AIWorkspaceTimeline from "./AIWorkspaceTimeline";
 import CandidateTimeline from "./CandidateTimeline";
@@ -20,7 +21,8 @@ export function candidates(project: Project, jobs: Job[]) {
 }
 
 export default function ClipWorkspace({ project, jobs, draft, selected, onSelect, onChange, onPlay, onSeek, current,
-  selectedSegment, onSelectSegment, onCandidateSaved, onError, onRecheck, view, onViewChange, onResetProgress, resetting, candidateActions, highlightedFields = [] }: {
+  selectedSegment, onSelectSegment, onCandidateSaved, onError, onRecheck, view, onViewChange, onResetProgress, resetting, candidateActions, highlightedFields = [],
+  timingTarget, detailTarget }: {
   project: Project; jobs: Job[]; draft: Draft; selected: string | null;
   onSelect: (job: Job) => void; onChange: (values: Partial<Draft>) => void;
   onPlay: (start: number, end: number) => void; onSeek: (seconds: number) => void; current: number;
@@ -30,7 +32,12 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   onError: (message: string) => void; view: TimeWindow; onViewChange: (view: TimeWindow) => void;
   onResetProgress: () => Promise<void>; resetting: boolean; highlightedFields?: string[];
   candidateActions?: ReactNode;
+  /** Side-panel slots; when given, clip settings and candidate details render there instead of under the timeline. */
+  timingTarget?: HTMLElement | null; detailTarget?: HTMLElement | null;
 }) {
+  const inPanel = (node: ReactNode, target: HTMLElement | null | undefined) =>
+    target === undefined ? node : target ? createPortal(node, target) : null;
+  const timing = useRef<HTMLElement>(null);
   const workspace = useRef<HTMLElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const drag = useRef<{ edge: "start" | "victory"; pointer: number; left: number; width: number; from: number; span: number; draft: Draft } | null>(null);
@@ -100,7 +107,7 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   function editCandidate(candidate: NumberedCandidate) {
     if (draft.candidate_id !== candidate.id) onSelectSegment(candidate);
     setRangeError("");
-    const input = workspace.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
+    const input = timing.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
     input?.scrollIntoView({ block: "nearest" });
     input?.focus({ preventScroll: true });
   }
@@ -179,14 +186,18 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     </div>
     {valid && !selectionInView && <p className="workbench-outside">目前剪輯區間在可視範圍外
       <button className="text-button" onClick={() => onViewChange(timelineWindow(draft.start - 5, finish - draft.start + 10, duration))}>回到目前剪輯</button></p>}
-    <section className="workbench-timing" aria-label="剪輯設定">
-      <h2 className="sr-only">剪輯設定</h2>
+    {inPanel(<><section className="workbench-timing" aria-label="剪輯設定" ref={timing}>
+      <h2 className="inspector-section-title">剪輯時間</h2>
       {(["start", "victory"] as const).map(edge => <div className="workbench-time-field" key={edge}>
         <label htmlFor={edge}>{edge === "start" ? "開始時間" : "勝利時間"}<span>{time(draft[edge], true)}</span></label>
         <div><input id={edge} className={highlightedFields.includes(edge) ? "ai-target" : undefined} type="number" min="0" max={duration} step="0.001"
           aria-invalid={edge === "start" ? !Number.isFinite(draft.start) || draft.start < 0 || draft.start >= draft.victory : !Number.isFinite(draft.victory) || draft.victory <= draft.start || finish > duration}
           aria-describedby={!valid ? "source-selection-details" : undefined} value={draft[edge]} onChange={e => onChange({ [edge]: Number(e.target.value) })} />
           <span>秒</span><button type="button" aria-label={edge === "start" ? "跳到開始" : "跳到勝利"} onClick={() => onSeek(draft[edge])}><ChevronRight size={14} /></button></div>
+        <button type="button" className="set-to-playhead" title={`設為目前播放位置 · 快捷鍵 ${edge === "start" ? "I" : "O"}`}
+          aria-label={edge === "start" ? "開始設為目前播放位置" : "勝利設為目前播放位置"}
+          onClick={() => onChange({ [edge]: Math.round(current * 1000) / 1000 })}>
+          <Crosshair size={13} aria-hidden="true" />設為目前<kbd>{edge === "start" ? "I" : "O"}</kbd></button>
       </div>)}
       <div className="workbench-postroll"><label htmlFor="postroll">勝利後收尾 <output>{draft.postroll} 秒</output></label>
         <input id="postroll" className={highlightedFields.includes("postroll") ? "ai-target" : undefined} type="range" min="5" max="10" step="1"
@@ -198,13 +209,6 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
         <span className="clip-end-time">片段結束 {time(finish, true)}</span>
       </div>
     </section>
-    <div className="source-comparison-legend" role="group" aria-label="原片對照圖例">
-      <span><i className="source-legend-selection" aria-hidden="true" />實框：匯出範圍</span>
-      <span><i className="source-legend-postroll" aria-hidden="true" />淡色區：收尾，仍會匯出</span>
-    </div>
-    <div className="workbench-candidate-actions">{candidateActions}</div>
-    <CandidateTimeline project={project} jobs={jobs} draft={draft} segments={segments} selected={selectedSegment} view={view}
-      current={current} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onEdit={editCandidate} onError={onError} onRecheck={onRecheck} />
     {editingCandidate && <div className="candidate-edit-session" role="group" aria-label={`正在編輯片段 #${editingCandidate.number}`}>
       <div><strong><Pencil size={14} aria-hidden="true" />編輯片段 #{editingCandidate.number}
         {draft.manually_adjusted && <span className="manual-adjustment-badge">已手動調整</span>}</strong>
@@ -213,7 +217,15 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
       <button type="button" className="secondary" disabled={!valid || !draft.manually_adjusted || savingRange || rangeSaved} onClick={() => void saveRange()}>
         <Save size={14} aria-hidden="true" />{savingRange ? "儲存中…" : rangeSaved ? "區間已儲存" : "儲存區間"}</button>
       {rangeError && <p className="inline-error" role="alert">{rangeError}</p>}
-    </div>}
+    </div>}</>, timingTarget)}
+    <div className="source-comparison-legend" role="group" aria-label="原片對照圖例">
+      <span><i className="source-legend-selection" aria-hidden="true" />實框：匯出範圍</span>
+      <span><i className="source-legend-postroll" aria-hidden="true" />淡色區：收尾，仍會匯出</span>
+    </div>
+    <div className="workbench-candidate-actions">{candidateActions}</div>
+    <CandidateTimeline project={project} jobs={jobs} draft={draft} segments={segments} selected={selectedSegment} view={view}
+      current={current} detailTarget={detailTarget} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onEdit={editCandidate} onError={onError} onRecheck={onRecheck} />
+
     <div id="workbench-evidence" hidden={!showEvidence}>
       <AIWorkspaceTimeline project={project} jobs={jobs} view={view} current={current} onSeek={onSeek} onResetProgress={onResetProgress} resetting={resetting} />
     </div>

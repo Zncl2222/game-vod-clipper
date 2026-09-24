@@ -4,6 +4,7 @@ import { api, ApiError, time, type Job, type Project } from "./api";
 import YouTubeImportQueue, { importIsPending, importIsWorking, type ImportRecord } from "./YouTubeImportQueue";
 import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
 import DownloadQuality, { qualityLabel, type DownloadQualityValue } from "./DownloadQuality";
+import { getPreferences } from "./preferences";
 import "./youtube.css";
 
 type Channel = { id: string; title: string };
@@ -48,7 +49,7 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState(() => localStorage.getItem("bosscut:chat-model") ?? "");
   const [autoAnalyze, setAutoAnalyze] = useState(true);
-  const [quality, setQuality] = useState<DownloadQualityValue>("best");
+  const [quality, setQuality] = useState<DownloadQualityValue>(() => getPreferences().downloadQuality);
   const [title, setTitle] = useState(target?.job.draft?.title?.trim() || (target ? `${target.project.title.slice(0, 85)} · 精華片段` : ""));
   const [description, setDescription] = useState(target?.job.draft ? `原片片段：${time(target.job.draft.start)}–${time(target.job.draft.victory + target.job.draft.postroll)}` : "");
   const [privacy, setPrivacy] = useState("private");

@@ -13,7 +13,7 @@ async function workspace(page: Page) {
     categories: { sources: { bytes: 10_000_000_000, files: 2 }, exports: { bytes: 500_000_000, files: 4 }, previews: { bytes: 2_000_000_000, files: 2 } } };
   const state: State = { projects: [project], jobs: [] };
   const controls = { failStorage: false, malformedStorage: false, failSave: false, gate: null as Promise<void> | null,
-    saves: 0, exports: 0, tags: 0, rechecks: [] as { start: number; end: number; candidate_id: string; model: string; analysis_generation: number }[] };
+    saves: 0, exports: 0, exportQualities: [] as string[], tags: 0, rechecks: [] as { start: number; end: number; candidate_id: string; model: string; analysis_generation: number }[] };
   await page.addInitScript(() => {
     const Native = window.EventSource;
     window.EventSource = class extends Native {
@@ -50,8 +50,10 @@ async function workspace(page: Page) {
     }
     if (path.endsWith("/exports")) {
       controls.exports++;
+      const quality = route.request().postDataJSON().quality;
+      controls.exportQualities.push(quality);
       const job = { id: `export-${controls.exports}`, project_id: project.id, kind: "export" as const, status: "queued", stage: "等待匯出", progress: 0,
-        error: null, draft: structuredClone(project.draft!), created: controls.exports };
+        error: null, draft: structuredClone(project.draft!), created: controls.exports, export_quality: quality };
       state.jobs.push(job);
       return route.fulfill({ status: 202, json: job });
     }
@@ -121,7 +123,7 @@ test("export needs no keep tag or checkbox and only successful exports leave a p
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await page.getByLabel("開始時間").fill("22");
   await page.getByLabel("勝利時間").fill("65");
-  await expect(page.locator(".compact-export input[type=checkbox]")).toHaveCount(0);
+  await expect(page.locator(".clip-inspector input[type=checkbox]")).toHaveCount(0);
   await expect(page.getByLabel("片段 #1 核對標籤")).toHaveValue("pending");
   const exportButton = page.getByRole("button", { name: "匯出 MP4", exact: true });
   await exportButton.click();
@@ -151,6 +153,111 @@ test("export needs no keep tag or checkbox and only successful exports leave a p
   await expect(page.getByText("此片段曾匯出，目前區間有修改", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /時間軸片段 #1 .*已匯出/ }).click();
   await expect(page.getByRole("group", { name: "片段 #1 詳情", exact: true }).getByText("已匯出", { exact: true })).toBeVisible();
+});
+
+test("export shows live encoding progress, flags a stalled encoder and offers the finished MP4", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("bosscut:export-speed", JSON.stringify({ "unknown:high": 2 }));
+    const sent: { title: string; body?: string }[] = [];
+    (window as unknown as { sentNotifications: typeof sent }).sentNotifications = sent;
+    class FakeNotification {
+      static permission = "default";
+      static requestPermission() { FakeNotification.permission = "granted"; return Promise.resolve("granted"); }
+      onclick: (() => void) | null = null;
+      constructor(title: string, options?: NotificationOptions) { sent.push({ title, body: options?.body }); }
+      close() {}
+    }
+    Object.defineProperty(window, "Notification", { configurable: true, value: FakeNotification });
+  });
+  const { controls, state, publish } = await workspace(page);
+  await page.getByRole("button", { name: /時間軸片段 #2 / }).click();
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
+  await expect.poll(() => controls.exports).toBe(1);
+  const panel = page.getByRole("region", { name: "匯出狀態" });
+  await expect(panel).toContainText("匯出排隊中");
+  await expect(panel).toContainText("開始後預估約需 29 秒");
+  await expect(page.getByRole("button", { name: "排隊中…" })).toHaveClass(/is-waiting/);
+  const now = await page.evaluate(() => Date.now() / 1000);
+  Object.assign(state.jobs[0], { status: "running", stage: "重新編碼剪輯", progress: 42, started_at: now - 12,
+    media_progress: { phase: "export", percent: 42, updated_at: now, processed_seconds: 29, total_seconds: 68, speed_ratio: 2.4, eta_seconds: 16 } });
+  await publish();
+  await expect(panel.getByRole("progressbar", { name: "匯出進度" })).toHaveAttribute("value", "42");
+  await expect(panel).toContainText("已處理 0:29 / 1:08");
+  await expect(panel).toContainText("約剩 16 秒");
+  const button = page.getByRole("button", { name: "匯出中 42%" });
+  await expect(button).toBeDisabled();
+  await expect(button).toHaveAttribute("style", /--export-progress: 42%/);
+  await expect(page.locator("#export-help")).toHaveText("約剩 16 秒 · 可繼續編輯");
+  await panel.scrollIntoViewIfNeeded();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.screenshot({ path: "../runs/export-progress-running.png" });
+  state.jobs[0].media_progress!.updated_at = now - 60;
+  await publish();
+  await expect(panel).toContainText("處理可能卡住");
+  await page.evaluate(() => { document.hasFocus = () => false; });
+  Object.assign(state.jobs[0], { status: "succeeded", progress: 100, finished_at: now + 1, media_progress: null });
+  await publish();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { sentNotifications: { title: string }[] }).sentNotifications))
+    .toEqual([{ title: "匯出完成", body: "艾爾登法環 · 人工核對 已可下載。" }]);
+  await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).not.toHaveClass(/is-exporting/);
+  await expect(panel).toContainText("匯出完成 · 成品 #1");
+  await expect(panel.getByRole("link", { name: "下載 MP4" })).toHaveAttribute("href", "/api/jobs/export-1/download");
+  await page.screenshot({ path: "../runs/export-progress-done.png" });
+  await panel.getByRole("button", { name: "關閉匯出狀態" }).click();
+  await expect(panel).toHaveCount(0);
+  expect(await new AxeBuilder({ page }).include(".clip-inspector").analyze().then(r => r.violations)).toEqual([]);
+});
+
+test("a newly submitted export replaces the previous completion before the event stream updates", async ({ page }) => {
+  const { controls, state, publish } = await workspace(page);
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
+  await expect.poll(() => controls.exports).toBe(1);
+  state.jobs[0].status = "succeeded";
+  state.jobs[0].finished_at = Date.now() / 1000;
+  await publish();
+  await expect(page.getByRole("region", { name: "匯出狀態" })).toContainText("匯出完成");
+
+  await page.getByLabel("開始時間").fill("12");
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
+  await expect.poll(() => controls.exports).toBe(2);
+  const panel = page.getByRole("region", { name: "匯出狀態" });
+  await expect(panel).toContainText("匯出排隊中");
+  await expect(page.getByRole("button", { name: "排隊中…" })).toBeDisabled();
+  await publish();
+  await expect(panel).toContainText("匯出排隊中");
+});
+
+test("preferences choose the export and download quality and can silence notifications", async ({ page }) => {
+  const { controls, state, publish } = await workspace(page);
+  await expect(page.locator("#export-help")).toContainText("MP4 · 高畫質");
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
+  await expect.poll(() => controls.exportQualities).toEqual(["high"]);
+  state.jobs[0].status = "succeeded";
+  await publish();
+
+  await page.locator("#export-help").getByRole("button", { name: "變更" }).click();
+  const dialog = page.getByRole("dialog", { name: "偏好設定" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("radio", { name: /高畫質（建議）/ })).toBeChecked();
+  await dialog.getByRole("radio", { name: /平衡/ }).check();
+  await dialog.getByLabel("預設保留畫質").selectOption("1080");
+  await dialog.getByRole("checkbox", { name: /匯出完成或失敗時通知我/ }).uncheck();
+  expect(await new AxeBuilder({ page }).include("#preferences").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze().then(r => r.violations)).toEqual([]);
+  await page.screenshot({ path: "../runs/preferences-dialog.png" });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page.locator("#export-help")).toContainText("MP4 · 平衡");
+
+  await page.reload();
+  await expect(page.locator("#export-help")).toContainText("MP4 · 平衡");
+  await page.getByLabel("開始時間").fill("12");
+  await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
+  await expect.poll(() => controls.exportQualities).toEqual(["high", "balanced"]);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bosscut:preferences")!)))
+    .toEqual({ exportQuality: "balanced", downloadQuality: "1080", notifyOnExport: false });
+  await page.getByRole("button", { name: "偏好設定", exact: true }).click();
+  await expect(dialog.getByLabel("預設保留畫質")).toHaveValue("1080");
+  await expect(dialog.getByRole("checkbox", { name: /匯出完成或失敗時通知我/ })).not.toBeChecked();
 });
 
 test("export marks respect candidate aliases and exact legacy boundaries, never mere overlap", async ({ page }) => {
@@ -216,7 +323,7 @@ test("single-click candidate editing preserves each range and previews exactly w
   expect(controls.saves).toBe(0);
   await target.getByRole("button", { name: "調整時間" }).click();
   await page.screenshot({ path: "../runs/direct-candidate-edit-desktop.png" });
-  expect((await new AxeBuilder({ page }).include(".compact-export").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({ page }).include(".clip-inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
 });
 
 test("late AI edits are rejected after a candidate round trip", async ({ page }) => {

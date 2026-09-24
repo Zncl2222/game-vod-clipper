@@ -79,14 +79,16 @@ each sidebar collapse or expand it; visibility and expanded widths are remembere
 on this browser. Collapsing a panel preserves the working draft, playback, library
 search, and unsent conversation input for reopening it. The import dialog
 can refresh the local source list without closing; invalid URLs and
-source errors include recovery guidance. The player footer keeps draft status,
-clip length, export history, and export availability visible together.
+source errors include recovery guidance. The clip settings panel keeps the draft
+status, clip length, export controls, and live export progress visible; project
+tools retain the full job history.
 The shared visual rules live in [the desktop design system](design-system/bosscut-studio/MASTER.md).
 
 The main view keeps the video, one range timeline, previews and export together.
 **AI 對話** opens an optional conversation panel; on smaller screens it opens a
-full-height drawer. Numeric editing controls appear before AI candidates in the workbench.
-**更多工具** opens manual shortcuts, draft save/restore, advanced Agent import/export,
+full-height drawer. On desktop, numeric editing controls sit beside the player;
+on narrow or short screens, they follow the timeline in the page scroll.
+**專案工具** opens manual shortcuts, draft save/restore, advanced Agent import/export,
 and media job history without moving the editor. Account controls live behind **帳號設定**;
 search progress appears below the video and in the conversation.
 
@@ -174,7 +176,7 @@ the separate task's progress, conclusion, timestamped evidence and warnings. Thi
 check looks for a complete win as well as deaths, retries and uncertain transitions;
 it may add new annotations but does not silently replace the selected edit range.
 Selecting an annotation directly loads it into the editor; preview and export use
-that same range. The fixed footer identifies the current candidate and export
+that same range. The clip settings panel identifies the current candidate and export
 boundaries. **調整時間** focuses the timing fields without resetting edits. Each
 candidate's working edits stay in this browser across switches and reloads; completed
 clip drafts remain separate. Tags only organize candidates. Drag the boundaries or
@@ -207,12 +209,13 @@ the host stops expanding exploration, finishes required checks and returns
 it does not approve export. Completed results explicitly report search coverage
 and a completion reason, and do not offer continuation when no work remains.
 
-The editor keeps layout **A**'s unified **剪輯與原片對照** workbench beneath the
-source preview, beside a full-height AI conversation. One time ruler aligns the current selection,
-AI candidates, and optional exploration/evidence tracks. On desktop, the workspace fits
-the viewport and only the workbench scrolls; inspecting more candidates keeps the source
-video and export visible. Start/victory/postroll controls precede candidates. Candidates
-and evidence share that same scroll area, including when many candidate rows overlap.
+The editor keeps a unified **剪輯與原片對照** workbench beneath the source preview,
+beside a full-height AI conversation. The clip settings and export panel sits left
+of the player on wide desktop layouts; its divider adjusts the panel width. One
+time ruler aligns the current selection, AI candidates, and optional
+exploration/evidence tracks. On desktop, the workspace fits the viewport and the
+timeline scrolls independently; inspecting more candidates keeps the source video
+and export visible. Candidate details appear in the settings panel.
 The workbench starts at a compact 260px. Drag its upper divider to resize it, use
 the adjacent **＋ / −** buttons, or focus the divider and use Up/Down (Shift for
 larger steps), Home/End. Double-click or use reset to restore the default height.
@@ -228,8 +231,8 @@ width at 16:9 instead of a small fixed height.
 
 The player has playback, frame, sound, and speed controls; source seeking uses the
 workbench filmstrip. Start/victory inputs and the independent 5–10-second postroll
-control sit directly in the workbench. **快速核對與 AI 草稿** opens the opening/victory/ending
-preview shortcuts. Search and **清除全部** remain beside review/export controls;
+control sit in the settings panel. **快速核對與 AI 草稿** opens the opening/victory/ending
+preview shortcuts. Search and **清除全部** remain above the timeline;
 the AI conversation also offers search and stop/continue.
 
 The current draft's solid frame is the export range. Text labels distinguish

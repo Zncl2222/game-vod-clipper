@@ -33,6 +33,7 @@ export type Job = {
   quota_change?: QuotaChange;
   edit_draft?: Draft;
   source_job_id?: string | null;
+  export_quality?: "max" | "high" | "balanced" | "fast";
   progress_reset?: boolean;
   candidates?: CandidateSegment[];
   model?: string;

@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .media import clip_video
+from .media import DEFAULT_EXPORT_QUALITY, EXPORT_QUALITY, clip_video
 from .media_progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
 from .process import resolve_tool_command
 from .web_store import Store
@@ -196,7 +196,9 @@ def run(root: Path, job_id: str):
         run_analysis(store, job, project)
     else:
         draft = job["draft"]
-        progress("重新編碼剪輯", 20)
+        quality = job.get("export_quality") or DEFAULT_EXPORT_QUALITY
+        expected = draft["victory"] + draft["postroll"] - draft["start"]
+        reporter.emit("重新編碼剪輯", "export", 0, processed_seconds=0, total_seconds=round(expected, 1))
         output = root / "clips" / "web" / project["id"] / f"{job_id}.mp4"
         clip_video(
             root / project["source"],
@@ -204,8 +206,10 @@ def run(root: Path, job_id: str):
             start=str(draft["start"]),
             end=str(draft["victory"]),
             postroll=draft["postroll"],
+            quality=quality,
+            on_progress=reporter.ffmpeg("重新編碼剪輯", "export", expected),
         )
-        progress("驗證輸出長度", 90)
+        reporter.emit("驗證輸出長度", "verify", 99)
         # Export may be shorter than the minimum input length accepted by probe().
         result = json.loads(
             command(
@@ -221,7 +225,6 @@ def run(root: Path, job_id: str):
                 ]
             )
         )
-        expected = draft["victory"] + draft["postroll"] - draft["start"]
         if (
             not any(s["codec_type"] == "video" for s in result["streams"])
             or abs(float(result["format"]["duration"]) - expected) > 0.3
@@ -232,6 +235,9 @@ def run(root: Path, job_id: str):
             "source": project["source"],
             "draft": draft,
             "output": str(output.relative_to(root)),
+            "export_quality": quality,
+            "encoder": {"video": "libx264", "preset": EXPORT_QUALITY[quality][0], "crf": EXPORT_QUALITY[quality][1],
+                        "audio": "aac", "audio_bitrate": "192k"},
             "validation": ("human_reviewed; " if draft.get("reviewed") else "")
                           + "duration_checked; no_automated_visual_validation",
         }

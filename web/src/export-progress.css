@@ -1,0 +1,35 @@
+.export-progress { grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-subtle); }
+.export-progress.is-running { border-color: var(--control-border); }
+.export-progress.is-done { border-color: var(--accent); background: var(--surface-active); }
+.export-progress.is-failed { border-color: var(--danger); background: var(--danger-surface); }
+.export-progress-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: var(--accent); background: var(--surface); }
+.export-progress.is-failed .export-progress-icon { color: var(--danger); }
+.export-progress.is-cancelled .export-progress-icon { color: var(--muted); }
+.export-progress-body { min-width: 0; }
+.export-progress-body > strong { display: block; font-size: 13px; line-height: 28px; color: var(--ink); }
+.export-progress-body > p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--muted); overflow-wrap: anywhere; }
+.export-progress.is-failed .export-progress-body > p { color: var(--danger); }
+.export-progress .media-progress-heading { font-size: 12px; color: var(--muted); }
+.export-progress .media-progress progress { margin: 6px 0; }
+.export-progress .media-progress > p { margin: 0; }
+.export-progress-actions { display: flex; align-items: center; gap: 6px; min-height: 28px; }
+.export-progress-actions .secondary { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 12px; text-decoration: none; white-space: nowrap; }
+.export-progress-actions .icon-button { width: 28px; height: 28px; }
+@media (max-width: 640px) {
+  .export-progress { grid-template-columns: auto minmax(0, 1fr); }
+  .export-progress-actions { grid-column: 1 / -1; justify-content: flex-end; flex-wrap: wrap; }
+}
+.export-progress-body > .export-progress-estimate { margin-top: 4px; }
+
+/* The export button doubles as a compact progress bar while a job is active. */
+.export-button.is-exporting { position: relative; isolation: isolate; overflow: hidden; opacity: 1; cursor: progress;
+  color: var(--ink); background: var(--surface-active); box-shadow: inset 0 0 0 1px var(--accent); font-variant-numeric: tabular-nums; }
+.export-button.is-exporting::before { content: ""; position: absolute; inset: 0 auto 0 0; z-index: -1;
+  width: var(--export-progress, 0%); background: var(--green); transition: width 600ms ease-out; }
+.export-button.is-waiting::before { width: 35%; animation: export-waiting 1.6s ease-in-out infinite; }
+@keyframes export-waiting { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) {
+  .export-button.is-exporting::before { transition: none; }
+  .export-button.is-waiting::before { animation: none; width: 100%; opacity: .45; }
+}

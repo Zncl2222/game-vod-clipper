@@ -58,6 +58,20 @@ class ProgressTest(unittest.TestCase):
         receive("progress=end")
         self.assertEqual(self.updates[-1][1], 100)
 
+    def test_ffmpeg_reports_processed_time_speed_and_eta_for_exports(self):
+        receive = self.reporter.ffmpeg("重新編碼剪輯", "export", 60)
+        receive("out_time_us=15000000")
+        receive("speed=2.5x")
+        receive("progress=continue")
+        detail = self.updates[-1][2]
+        self.assertEqual((detail["phase"], detail["processed_seconds"], detail["total_seconds"]), ("export", 15, 60))
+        self.assertEqual((detail["speed_ratio"], detail["eta_seconds"]), (2.5, 18))
+        receive("speed=N/A")
+        receive("progress=continue")
+        self.assertIsNone(self.updates[-1][2]["eta_seconds"])
+        receive("progress=end")
+        self.assertEqual((self.updates[-1][1], self.updates[-1][2]["eta_seconds"]), (100, None))
+
     def test_output_reaches_callback_before_exit_and_timeout_and_errors_are_bounded(self):
         acknowledged = self.root / "ack"
         script = ("import pathlib,time,sys; p=pathlib.Path(sys.argv[1]); print('progress',flush=True); "

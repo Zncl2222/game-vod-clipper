@@ -117,7 +117,15 @@ class MediaProgress:
                         return True
                 except (ValueError, ZeroDivisionError):
                     return True
-                self.emit(stage, phase, 100 if value == "end" else percent)
+                try:
+                    speed = number(float(values.get("speed", "").rstrip("x")))
+                except ValueError:
+                    speed = None
+                done = value == "end"
+                self.emit(stage, phase, 100 if done else percent,
+                          processed_seconds=round(min(seconds, duration), 1), total_seconds=round(duration, 1),
+                          speed_ratio=None if done else speed,
+                          eta_seconds=None if done or not speed else round(max(0, duration - seconds) / speed, 1))
             return True
 
         return line_received

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, X, Youtube } from "lucide-react";
 import { api, type Project, type Source } from "./api";
 import DownloadQuality, { type DownloadQualityValue } from "./DownloadQuality";
+import { getPreferences } from "./preferences";
 
 export default function ImportModal({ onClose, onImport, onYouTube }: { onClose: () => void; onImport: (id: string) => void; onYouTube?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -10,7 +11,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
   const [sources, setSources] = useState<Source[]>([]);
   const [source, setSource] = useState("");
   const [url, setUrl] = useState("");
-  const [quality, setQuality] = useState<DownloadQualityValue>("best");
+  const [quality, setQuality] = useState<DownloadQualityValue>(() => getPreferences().downloadQuality);
   const [loading, setLoading] = useState(true);
   const [sourceError, setSourceError] = useState("");
   const [busy, setBusy] = useState(false);
