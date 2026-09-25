@@ -12,7 +12,16 @@ export type Draft = {
   candidate_revision?: number | null;
   manually_adjusted?: boolean | null;
 };
+export type ProfileKind = "victory" | "failure" | "boss";
+export type GameProfile = {
+  id: string; title: string; notes: string; created: number; updated: number;
+  images: { id: string; kind: ProfileKind; caption: string }[];
+};
+export type ProfileListing = { default_id: string | null; kinds: Record<ProfileKind, string>; profiles: GameProfile[] };
+
 export type Project = {
+  /** "default" (or missing) follows the default profile; null uses no references. */
+  profile_id?: string | null;
   youtube_analysis_error?: string | null;
   review_candidates?: NumberedCandidate[];
   candidate_reviews?: Record<string, CandidateReview>;
@@ -28,7 +37,14 @@ export type Project = {
   thumbnails: { file: string; time: number }[];
   draft?: Draft;
 };
+export type ClipUpload = {
+  status: string; video_id?: string | null; playlist_title?: string | null; playlist_status?: string | null;
+  /** YouTube holds the video and any requested playlist placement is confirmed. */
+  published: boolean;
+};
+
 export type Job = {
+  youtube_upload?: ClipUpload;
   analysis?: { start: number; end: number; candidate_id?: string | null } | null;
   quota_change?: QuotaChange;
   edit_draft?: Draft;
@@ -112,6 +128,10 @@ export type RateLimits = {
 export function finishedClips(projectId: string, jobs: Job[]) {
   return jobs.filter(job => job.project_id === projectId && job.kind === "export" && job.status === "succeeded" && job.draft)
     .sort((a, b) => (a.created ?? 0) - (b.created ?? 0) || a.id.localeCompare(b.id));
+}
+
+export function publishedClips(projectId: string, jobs: Job[]) {
+  return finishedClips(projectId, jobs).filter(job => job.youtube_upload?.published);
 }
 
 export function sameClipRange(a: Pick<Draft, "start" | "victory" | "postroll">, b: Pick<Draft, "start" | "victory" | "postroll">) {

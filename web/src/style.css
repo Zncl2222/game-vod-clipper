@@ -250,6 +250,7 @@ small {
 .project-delete-details p { margin: 0 0 8px; }
 .project-delete-details p:last-child { margin: 0; color: #526d40; }
 .project-delete-details .project-delete-pending { color: #a77338; }
+.project-delete-details ul { margin: 0 0 8px; padding-left: 18px; max-height: 160px; overflow-y: auto; }
 .project-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 17px; margin: 23px 0; }
 .project-info-grid dt, .project-source > span { font-size: 10px; color: #8a957f; }
 .project-info-grid dd { margin: 5px 0 0; font-size: 12px; color: #3f5336; }

@@ -5,10 +5,39 @@ from __future__ import annotations
 import json
 
 
+KIND_LABELS = {
+    "victory": "VICTORY example: what this game shows when the player beats a boss",
+    "failure": "FAILURE example: what this game shows when the player dies or fails",
+    "boss": "BOSS FIGHT example: what the user counts as a boss encounter to clip",
+}
+
+
+def reference_section(profile: dict | None) -> str:
+    """User-supplied game references; empty when no profile is selected."""
+    if not profile or not (profile["images"] or profile["notes"].strip()):
+        return ""
+    lines = [f"GAME REFERENCES for {json.dumps(profile['title'], ensure_ascii=False)} (supplied by the user):"]
+    if profile["images"]:
+        lines.append(f"The FIRST {len(profile['images'])} attached images are reference screenshots, NOT samples")
+        lines.append("from this VOD. They have no timestamps; never cite them as evidence or list")
+        lines.append("them as sheets. The timestamped sheets start after them.")
+        for index, image in enumerate(profile["images"], 1):
+            lines.append(f"Reference {index}: {KIND_LABELS[image['kind']]}")
+            if image["caption"].strip():
+                lines.append("  User explanation: " + json.dumps(image["caption"].strip(), ensure_ascii=False))
+        lines.append("Red boxes or marks drawn on a reference highlight the decisive cue (HUD, text,")
+        lines.append("boss bar, screen) the user relies on. Look for the same cue in the samples and")
+        lines.append("weigh it heavily, but still require the evidence rules below to be met.")
+    if profile["notes"].strip():
+        lines.append("User notes about this game: " + json.dumps(profile["notes"].strip(), ensure_ascii=False))
+    return "\n".join(lines) + "\n\n"
+
+
 def review_prompt(*, manifest: dict, purpose: str, start: float, end: float,
                   duration: float, last=None, records: dict | None = None,
                   history: list | None = None, exhausted: list | None = None,
-                  focus: dict | None = None, review_target: dict | None = None) -> str:
+                  focus: dict | None = None, review_target: dict | None = None,
+                  profile: dict | None = None) -> str:
     records, history = records or {}, history or []
     a, b = manifest["start"], manifest["end"]
     local = [c for c in records.values() if c["start"] <= b and a <= c["end"]]
@@ -31,7 +60,7 @@ def review_prompt(*, manifest: dict, purpose: str, start: float, end: float,
         "focus": focus,
         "review_target": review_target,
     }
-    return """You inspect timestamped gameplay images for a boss-fight clipper.
+    return reference_section(profile) + """You inspect timestamped gameplay images for a boss-fight clipper.
 Inspect ALL sheets in order. DETAIL images repeat anchors at readable resolution.
 identical_frames maps a displayed timestamp to byte-identical samples: they share
 the exact same image, including HUD. Every distinct sampled frame is displayed.

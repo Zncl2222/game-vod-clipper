@@ -101,3 +101,29 @@ class ClipDeletionTest(unittest.TestCase):
         self.assertEqual(self.store.get("jobs", "other")["draft"], self.draft)
         response = self.client.put("/api/projects/one/clips/other/draft", json=self.draft)
         self.assertEqual(response.status_code, 200, response.text)
+
+    def test_published_uploads_are_flagged_and_bulk_removed(self):
+        uploads = self.app.state.youtube.uploads
+        uploads.records["done"] = dict(id="done", export_id="clip", status="succeeded", video_id="abcdefghijk",
+                                       playlist_id="PLwins", playlist_title="勝利", playlist_status="added")
+        uploads.records["waiting"] = dict(id="waiting", export_id="other", status="paused", video_id="bcdefghijkl",
+                                          playlist_id="PLwins", playlist_status="pending")
+        jobs = {job["id"]: job for job in self.client.get("/api/state").json()["jobs"]}
+        self.assertTrue(jobs["clip"]["youtube_upload"]["published"])
+        self.assertFalse(jobs["other"]["youtube_upload"]["published"])
+        response = self.client.post("/api/projects/one/clips/remove-published")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {"deleted": ["clip"], "bytes": len(b"fixture")})
+        self.assertFalse(self.paths[1].exists())
+        for path in (self.paths[0], self.paths[3]):
+            self.assertTrue(path.exists())
+        self.assertIsNotNone(self.store.get("jobs", "other"))
+        self.assertIn("done", uploads.records)
+
+    def test_failed_playlist_placement_is_not_treated_as_published(self):
+        uploads = self.app.state.youtube.uploads
+        uploads.records["done"] = dict(id="done", export_id="clip", status="succeeded", video_id="abcdefghijk",
+                                       playlist_id="PLwins", playlist_status="failed")
+        response = self.client.post("/api/projects/one/clips/remove-published")
+        self.assertEqual(response.json(), {"deleted": [], "bytes": 0})
+        self.assertTrue(self.paths[1].exists())

@@ -3,6 +3,7 @@ import BossReviewDock from "./BossReviewDock";
 import MediaProgress, { remaining } from "./MediaProgress";
 import ExportProgress from "./ExportProgress";
 import PreferencesDialog from "./PreferencesDialog";
+import GameProfilesDialog, { effectiveProfile } from "./GameProfiles";
 import { exportQualityLabel, usePreferences } from "./preferences";
 import { clipLength, estimateExportSeconds, rememberExportSpeed, requestExportNotifications, useExportNotifications } from "./exportInsights";
 import FinishedClips from "./FinishedClips";
@@ -49,6 +50,7 @@ import {
   Trophy,
   X,
   Youtube,
+  Images,
 } from "lucide-react";
 import {
   active,
@@ -65,6 +67,7 @@ import {
   type Job,
   type Project,
   type State,
+  type ProfileListing,
 } from "./api";
 
 export default function App() {
@@ -79,6 +82,9 @@ export default function App() {
   const [guide, setGuide] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [profilesOpen, setProfilesOpen] = useState(false);
+  const [profiles, setProfiles] = useState<ProfileListing | null>(null);
+  useEffect(() => { api<ProfileListing>("/profiles").then(setProfiles).catch(() => setProfiles(null)); }, []);
   const [error, setError] = useState("");
   const { libraryOpen, chatOpen, toggleLibrary, toggleChat, openChat } = usePanelVisibility();
   const layout = usePanelLayout(chatOpen, libraryOpen);
@@ -188,7 +194,8 @@ export default function App() {
           <span>{state.projects.length.toString().padStart(2, "0")}</span>
         </div>
         <ProjectLibrary projects={state.projects} selected={project?.id} jobs={state.jobs}
-          onSelect={select} onRenamed={renameProject} onDeleted={deleteProject} onError={setError} />
+          onSelect={select} onRenamed={renameProject} onDeleted={deleteProject} onError={setError}
+          onClipsRemoved={(projectId, ids) => ids.forEach(id => deleteClip(projectId, id))} />
         <div className="sidebar-bottom">
           <button className="sidebar-guide" aria-label="使用指南與快捷鍵" title={!libraryOpen ? "使用指南與快捷鍵" : undefined} onClick={() => setGuide(true)}><CircleHelp size={17} /><span>使用指南與快捷鍵</span></button>
           <LocalStorageUsage refreshKey={state.jobs.filter(job => job.kind !== "analyze").map(job => `${job.id}:${job.status}`).sort().join("|")} />
@@ -208,6 +215,11 @@ export default function App() {
               <SlidersHorizontal size={16} aria-hidden="true" />專案工具
               {mediaJobStatus && <span id="tools-job-status" className="tools-job-status">{mediaJobStatus}</span>}
             </button>}
+            <button type="button" className="topbar-settings topbar-profiles" aria-label="遊戲判斷範例" aria-haspopup="dialog"
+              title="提供勝利、失敗與 Boss 戰範例圖給 AI 參考" onClick={() => setProfilesOpen(true)}>
+              <Images size={16} aria-hidden="true" /><span>遊戲範例</span>
+              {project && <span className="topbar-profile-name">· {effectiveProfile(project, profiles)?.title ?? "未使用"}</span>}
+            </button>
             <button type="button" className="topbar-settings" aria-label="偏好設定" title="匯出畫質、下載畫質與通知" aria-haspopup="dialog"
               aria-controls="preferences" onClick={() => setPreferencesOpen(true)}><Settings size={16} aria-hidden="true" /><span>偏好設定</span></button>
             <button className="topbar-help" onClick={() => setGuide(true)}><CircleHelp size={16} />操作指南</button>
@@ -320,6 +332,9 @@ export default function App() {
       )}
       {guide && <WorkspaceGuide onClose={() => setGuide(false)} />}
       {preferencesOpen && <PreferencesDialog open onClose={() => setPreferencesOpen(false)} />}
+      {profilesOpen && <GameProfilesDialog project={project} onClose={() => setProfilesOpen(false)} onListing={setProfiles}
+        onProjectChanged={changed => setState(previous => ({ ...previous,
+          projects: previous.projects.map(item => item.id === changed.id ? { ...item, profile_id: changed.profile_id } : item) }))} />}
       {youtubeOpen && <YouTubeDialog target={uploadTarget} onClose={() => setYoutubeOpen(false)}
         onImport={id => { select(id); setYoutubeOpen(false); }} />}
     </div>

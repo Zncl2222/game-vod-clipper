@@ -329,6 +329,25 @@ class CodexAnalysisTest(unittest.TestCase):
         )
         self.assertTrue(all(path.is_file() for path in invoke.call_args.args[1]))
 
+    def test_profile_references_precede_samples_and_are_labelled(self):
+        from PIL import Image
+        from game_vod_clipper.game_profiles import GameProfiles
+        profiles = GameProfiles(self.root)
+        profile = profiles.create("Ronin", "")
+        picture = self.root / "ref.png"
+        Image.new("RGB", (40, 20), "red").save(picture)
+        profile = profiles.add_image(profile["id"], "failure", "死亡畫面", picture.read_bytes())
+        job = self.job | {"analysis": {**self.job["analysis"], "profile": profiles.snapshot(profile)}}
+        self.store.put("jobs", job)
+        with patch("game_vod_clipper.codex_analysis.invoke_codex",
+                   return_value=(observation(), {})) as invoke:
+            run_analysis(self.store, job, self.project)
+        images, prompt = invoke.call_args.args[1], invoke.call_args.args[2]
+        self.assertEqual(images[0].parent.name, "references")
+        self.assertTrue(all(path.parent.name != "references" for path in images[1:]))
+        self.assertIn('Reference 1: FAILURE example', prompt)
+        self.assertIn('"死亡畫面"', prompt)
+
     def test_reject_unobserved_evidence_and_out_of_range_refinement(self):
         with (
             patch(

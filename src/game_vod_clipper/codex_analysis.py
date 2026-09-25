@@ -20,6 +20,7 @@ from typing import Literal
 from PIL import Image, ImageDraw, ImageOps
 from pydantic import BaseModel, ConfigDict, Field
 
+from .game_profiles import GameProfiles
 from .process import resolve_tool_command
 from .web_store import Store
 from .codex_runtime import CodexCallError, execute
@@ -529,6 +530,10 @@ def _run_analysis(store: Store, job: dict, project: dict, progress: AnalysisProg
     stat = source.stat()
     identity = {"source": project["source"], "size": stat.st_size, "mtime": stat.st_mtime_ns,
                 "start": start, "end": end, "model": model, "effort": effort}
+    profile = bounds.get("profile")
+    if profile:
+        identity["profile"] = profile["id"]
+    references, reference_labels = GameProfiles(store.root).materialize(profile, work)
     history, usage, queue = [], {}, []
     candidate_origin = job["id"]
     registry = CandidateRegistry(candidate_origin)
@@ -758,10 +763,11 @@ def _run_analysis(store: Store, job: dict, project: dict, progress: AnalysisProg
         prompt = review_prompt(manifest=manifest, purpose=purpose, start=start, end=end,
             duration=project["duration"], last=last, records=registry.records,
             history=history, exhausted=tracker.exhausted(), focus=registry.records.get(focus_id),
-            review_target=bounds.get("review_target"))
+            review_target=bounds.get("review_target"),
+            profile=profile and {"title": profile["title"], "notes": profile["notes"], "images": reference_labels})
         (packet_work / "prompt.txt").write_text(prompt, encoding="utf-8")
         model_started = time.monotonic()
-        data, tokens = invoke_codex(packet_work, images, prompt, MODEL_CALL_TIMEOUT,
+        data, tokens = invoke_codex(packet_work, references + images, prompt, MODEL_CALL_TIMEOUT,
             on_event=progress.codex_event, model=model, effort=round_effort,
             on_usage=lambda value: record_usage(store, value, kind="analysis", model=model,
                                                 project_id=project["id"], job_id=job["id"]))

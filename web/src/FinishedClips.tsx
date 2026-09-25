@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Check, ChevronDown, Download, Film, FolderOpen, LoaderCircle, Pencil, Search, Trash2, Upload } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, Download, Film, FolderOpen, LoaderCircle, Pencil, Search, Trash2, Upload } from "lucide-react";
 import { active, api, ApiError, finishedClips, media, time, type Job, type Project } from "./api";
 
 function DeleteClipDialog({ projectId, job, name, onClose, onDeleted }: {
@@ -92,6 +92,9 @@ export default function FinishedClips({ project, jobs, selected, onSelect, onUpl
               </span>
             </span>
             {range.manually_adjusted && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
+            {job.youtube_upload?.published && <span className="clip-published-badge"
+              title={job.youtube_upload.playlist_title ? `已上傳並加入「${job.youtube_upload.playlist_title}」，可刪除本機檔案` : "已上傳 YouTube，可刪除本機檔案"}>
+              <CircleCheck size={12} aria-hidden="true" />{job.youtube_upload.playlist_title ? "已上傳・已在播放清單" : "已上傳 YouTube"}・可刪除</span>}
             <span className="finished-clip-range"><span>原片範圍</span><span>{time(range.start)} – {time(end)}</span></span>
           </button>
           <div className="finished-clip-actions">

@@ -22,7 +22,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .web_store import Store
@@ -33,6 +33,7 @@ from .youtube_routes import YouTubeWorkspace
 from .youtube_account import YouTubeError
 from .usage import quota_change, usage_summary
 from .storage import video_storage
+from .game_profiles import KINDS, GameProfiles, ProfileError
 from .youtube import DownloadQuality
 
 ACTIVE = {"queued", "running"}
@@ -49,6 +50,31 @@ class ImportRequest(BaseModel):
 class ProjectUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=120)
+
+
+def plain_text(value: str):
+    if any(ord(char) < 32 and char not in "\n\t" for char in value):
+        raise ValueError("不能包含控制字元。")
+    return value
+
+
+class ProfileBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=80)
+    notes: str = Field(default="", max_length=2000)
+    _text = field_validator("title", "notes")(plain_text)
+
+
+class CaptionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    caption: str = Field(default="", max_length=1000)
+    _text = field_validator("caption")(plain_text)
+
+
+class ProfileChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # "default" follows the default profile; null uses no references.
+    profile_id: str | None = Field(max_length=40)
 
 
 class Draft(BaseModel):
@@ -314,6 +340,7 @@ class LocalServer(uvicorn.Server):
 def create_app(root: Path | None = None) -> FastAPI:
     root = (root or Path(os.environ.get("GAME_VOD_ROOT", "."))).resolve()
     store = Store(root)
+    profiles = GameProfiles(root)
     codex = CodexConnection(root, store)
     jobs = Jobs(store, codex)
     analysis_lock = asyncio.Lock()
@@ -349,6 +376,10 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def codex_error(request, error):
         return JSONResponse({"detail": str(error)}, status_code=503)
 
+    @app.exception_handler(ProfileError)
+    async def profile_error(request, error):
+        return JSONResponse({"detail": str(error)}, status_code=error.status)
+
     hosts = ["localhost", "127.0.0.1", "[::1]", "testserver"]
     hosts += [h for h in os.environ.get("GAME_VOD_ALLOWED_HOSTS", "").split(",") if h]
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
@@ -383,16 +414,87 @@ def create_app(root: Path | None = None) -> FastAPI:
     def public_job(job):
         return {k: v for k, v in job.items() if k != "output"}
 
+    def published(upload: dict):
+        # Safe to drop the local MP4 only once YouTube holds the video and any
+        # requested playlist placement has been confirmed.
+        return upload["status"] == "succeeded" and (not upload.get("playlist_id") or upload.get("playlist_status") == "added")
+
+    def clip_uploads():
+        result = {}
+        for upload in youtube.uploads.all().values():
+            current = result.get(upload.get("export_id"))
+            if not current or (published(upload), upload.get("created", 0)) > (published(current), current.get("created", 0)):
+                result[upload.get("export_id")] = upload
+        return {key: {"status": item["status"], "video_id": item.get("video_id"), "playlist_title": item.get("playlist_title"),
+                      "playlist_status": item.get("playlist_status"), "published": published(item)}
+                for key, item in result.items()}
+
     def state():
         all_jobs = store.all("jobs")
+        uploads = clip_uploads()
         return {
             "projects": [public_project(p) | {"review_candidates": project_candidates(p, all_jobs)} for p in store.all("projects")],
-            "jobs": [public_job(j) for j in all_jobs],
+            "jobs": [public_job(j) | ({"youtube_upload": uploads[j["id"]]} if j["id"] in uploads else {}) for j in all_jobs],
         }
 
     @app.get("/api/state")
     async def read_state():
         return state()
+
+    def profile_listing():
+        return {"default_id": profiles.default_id(), "kinds": KINDS,
+                "profiles": profiles.all()}
+
+    @app.get("/api/profiles")
+    async def list_profiles():
+        return profile_listing()
+
+    @app.post("/api/profiles")
+    async def create_profile(body: ProfileBody):
+        return profiles.create(body.title, body.notes)
+
+    @app.patch("/api/profiles/{profile_id}")
+    async def update_profile(profile_id: str, body: ProfileBody):
+        return profiles.update(profile_id, title=body.title, notes=body.notes)
+
+    @app.delete("/api/profiles/{profile_id}")
+    async def delete_profile(profile_id: str):
+        profiles.delete(profile_id)
+        for project in store.all("projects"):
+            if project.get("profile_id") == profile_id:
+                store.patch("projects", project["id"], profile_id="default")
+        return profile_listing()
+
+    @app.put("/api/profiles/default")
+    async def set_default_profile(body: ProfileChoice):
+        profiles.set_default(body.profile_id)
+        return profile_listing()
+
+    @app.post("/api/profiles/{profile_id}/images")
+    async def add_profile_image(profile_id: str, request: Request, kind: str, caption: str = ""):
+        if len(caption) > 1000:
+            raise HTTPException(422, "說明過長。")
+        data = await request.body()
+        return await asyncio.to_thread(profiles.add_image, profile_id, kind, plain_text(caption.strip()), data)
+
+    @app.patch("/api/profiles/{profile_id}/images/{image_id}")
+    async def update_profile_image(profile_id: str, image_id: str, body: CaptionBody):
+        return profiles.update_image(profile_id, image_id, body.caption)
+
+    @app.delete("/api/profiles/{profile_id}/images/{image_id}")
+    async def remove_profile_image(profile_id: str, image_id: str):
+        return profiles.remove_image(profile_id, image_id)
+
+    @app.get("/api/profiles/{profile_id}/images/{image_id}")
+    async def profile_image(profile_id: str, image_id: str):
+        return FileResponse(profiles.image_path(profile_id, image_id), media_type="image/jpeg")
+
+    @app.put("/api/projects/{project_id}/profile")
+    async def choose_project_profile(project_id: str, body: ProfileChoice):
+        get("projects", project_id)
+        if body.profile_id not in {None, "default"}:
+            profiles.get(body.profile_id)
+        return public_project(store.patch("projects", project_id, profile_id=body.profile_id))
 
     @app.get("/api/storage")
     def storage():
@@ -471,11 +573,15 @@ def create_app(root: Path | None = None) -> FastAPI:
                 raise HTTPException(409, "此影片已有搜尋任務，請先等待完成或取消。")
             if sum(j["status"] in ACTIVE and j["kind"] == "analyze" for j in current) >= 8:
                 raise HTTPException(429, "任務佇列已滿。")
+            # Resumes keep the references they started with.
+            reference = (resume_job["analysis"].get("profile") if resume_job
+                         else profiles.snapshot(profiles.resolve(get("projects", project_id))))
             submitted = jobs.submit(project_id, "analyze", analysis={**body.model_dump(exclude_none=True),
                 **({"review_target": {key: target.get(key) for key in
                     ("id", "start", "end", "victory", "kind", "boss", "summary")}} if target else {}),
                 "effort": effort,
                 "effort_policy": effort_policy,
+                **({"profile": reference} if reference else {}),
                 "request_id": request_id, **({"resume_from": resume_job["id"]} if resume_job else {})})
             if project.get("youtube_analysis_error"):
                 store.patch("projects", project_id, youtube_analysis_error=None)
@@ -709,31 +815,50 @@ def create_app(root: Path | None = None) -> FastAPI:
         store.patch("jobs", job_id, edit_draft=draft)
         return draft
 
+    def remove_clip(project_id: str, job: dict):
+        """Delete one finished export; callers hold the upload lock."""
+        job_id = job["id"]
+        if any(item["export_id"] == job_id and (item["id"] in youtube.uploads.tasks
+               or item["status"] in {"queued", "uploading", "processing", "adding_to_playlist"})
+               for item in youtube.uploads.all().values()):
+            raise HTTPException(409, "這個成品正在上傳 YouTube，請先暫停上傳再刪除。")
+        output = root / "clips" / "web" / project_id / f"{job_id}.mp4"
+        files = (output, output.with_suffix(".json"))
+        # Never follow stored paths or symlinks when deleting user media.
+        if (job.get("output", str(output.relative_to(root))) != str(output.relative_to(root))
+                or any(path.is_symlink() or path.resolve() != path for path in files)):
+            raise HTTPException(409, "成品檔案位置異常，未刪除資料。")
+        if any(p.get("source") and (root / p["source"]).resolve() in files for p in store.all("projects")):
+            raise HTTPException(409, "這個成品正被用作專案原片，請先移除使用它的專案。")
+        size = output.stat().st_size if output.is_file() else 0
+        try:
+            for path in files:
+                path.unlink(missing_ok=True)
+        except OSError as error:
+            raise HTTPException(500, "成品檔案刪除未完成，請重試。") from error
+        store.delete_clip(project_id, job_id)
+        return size
+
     @app.delete("/api/projects/{project_id}/clips/{job_id}")
     async def delete_clip(project_id: str, job_id: str):
         # Serialize with upload startup, which hashes the file before queuing it.
         async with youtube.uploads.lock:
             get("projects", project_id)
-            job = clip_for_edit(project_id, job_id)
-            if any(item["export_id"] == job_id and (item["id"] in youtube.uploads.tasks
-                   or item["status"] in {"queued", "uploading", "processing", "adding_to_playlist"})
-                   for item in youtube.uploads.all().values()):
-                raise HTTPException(409, "這個成品正在上傳 YouTube，請先暫停上傳再刪除。")
-            output = root / "clips" / "web" / project_id / f"{job_id}.mp4"
-            files = (output, output.with_suffix(".json"))
-            # Never follow stored paths or symlinks when deleting user media.
-            if (job.get("output", str(output.relative_to(root))) != str(output.relative_to(root))
-                    or any(path.is_symlink() or path.resolve() != path for path in files)):
-                raise HTTPException(409, "成品檔案位置異常，未刪除資料。")
-            if any(p.get("source") and (root / p["source"]).resolve() in files for p in store.all("projects")):
-                raise HTTPException(409, "這個成品正被用作專案原片，請先移除使用它的專案。")
-            try:
-                for path in files:
-                    path.unlink(missing_ok=True)
-            except OSError as error:
-                raise HTTPException(500, "成品檔案刪除未完成，請重試。") from error
-            store.delete_clip(project_id, job_id)
+            remove_clip(project_id, clip_for_edit(project_id, job_id))
             return {"deleted": True, "id": job_id}
+
+    @app.post("/api/projects/{project_id}/clips/remove-published")
+    async def remove_published_clips(project_id: str):
+        async with youtube.uploads.lock:
+            get("projects", project_id)
+            uploads = clip_uploads()
+            deleted, freed = [], 0
+            for job in store.all("jobs"):
+                if (job["project_id"] == project_id and job["kind"] == "export" and job["status"] == "succeeded"
+                        and job.get("draft") and uploads.get(job["id"], {}).get("published")):
+                    freed += remove_clip(project_id, job)
+                    deleted.append(job["id"])
+            return {"deleted": deleted, "bytes": freed}
 
     @app.put("/api/projects/{project_id}/draft")
     async def save_draft(project_id: str, body: Draft):

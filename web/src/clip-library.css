@@ -78,3 +78,4 @@
   .source-workspace-button { min-height: 40px; }
   .preview-panel .panel-heading > span { width: 100%; }
 }
+.clip-published-badge { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; padding: 3px 6px; border: 1px solid var(--control-border); border-radius: 4px; background: var(--surface-active); color: var(--accent); font-size: 12px; line-height: 1.5; font-weight: 500; }
