@@ -295,6 +295,9 @@ class YouTubeUploads:
 
     async def processing(self, key: str):
         self.patch(key, status="processing", error=None)
+        # YouTube accepts playlist items while the video is still processing, so a
+        # slow processing poll must not leave the playlist step unattempted.
+        await self.add_playlist(key)
         for _ in range(12):
             item = self.get(key)
             result = await self.account.api("videos", part="status,processingDetails", id=item["video_id"])
@@ -311,20 +314,26 @@ class YouTubeUploads:
             await asyncio.sleep(5)
         self.patch(key, status="paused", error="影片已上傳，YouTube 仍在處理。稍後按繼續上傳只會查詢狀態。")
 
-    async def finish_playlist(self, key: str):
+    async def add_playlist(self, key: str):
         item = self.get(key)
         if not item.get("playlist_id") or item.get("playlist_status") == "added":
-            self.patch(key, status="succeeded", error=None)
             return
-        self.patch(key, status="adding_to_playlist", error=None, playlist_status="adding", playlist_error=None)
+        self.patch(key, playlist_status="adding", playlist_error=None)
         try:
             await self.account.add_to_playlist(item["playlist_id"], item["video_id"], item["channel"]["id"])
         except YouTubeError as error:
-            self.patch(key, status="succeeded", playlist_status="failed", playlist_error=str(error))
+            self.patch(key, playlist_status="failed", playlist_error=str(error))
         except Exception:
-            self.patch(key, status="succeeded", playlist_status="failed", playlist_error="無法確認播放清單結果，請重試加入。")
+            self.patch(key, playlist_status="failed", playlist_error="無法確認播放清單結果，請重試加入。")
         else:
-            self.patch(key, status="succeeded", playlist_status="added", playlist_error=None)
+            self.patch(key, playlist_status="added", playlist_error=None)
+
+    async def finish_playlist(self, key: str):
+        item = self.get(key)
+        if item.get("playlist_id") and item.get("playlist_status") != "added":
+            self.patch(key, status="adding_to_playlist", error=None)
+            await self.add_playlist(key)
+        self.patch(key, status="succeeded", error=None)
 
     async def close(self):
         for key in list(self.tasks):

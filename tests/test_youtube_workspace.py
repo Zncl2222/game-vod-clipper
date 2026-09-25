@@ -284,7 +284,7 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         output = self.export()
         self.playlist_access()
         counts = {"upload": 0, "insert": 0, "lookup": 0}
-        remote_added = False
+        remote_added = reachable = False
         def handler(request):
             nonlocal remote_added
             if request.url.path.endswith("/playlists"):
@@ -294,8 +294,10 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
                     counts["lookup"] += 1
                     return httpx.Response(200, json={"items": [{"id": "existing"}] if remote_added else []})
                 counts["insert"] += 1
+                if not reachable:
+                    raise httpx.ReadTimeout("lost-response-secret", request=request)
                 remote_added = True
-                raise httpx.ReadTimeout("lost-response-secret", request=request)
+                return httpx.Response(200, json={"id": "playlist-item"})
             if request.method == "POST":
                 counts["upload"] += 1
                 return httpx.Response(200, headers={"location": UPLOAD + "?upload_id=clip"})
@@ -310,15 +312,30 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         result = self.uploads.get(record["id"])
         self.assertEqual((result["status"], result["playlist_status"]), ("succeeded", "failed"))
         self.assertNotIn("secret", result["playlist_error"])
+        # One attempt right after upload and one after processing; both lost.
+        self.assertEqual(counts, {"upload": 1, "insert": 2, "lookup": 2})
         output.unlink()  # Playlist retries need only the already uploaded video.
+        reachable = True
         restored = YouTubeUploads(self.store, self.account)
         try:
             await restored.retry_playlist(record["id"])
             await asyncio.gather(*list(restored.tasks.values()))
             self.assertEqual(restored.get(record["id"])["playlist_status"], "added")
-            self.assertEqual(counts, {"upload": 1, "insert": 1, "lookup": 2})
+            self.assertEqual(counts, {"upload": 1, "insert": 3, "lookup": 3})
         finally:
             await restored.close()
+
+    async def test_playlist_is_added_even_when_processing_outlasts_the_poll(self):
+        with patch.object(self.account, "add_to_playlist", AsyncMock()) as add, \
+                patch.object(self.account, "api", AsyncMock(return_value={"items": [{
+                    "processingDetails": {"processingStatus": "processing"}, "status": {"uploadStatus": "uploaded"}}]})), \
+                patch("game_vod_clipper.youtube_uploads.asyncio.sleep", AsyncMock()):
+            self.uploads.save({"id": "slow", "channel": CHANNEL, "video_id": "uploaded123", "playlist_id": "PLwins",
+                               "playlist_status": "pending", "privacy": "private", "status": "processing"})
+            await self.uploads.processing("slow")
+            add.assert_awaited_once_with("PLwins", "uploaded123", CHANNEL["id"])
+        result = self.uploads.get("slow")
+        self.assertEqual((result["status"], result["playlist_status"]), ("paused", "added"))
 
     async def test_foreign_playlist_or_missing_permission_is_rejected_before_upload(self):
         self.export()
