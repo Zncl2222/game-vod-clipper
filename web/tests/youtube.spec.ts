@@ -167,7 +167,7 @@ test("selecting a stream queues one import with explicit AI choice; failures ret
   expect(state.errors).toEqual([]);
 });
 
-test("batch selection survives search, pagination and rejection; rapid submit queues once and persists on reopening", async ({ page }) => {
+test("batch selection survives search, pagination and rejection; rapid submit queues once and choices persist on reopening", async ({ page }) => {
   const state = await setup(page);
   const second = { ...live[0], id: "newlive1234", title: "隻狼｜劍聖一心" };
   const third = { ...live[0], id: "newlive5678", title: "法環｜拉塔恩" };
@@ -206,7 +206,11 @@ test("batch selection survives search, pagination and rejection; rapid submit qu
   await open(page);
   await expect(page.getByRole("article", { name: `匯入進度：${third.title}`, exact: true })).toContainText("等待匯入");
   await expect(page.getByRole("article", { name: `匯入進度：${third.title}`, exact: true })).toContainText("最高 720p");
-  await expect(page.getByLabel("保留畫質")).toHaveValue("best");
+  // Choices stay put across reopening until the user changes them.
+  await expect(page.getByLabel("保留畫質")).toHaveValue("720");
+  await expect(page.getByLabel("匯入後自動找片段")).not.toBeChecked();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bosscut:preferences")!)))
+    .toMatchObject({ downloadQuality: "720", importAutoAnalyze: false });
   expect(state.writes).toHaveLength(2);
   expect(state.errors).toEqual([]);
 });

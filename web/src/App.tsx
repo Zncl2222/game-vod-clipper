@@ -143,6 +143,10 @@ export default function App() {
   }
   const projectJobs = state.jobs.filter((j) => j.project_id === project?.id);
   const mediaJobs = projectJobs.filter((job) => job.kind !== "analyze");
+  // Jobs arrive newest first; a stopped latest preparation is why the project never opens.
+  const latestPrepare = mediaJobs.find(job => job.kind === "prepare");
+  const prepareProblem = !project?.ready && latestPrepare && ["failed", "cancelled", "interrupted"].includes(latestPrepare.status)
+    ? latestPrepare : undefined;
   const mediaJobStatus = mediaJobs.some(active) ? "處理中"
     : mediaJobs.some(job => ["failed", "interrupted"].includes(job.status) && !(job.kind === "prepare" && project?.ready)) ? "需處理" : "";
   const currentDraft = editorContext?.project_id === project?.id ? editorContext?.draft : project?.draft;
@@ -288,10 +292,17 @@ export default function App() {
             <div className="preparing" role="status">
               {projectJobs.some(active) ? <LoaderCircle className="spin" size={36} /> : <CircleHelp size={36} />}
               <h2>{project.title}</h2>
-              <p>{projectJobs.some(active) ? "依序下載原片、製作預覽與時間軸縮圖。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>
+              {prepareProblem ? <>
+                <p role="alert" className="preparing-error">{prepareProblem.error ||
+                  ({ cancelled: "準備影片已取消。", interrupted: "服務曾中斷，影片沒有準備完成。" } as Record<string, string>)[prepareProblem.status] ||
+                  "準備影片失敗。"}</p>
+                <button type="button" className="secondary" onClick={() => void action(prepareProblem, "retry")}>
+                  <RotateCcw size={14} aria-hidden="true" />重試準備影片</button>
+              </> : <p>{projectJobs.some(active) ? "依序下載原片、製作預覽與時間軸縮圖。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>}
               {mediaJobs.filter(job => job.kind === "prepare" && active(job)).slice(0, 1).map(job =>
                 <MediaProgress key={job.id} status={job.status} stage={job.stage} detail={job.media_progress} />)}
-              <small>{projectJobs.some(active) ? "準備完成後會自動開啟剪輯。你可以先處理其他專案。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
+              <small>{projectJobs.some(active) ? "準備完成後會自動開啟剪輯。你可以先處理其他專案。"
+                : prepareProblem ? "處理好上面的問題後按「重試」，會從頭下載並製作預覽。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
             </div>
           )}
           {!project?.ready && mediaJobs.length > 0 && <ProcessingHistory jobs={mediaJobs} ready={false} onAction={action} />}
@@ -336,6 +347,7 @@ export default function App() {
         onProjectChanged={changed => setState(previous => ({ ...previous,
           projects: previous.projects.map(item => item.id === changed.id ? { ...item, profile_id: changed.profile_id } : item) }))} />}
       {youtubeOpen && <YouTubeDialog target={uploadTarget} onClose={() => setYoutubeOpen(false)}
+        referenceTitle={profiles ? profiles.profiles.find(item => item.id === profiles.default_id)?.title ?? null : undefined}
         onImport={id => { select(id); setYoutubeOpen(false); }} />}
     </div>
   );

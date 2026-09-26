@@ -45,7 +45,7 @@ export type ClipUpload = {
 
 export type Job = {
   youtube_upload?: ClipUpload;
-  analysis?: { start: number; end: number; candidate_id?: string | null } | null;
+  analysis?: { start: number; end: number; candidate_id?: string | null; profile?: { title: string } | null } | null;
   quota_change?: QuotaChange;
   edit_draft?: Draft;
   source_job_id?: string | null;

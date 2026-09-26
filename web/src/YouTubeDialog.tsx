@@ -4,7 +4,7 @@ import { api, ApiError, time, type Job, type Project } from "./api";
 import YouTubeImportQueue, { importIsPending, importIsWorking, type ImportRecord } from "./YouTubeImportQueue";
 import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
 import DownloadQuality, { qualityLabel, type DownloadQualityValue } from "./DownloadQuality";
-import { getPreferences } from "./preferences";
+import { setPreferences, usePreferences } from "./preferences";
 import "./youtube.css";
 
 type Channel = { id: string; title: string };
@@ -27,8 +27,14 @@ const errorLinks: Record<string, { href: string; label: string }> = {
   youtubeSignupRequired: { href: "https://www.youtube.com/", label: "前往 YouTube 建立頻道" },
 };
 
-export default function YouTubeDialog({ onClose, onImport, target }: {
+function readChatModel() {
+  try { return localStorage.getItem("bosscut:chat-model") ?? ""; } catch { return ""; }
+}
+
+export default function YouTubeDialog({ onClose, onImport, target, referenceTitle }: {
   onClose: () => void; onImport: (id: string) => void; target?: UploadTarget;
+  /** Game references new imports will search with; null when none, undefined while unknown. */
+  referenceTitle?: string | null;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const alive = useRef(true), pendingAction = useRef(false), listVersion = useRef(0);
@@ -47,9 +53,13 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
   const [selected, setSelected] = useState<Map<string, Broadcast>>(new Map());
   const selectAll = useRef<HTMLInputElement>(null);
   const [models, setModels] = useState<Model[]>([]);
-  const [model, setModel] = useState(() => localStorage.getItem("bosscut:chat-model") ?? "");
-  const [autoAnalyze, setAutoAnalyze] = useState(true);
-  const [quality, setQuality] = useState<DownloadQualityValue>(() => getPreferences().downloadQuality);
+  // Import choices live in preferences so they stay put until the user changes them.
+  const preferences = usePreferences();
+  const quality = preferences.downloadQuality, autoAnalyze = preferences.importAutoAnalyze;
+  const savedModel = preferences.importModel || readChatModel();
+  // Fall back to the default model for this visit only; the saved choice returns once it is available again.
+  const model = !models.length || models.some(item => item.id === savedModel) ? savedModel
+    : (models.find(item => item.is_default) ?? models[0]).id;
   const [title, setTitle] = useState(target?.job.draft?.title?.trim() || (target ? `${target.project.title.slice(0, 85)} · 精華片段` : ""));
   const [description, setDescription] = useState(target?.job.draft ? `原片片段：${time(target.job.draft.start)}–${time(target.job.draft.victory + target.job.draft.postroll)}` : "");
   const [privacy, setPrivacy] = useState("private");
@@ -120,7 +130,6 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
       if (disposed || !alive.current) return;
       const available = result.models.filter(item => item.input_modalities?.includes("image"));
       setModels(available);
-      setModel(previous => available.some(item => item.id === previous) ? previous : (available.find(item => item.is_default) ?? available[0])?.id ?? "");
     }).catch(() => { if (!disposed) setModels([]); });
     return () => { disposed = true; listVersion.current++; };
   }, [connected, channelId]);
@@ -332,10 +341,11 @@ export default function YouTubeDialog({ onClose, onImport, target }: {
                 onCancel={id => void importQueueAction(id, "cancel")} onRetry={id => void importQueueAction(id, "retry")} />
               <div className="yt-list-toolbar"><label className="sr-only" htmlFor="yt-query">搜尋直播存檔</label><input id="yt-query" type="search" placeholder="搜尋已載入的直播…" value={query} onChange={event => setQuery(event.target.value)} />
                 <button type="button" className="secondary" disabled={listLoading || !!busy} onClick={() => void loadList()}><RefreshCw size={16} className={listLoading ? "spin" : ""} aria-hidden="true" />重新整理直播</button></div>
-              <DownloadQuality value={quality} onChange={setQuality} disabled={!!busy} />
-              <div className="yt-analysis-option"><label><input type="checkbox" checked={autoAnalyze} disabled={!!busy} onChange={event => setAutoAnalyze(event.target.checked)} />匯入後自動找片段</label>
-                {autoAnalyze && <><label className="sr-only" htmlFor="yt-model">直播分析模型</label><select id="yt-model" value={model} disabled={!!busy || !models.length} onChange={event => setModel(event.target.value)}><option value="">選擇 AI 模型</option>{models.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></>}
-                {autoAnalyze && !chosenModel && <p>請先在 AI 帳號設定完成連接，或取消勾選以先匯入影片。</p>}</div>
+              <DownloadQuality value={quality} onChange={value => setPreferences({ downloadQuality: value })} disabled={!!busy} />
+              <div className="yt-analysis-option"><label><input type="checkbox" checked={autoAnalyze} disabled={!!busy} onChange={event => setPreferences({ importAutoAnalyze: event.target.checked })} />匯入後自動找片段</label>
+                {autoAnalyze && <><label className="sr-only" htmlFor="yt-model">直播分析模型</label><select id="yt-model" value={model} disabled={!!busy || !models.length} onChange={event => setPreferences({ importModel: event.target.value })}><option value="">選擇 AI 模型</option>{models.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></>}
+                {autoAnalyze && !chosenModel && <p>請先在 AI 帳號設定完成連接，或取消勾選以先匯入影片。</p>}
+                {autoAnalyze && referenceTitle !== undefined && <p>搜尋時參考遊戲範例：{referenceTitle ?? "未使用"}。可在頂端「遊戲範例」變更。</p>}</div>
               <div className="yt-select-toolbar"><label><input ref={selectAll} type="checkbox" checked={allSelected} disabled={!!busy || !availableVisible.length}
                 onChange={toggleAll} />全選目前清單</label><span>已選 {selected.size} 部 · 每次最多 100 部</span>
                 {selected.size > 0 && <button type="button" className="text-button" disabled={!!busy} onClick={() => setSelected(new Map())}>清除選取</button>}</div>

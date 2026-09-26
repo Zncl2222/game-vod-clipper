@@ -56,7 +56,7 @@ export default function PreferencesDialog({ open, onClose }: { open: boolean; on
             {qualityOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
         </label>
-        <p className="preference-note">新增 YouTube 匯入時預先選好，匯入時仍可單次調整。下載不會重新編碼，選最高可用畫質即保留 YouTube 提供的原始串流。</p>
+        <p className="preference-note">YouTube 網址匯入與「我的 YouTube」匯入都會使用這個畫質；在匯入視窗改選也會更新這裡。已開啟的自動匯入沿用開啟時的設定。下載不會重新編碼，選最高可用畫質即保留 YouTube 提供的原始串流。</p>
       </fieldset>
       <fieldset className="preference-group">
         <legend>通知</legend>

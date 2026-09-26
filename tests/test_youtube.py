@@ -37,8 +37,10 @@ class YouTubeTest(unittest.TestCase):
                 if expected:
                     self.assertEqual(javascript_runtime(), expected)
                 else:
-                    with self.assertRaisesRegex(ToolMissingError, "Node.js >= 22"):
+                    with self.assertRaisesRegex(ToolMissingError, "Node.js >= 22") as raised:
                         javascript_runtime()
+                    # A stale runtime on PATH is named so the user can see which one the server used.
+                    self.assertEqual("/tools/node（20.19.0）" in str(raised.exception), "node" in versions)
 
     def test_broken_deno_falls_back_to_node(self):
         for failure in (

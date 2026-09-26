@@ -251,5 +251,35 @@ class WebTest(unittest.TestCase):
             client.post(f"/api/jobs/{retried.json()['id']}/cancel")
 
 
+@unittest.skipUnless(WEB_AVAILABLE, "Install web/test extras")
+class RangeLimitTest(unittest.TestCase):
+    def test_open_ended_ranges_are_capped(self):
+        from fastapi import FastAPI
+
+        from game_vod_clipper.web import LocalFileResponse
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "preview.mp4"
+            data = bytes(range(256)) * 4
+            path.write_bytes(data)
+            app = FastAPI()
+            app.get("/capped")(lambda: LocalFileResponse(path, range_limit=100))
+            app.get("/full")(lambda: LocalFileResponse(path))
+            client = TestClient(app)
+            cases = [
+                ("/capped", "bytes=0-", "bytes 0-99/1024", data[:100]),
+                ("/capped", "bytes=1000-", "bytes 1000-1023/1024", data[1000:]),
+                ("/capped", "bytes=10-509", "bytes 10-509/1024", data[10:510]),
+                ("/full", "bytes=0-", "bytes 0-1023/1024", data),
+            ]
+            for url, requested, content_range, body in cases:
+                with self.subTest(url=url, range=requested):
+                    response = client.get(url, headers={"Range": requested})
+                    self.assertEqual(response.status_code, 206)
+                    self.assertEqual(response.headers["content-range"], content_range)
+                    self.assertEqual(response.content, body)
+            self.assertEqual(client.get("/capped").content, data)
+
+
 if __name__ == "__main__":
     unittest.main()

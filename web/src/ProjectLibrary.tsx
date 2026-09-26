@@ -36,11 +36,13 @@ function ProjectEntry({ project, selected, onSelect, onAction, dialogOpen, jobs 
   project: Project; selected: boolean; onSelect: () => void; onAction: (action: Action) => void; dialogOpen: boolean; jobs: Job[];
 }) {
   const running = jobs.find(active);
+  const prepare = jobs.find(job => job.kind === "prepare");
+  const stopped = !project.ready && !!prepare && ["failed", "cancelled", "interrupted"].includes(prepare.status);
   const clipCount = finishedClips(project.id, jobs).length;
   const exported = clipCount > 0;
   const published = publishedClips(project.id, jobs).length;
   const status = running ? ({ prepare: "準備素材中", analyze: "AI 搜尋中", export: "匯出中" }[running.kind])
-    : exported ? "已有成品" : project.ready ? (project.draft?.reviewed ? "已核對" : "待核對") : "尚未就緒";
+    : exported ? "已有成品" : project.ready ? (project.draft?.reviewed ? "已核對" : "待核對") : stopped ? "準備失敗 · 需處理" : "尚未就緒";
   return <ContextMenu.Root>
     <ContextMenu.Trigger asChild>
       <div className={`project-entry ${selected ? "is-selected" : ""}`}>

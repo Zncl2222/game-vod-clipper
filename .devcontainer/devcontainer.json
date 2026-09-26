@@ -4,6 +4,13 @@
     "dockerfile": "../Dockerfile",
     "context": ".."
   },
+  // Publish the web app through Docker instead of VS Code port forwarding:
+  // VS Code's forwarder buffers streamed preview video in its own memory and
+  // can exhaust the WSL VM. Bound to 127.0.0.1 so it stays local-only.
+  "runArgs": ["-p", "127.0.0.1:8000:8000"],
+  "containerEnv": {
+    "GAME_VOD_HOST": "0.0.0.0"
+  },
   "portsAttributes": {
     "3000": {
       "label": "Website APP (frontend)",
@@ -14,8 +21,8 @@
       "onAutoForward": "notify"
     },
     "8000": {
-      "label": "API / backend",
-      "onAutoForward": "silent"
+      "label": "API / backend (published by Docker)",
+      "onAutoForward": "ignore"
     }
   },
   "postCreateCommand": "uv sync --frozen",

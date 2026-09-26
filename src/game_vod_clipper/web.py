@@ -34,7 +34,8 @@ from .youtube_account import YouTubeError
 from .usage import quota_change, usage_summary
 from .storage import video_storage
 from .game_profiles import KINDS, GameProfiles, ProfileError
-from .youtube import DownloadQuality
+from .youtube import DownloadQuality, youtube_command
+from .process import ToolMissingError
 
 ACTIVE = {"queued", "running"}
 EXTENSIONS = {".mp4", ".mkv", ".mov", ".webm", ".m4v"}
@@ -301,9 +302,29 @@ class Jobs:
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+PREVIEW_RANGE_LIMIT = 8 * 1024 * 1024
+OPEN_RANGE = re.compile(r"\s*bytes\s*=\s*(\d+)\s*-\s*")
+
+
 class LocalFileResponse(FileResponse):
+    def __init__(self, *args, range_limit: int | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.range_limit = range_limit
+
     async def __call__(self, scope, receive, send):
         scope["game_vod_clipper.file_response"] = True
+        if self.range_limit:
+            # Players open with "bytes=0-" and re-request as they need more.
+            # Answering that with the whole multi-GB file lets proxies (e.g.
+            # VS Code port forwarding) buffer it all in memory while paused.
+            headers = []
+            for key, value in scope["headers"]:
+                match = key == b"range" and OPEN_RANGE.fullmatch(value.decode("latin-1"))
+                if match:
+                    start = int(match[1])
+                    value = f"bytes={start}-{start + self.range_limit - 1}".encode()
+                headers.append((key, value))
+            scope["headers"] = headers
 
         async def disconnected():
             while True:
@@ -494,6 +515,10 @@ def create_app(root: Path | None = None) -> FastAPI:
         get("projects", project_id)
         if body.profile_id not in {None, "default"}:
             profiles.get(body.profile_id)
+        if body.profile_id != "default":
+            # The last game picked also applies to later imports, so a new
+            # YouTube import does not silently drop back to no references.
+            profiles.set_default(body.profile_id)
         return public_project(store.patch("projects", project_id, profile_id=body.profile_id))
 
     @app.get("/api/storage")
@@ -701,6 +726,13 @@ def create_app(root: Path | None = None) -> FastAPI:
             url = youtube_url(body.source) if body.kind == "youtube" else None
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+        if body.kind == "youtube":
+            # Check the downloader up front so the import itself reports a
+            # missing tool, instead of leaving a project that never starts.
+            try:
+                await asyncio.to_thread(youtube_command)
+            except ToolMissingError as exc:
+                raise HTTPException(422, str(exc)) from exc
         if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿，請稍後再試。")
         project = {
@@ -983,7 +1015,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         allowed = {"preview.mp4"} | {t["file"] for t in project["thumbnails"]}
         if not project["ready"] or filename not in allowed:
             raise HTTPException(404, "找不到預覽。")
-        return LocalFileResponse(root / "runs" / "web" / project_id / filename)
+        return LocalFileResponse(root / "runs" / "web" / project_id / filename,
+                                 range_limit=PREVIEW_RANGE_LIMIT)
 
     @app.get("/api/jobs/{job_id}/download")
     async def download(job_id: str):
@@ -1059,9 +1092,11 @@ def main():
         description="Local BossCut POC (one server process)"
     )
     parser.add_argument("--port", type=int, default=8000)
+    # Containers need 0.0.0.0 so a published Docker port can reach the server.
+    parser.add_argument("--host", default=os.environ.get("GAME_VOD_HOST", "127.0.0.1"))
     args = parser.parse_args()
     app = create_app()
-    config = uvicorn.Config(app, host="127.0.0.1", port=args.port,
+    config = uvicorn.Config(app, host=args.host, port=args.port,
                             timeout_graceful_shutdown=5)
     try:
         LocalServer(config, app.state.shutting_down).run()

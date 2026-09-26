@@ -69,10 +69,17 @@ class GameProfilesTest(unittest.TestCase):
         self.assertIsNone(profiles.resolve(store.get("projects", "p")))  # No profile: current behaviour.
         self.client.put("/api/profiles/default", json={"profile_id": ronin["id"]})
         self.assertEqual(profiles.resolve(store.get("projects", "p"))["id"], ronin["id"])
-        for choice, expected in ((souls["id"], souls["id"]), (None, None), ("default", ronin["id"])):
+        # Picking a game (or none) also becomes the default, so the next import keeps it.
+        for choice, expected, default in ((souls["id"], souls["id"], souls["id"]), (None, None, None),
+                                          ("default", None, None), (ronin["id"], ronin["id"], ronin["id"]),
+                                          ("default", ronin["id"], ronin["id"])):
             response = self.client.put("/api/projects/p/profile", json={"profile_id": choice})
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual((profiles.resolve(store.get("projects", "p")) or {}).get("id"), expected)
+            self.assertEqual(self.client.get("/api/profiles").json()["default_id"], default)
+        # A freshly imported project has no choice of its own and follows that default.
+        store.put("projects", {key: value for key, value in store.get("projects", "p").items() if key != "profile_id"} | {"id": "new"})
+        self.assertEqual(profiles.resolve(store.get("projects", "new"))["id"], ronin["id"])
         self.assertEqual(self.client.put("/api/projects/p/profile", json={"profile_id": "0" * 16}).status_code, 404)
         self.client.put("/api/projects/p/profile", json={"profile_id": souls["id"]})
         listing = self.client.delete(f"/api/profiles/{souls['id']}").json()

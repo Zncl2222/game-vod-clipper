@@ -135,7 +135,8 @@ class RouteTest(unittest.TestCase):
     def test_import_deduplicates_while_queued_and_binds_owned_channel(self):
         self.account.files.write("account", account_data())
         body = {"channel_id": CHANNEL["id"], "auto_analyze": False, "model": "", "download_quality": "1440"}
-        with patch.object(self.app.state.jobs, "submit", return_value={"id": "prepare-job"}) as submit:
+        with patch.object(self.app.state.jobs, "submit", return_value={"id": "prepare-job"}) as submit, \
+                patch("game_vod_clipper.web.youtube_command", return_value=["yt-dlp"]):
             first = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
             second = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
             self.assertEqual(first.status_code, 202, first.text)

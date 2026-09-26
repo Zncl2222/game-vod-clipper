@@ -23,6 +23,7 @@ def quality_format(quality: DownloadQuality = "best") -> str:
 
 def javascript_runtime() -> str:
     """Select a supported runtime, including Node in the development container."""
+    too_old = []
     for name, minimum in (("deno", (2, 3, 0)), ("node", (22, 0, 0))):
         path = shutil.which(name)
         if path is None:
@@ -44,9 +45,14 @@ def javascript_runtime() -> str:
             and tuple(map(int, version.groups())) >= minimum
         ):
             return f"{name}:{path}"
+        if version:
+            too_old.append(f"{path}（{'.'.join(version.groups())}）")
+    # Naming the stale runtime makes an inherited PATH (e.g. an old nvm
+    # version kept by a terminal) visible instead of a vague "install it".
+    found = f"後端目前找到的是 {'、'.join(too_old)}，版本太舊。" if too_old else ""
     raise ToolMissingError(
         "YouTube 下載需要 Deno >= 2.3 或 Node.js >= 22。"
-        "請安裝其中一個，確認位於後端的 PATH，再重試。"
+        f"{found}請安裝其中一個，確認位於後端的 PATH，再重試。"
     )
 
 

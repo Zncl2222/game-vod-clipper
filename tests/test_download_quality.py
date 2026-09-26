@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from yt_dlp import YoutubeDL
 
+from game_vod_clipper.process import ToolMissingError
 from game_vod_clipper.web import Jobs, create_app
 from game_vod_clipper.web_store import Store
 from game_vod_clipper.web_worker import SOURCE_PREFIX, run
@@ -49,7 +50,9 @@ class DownloadQualityTest(unittest.TestCase):
             self.assertEqual(selected["height"], 1080)
 
     def test_url_and_account_imports_validate_and_persist_quality_before_worker_starts(self):
-        with patch.object(Jobs, "execute", new=AsyncMock()), TestClient(create_app(self.root)) as client:
+        with patch.object(Jobs, "execute", new=AsyncMock()), \
+                patch("game_vod_clipper.web.youtube_command", return_value=["yt-dlp"]), \
+                TestClient(create_app(self.root)) as client:
             for quality in (None, "1440", "720"):
                 body = {"kind": "youtube", "source": "https://www.youtube.com/watch?v=abcdefghijk"}
                 if quality:
@@ -64,6 +67,16 @@ class DownloadQualityTest(unittest.TestCase):
                     response = client.post(path, json={"channel_id": "channel", "auto_analyze": False,
                         "download_quality": invalid, **({"videos": [{"id": "abcdefghijk"}]} if path.endswith("imports") else {})})
                     self.assertEqual(response.status_code, 422)
+
+    def test_youtube_import_without_downloader_runtime_fails_before_creating_a_project(self):
+        message = "YouTube 下載需要 Deno >= 2.3 或 Node.js >= 22。請安裝其中一個，確認位於後端的 PATH，再重試。"
+        with patch.object(Jobs, "execute", new=AsyncMock()) as execute, \
+                patch("game_vod_clipper.web.youtube_command", side_effect=ToolMissingError(message)), \
+                TestClient(create_app(self.root)) as client:
+            response = client.post("/api/projects", json={"kind": "youtube", "source": "https://www.youtube.com/watch?v=abcdefghijk"})
+            self.assertEqual((response.status_code, response.json()["detail"]), (422, message))
+            self.assertEqual(Store(self.root).all("projects"), [])
+            execute.assert_not_called()
 
     def test_worker_uses_saved_choice_and_legacy_missing_choice_defaults_to_best(self):
         for quality in (None, "best", "1440", "720"):

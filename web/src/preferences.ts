@@ -6,6 +6,9 @@ export type Preferences = {
   exportQuality: ExportQuality;
   downloadQuality: DownloadQualityValue;
   notifyOnExport: boolean;
+  // Last choices in the YouTube import dialog, kept until the user changes them.
+  importAutoAnalyze: boolean;
+  importModel: string;
 };
 
 // Numbers measured on a YouTube AV1 1080p60 source; time is relative to the fast preset.
@@ -19,7 +22,7 @@ export const exportQualityLabel = (value?: string | null) =>
   exportQualityOptions.find(option => option.value === value)?.label.replace("（建議）", "") ?? "快速";
 
 const KEY = "bosscut:preferences";
-const DEFAULTS: Preferences = { exportQuality: "high", downloadQuality: "best", notifyOnExport: true };
+const DEFAULTS: Preferences = { exportQuality: "high", downloadQuality: "best", notifyOnExport: true, importAutoAnalyze: true, importModel: "" };
 const listeners = new Set<() => void>();
 let cached: Preferences | null = null;
 
@@ -31,6 +34,8 @@ function read(): Preferences {
       exportQuality: exportQualityOptions.some(option => option.value === saved.exportQuality) ? saved.exportQuality : DEFAULTS.exportQuality,
       downloadQuality: ["best", "2160", "1440", "1080", "720", "480"].includes(saved.downloadQuality) ? saved.downloadQuality : DEFAULTS.downloadQuality,
       notifyOnExport: typeof saved.notifyOnExport === "boolean" ? saved.notifyOnExport : DEFAULTS.notifyOnExport,
+      importAutoAnalyze: typeof saved.importAutoAnalyze === "boolean" ? saved.importAutoAnalyze : DEFAULTS.importAutoAnalyze,
+      importModel: typeof saved.importModel === "string" ? saved.importModel : DEFAULTS.importModel,
     };
   } catch { cached = DEFAULTS; }
   return cached;

@@ -158,7 +158,10 @@ export default function GameProfilesDialog({ project, onClose, onProjectChanged,
     if (!project) return;
     setError("");
     try {
-      onProjectChanged(await api<Project>(`/projects/${project.id}/profile`, "PUT", { profile_id: value === "none" ? null : value }));
+      const profileId = value === "none" ? null : value;
+      onProjectChanged(await api<Project>(`/projects/${project.id}/profile`, "PUT", { profile_id: profileId }));
+      // Picking a game here also becomes the default for new projects.
+      if (value !== "default") setListing(previous => previous && { ...previous, default_id: profileId });
     } catch (reason) { setError((reason as Error).message); }
   }
   async function create() {
@@ -187,7 +190,7 @@ export default function GameProfilesDialog({ project, onClose, onProjectChanged,
           {listing.profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.title}</option>)}
         </select>
       </label>}
-      <p className="preference-note">變更只套用到之後開始的搜尋；進行中的搜尋會沿用開始時的範例。</p>
+      <p className="preference-note">{project && "在這裡選的遊戲也會成為之後新匯入影片（包含 YouTube 自動匯入）的預設。"}變更只套用到之後開始的搜尋；進行中的搜尋會沿用開始時的範例。</p>
       {error && <p role="alert" className="project-dialog-error">{error}</p>}
       {!listing ? !error && <p role="status"><LoaderCircle size={15} className="spin" aria-hidden="true" /> 載入中…</p> : <div className="profile-layout">
         <nav className="profile-list" aria-label="遊戲範例設定">

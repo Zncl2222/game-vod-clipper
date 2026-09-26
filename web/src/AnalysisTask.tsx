@@ -13,6 +13,7 @@ export default function AnalysisTask({ job, onError, onApply, onSeek }: {
   const result = job.status === "succeeded" ? job.result : undefined;
   return <article className="assistant-task" aria-label={job.analysis?.candidate_id ? "片段 AI 複判任務" : "AI 搜尋任務"}>
     <header><strong>{job.analysis?.candidate_id ? "片段 AI 複判" : "成功挑戰搜尋"}</strong><span>{job.model ?? result?.model ?? "Codex"}</span></header>
+    <p>遊戲範例：{job.analysis?.profile?.title ?? "未使用"}</p>
     {job.analysis?.candidate_id && <p>送檢區間 {time(job.analysis.start, true)}–{time(job.analysis.end, true)}</p>}
     {!!(job.candidates ?? result?.candidates)?.length && <p>候選片段已標在影片時間軸，可按編號逐段預覽與核對。</p>}
     <details open={active(job) || job.status === "failed"}>

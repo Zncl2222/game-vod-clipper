@@ -393,6 +393,7 @@ kbd { border: 1px solid var(--control-border); background: var(--surface); color
 .preparing { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 56px 24px; }
 .preparing svg { color: var(--accent); }
 .preparing p, .preparing small { color: var(--muted); font-size: 14px; line-height: 1.8; }
+.preparing .preparing-error { max-width: 560px; color: var(--danger); font-weight: 600; text-align: center; overflow-wrap: anywhere; }
 .job-row { padding-block: 16px; }
 .job-info strong { font-size: 13px; color: var(--ink); }
 .job-info small { font-size: 12px; color: var(--muted); }
