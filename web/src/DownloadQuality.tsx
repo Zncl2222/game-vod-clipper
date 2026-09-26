@@ -24,6 +24,6 @@ export default function DownloadQuality({ value, onChange, disabled = false }: {
       {qualityOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
     </select>
     <p id={`${id}-help`}>預設下載最高可用畫質。指定上限時，選用不超過該解析度的最佳版本；畫質越高，需要的下載時間與空間越多。</p>
-    <p>成品保留原片解析度與幀率，不受 720p 預覽影響。此設定只適用於新匯入的影片，並會記住到下次匯入。</p>
+    <p>直接播放下載的原片，不另製作整支預覽。成品使用原片解析度與幀率。此設定只適用於新匯入的影片，並會記住到下次匯入。</p>
   </div>;
 }

@@ -3,6 +3,7 @@ import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck
 import { api, type Project, type Source, type StorageLocations } from "./api";
 import DownloadQuality from "./DownloadQuality";
 import { setPreferences, usePreferences } from "./preferences";
+import type { ImportHistory } from "./YouTubeHistory";
 
 export default function ImportModal({ onClose, onImport, onYouTube }: { onClose: () => void; onImport: (id: string) => void; onYouTube?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -19,6 +20,23 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [fieldError, setFieldError] = useState("");
+  const [history, setHistory] = useState<ImportHistory[]>([]);
+  const [historyError, setHistoryError] = useState(false);
+  useEffect(() => {
+    if (kind !== "youtube") return;
+    let alive = true;
+    api<ImportHistory[]>("/youtube/history").then(value => { if (alive) { setHistory(value); setHistoryError(false); } })
+      .catch(() => { if (alive) setHistoryError(true); });
+    return () => { alive = false; };
+  }, [kind]);
+  let previousImport: ImportHistory | undefined;
+  try {
+    const parsed = new URL(url.trim());
+    const id = parsed.hostname === "youtu.be" ? parsed.pathname.slice(1)
+      : ["youtube.com", "www.youtube.com", "m.youtube.com"].includes(parsed.hostname)
+        ? parsed.searchParams.get("v") || parsed.pathname.match(/^\/(?:live|shorts)\/([^/]+)$/)?.[1] : null;
+    previousImport = history.find(item => item.id === id);
+  } catch { /* Incomplete URLs do not need an import-history notice. */ }
   async function loadSources() {
     setLoading(true); setSourceError("");
     // Only used to name the folder in the hint; the list itself does not depend on it.
@@ -67,7 +85,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
         <button type="button" className="icon-button" disabled={busy} aria-label="關閉匯入視窗" onClick={onClose}><X aria-hidden="true" size={20} /></button></div>
       <span className="studio-kicker">NEW PROJECT</span>
       <h2 id="import-title">帶入你的下一場勝利</h2>
-      <p id="import-description">選擇影片來源，準備好預覽就能開始剪輯。</p>
+      <p id="import-description">選擇影片來源，原片就緒即可剪輯，不另製作整支預覽。</p>
       <div className="tabs" role="group" aria-label="影片來源">
         <button type="button" disabled={busy} className={`tab ${kind === "local" ? "active" : ""}`} aria-pressed={kind === "local"} onClick={() => chooseKind("local")}><HardDrive aria-hidden="true" size={18} />本機影片</button>
         <button type="button" disabled={busy} className={`tab ${kind === "youtube" ? "active" : ""}`} aria-pressed={kind === "youtube"} onClick={() => chooseKind("youtube")}><Youtube aria-hidden="true" size={19} />YouTube 網址</button>
@@ -87,6 +105,9 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
         <input id="youtube" type="url" value={url} disabled={busy} placeholder="https://www.youtube.com/watch?v=…" autoComplete="off"
           aria-describedby="youtube-help import-field-error" aria-invalid={!!fieldError} onChange={event => { setUrl(event.target.value); setFieldError(""); }} />
         <p id="youtube-help" className="field-help">支援已結束的公開影片。若來源需要登入或無法下載，可以改用本機錄影。</p>
+        {previousImport && <p className="field-help" role="status">這支影片曾建立匯入：{previousImport.title}。
+          {previousImport.project_id ? "專案仍保留" : "專案已刪除，但匯入歷史仍保留"}；繼續會重新匯入並建立新專案。</p>}
+        {historyError && <p className="field-help" role="status">暫時無法查詢匯入歷史；本次不會判斷是否重複匯入。</p>}
         <DownloadQuality value={quality} onChange={value => setPreferences({ downloadQuality: value })} disabled={busy} />
         {onYouTube && <button type="button" className="import-youtube-account" disabled={busy} onClick={onYouTube}><Youtube size={18} aria-hidden="true" />從我的 YouTube 選直播<ArrowRight size={16} aria-hidden="true" /></button>}
       </>}

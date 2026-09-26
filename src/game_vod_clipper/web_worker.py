@@ -6,6 +6,7 @@ import json
 import math
 import subprocess
 import sys
+from fractions import Fraction
 from pathlib import Path
 
 from .media import DEFAULT_EXPORT_QUALITY, EXPORT_QUALITY, clip_video
@@ -13,15 +14,16 @@ from .locations import Locations, media_path, project_work, record_path
 from .media_progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
 from .process import resolve_tool_command
 from .web_store import Store
-from .youtube import quality_format, youtube_command
+from .youtube import BROWSER_MERGE_FORMATS, quality_format, youtube_command
 
 SOURCE_PREFIX = "__BOSSCUT_SOURCE__"
+TITLE_PREFIX = "__BOSSCUT_TITLE__"
 
-def command(args: list[str], *, on_line=None) -> str:
+def command(args: list[str], *, on_line=None, timeout=6 * 3600) -> str:
     if on_line is not None:
         return streamed_command(args, on_line)
     result = subprocess.run(
-        args, capture_output=True, text=True, timeout=6 * 3600, check=False
+        args, capture_output=True, text=True, timeout=timeout, check=False
     )
     if result.returncode:
         raise RuntimeError(result.stderr[-1800:] or "Media command failed")
@@ -41,7 +43,41 @@ def probe(path: Path) -> dict:
     duration = float(data["format"]["duration"])
     if not math.isfinite(duration) or not 10 <= duration <= 21600:
         raise ValueError("POC 支援 10 秒至 6 小時的影片。")
-    return {"duration": duration, "width": video["width"], "height": video["height"]}
+    audio = next((s for s in data["streams"] if s["codec_type"] == "audio"), {})
+    try:
+        frame_rate = float(Fraction(video.get("avg_frame_rate") or video.get("r_frame_rate") or "0"))
+    except (ValueError, ZeroDivisionError):
+        frame_rate = 0
+    return {"duration": duration, "width": video["width"], "height": video["height"],
+            "frame_rate": frame_rate if math.isfinite(frame_rate) and frame_rate > 0 else None,
+            "video_codec": video.get("codec_name"), "audio_codec": audio.get("codec_name")}
+
+
+def make_thumbnails(store: Store, project: dict, source: Path, work: Path, duration: float, reporter):
+    """Seek to individual frames; never decode the entire VOD for a thumbnail strip.
+
+    The source is already ready for playback/editing. Publish each completed image
+    and treat thumbnail failures as nonfatal, without resetting the user's draft.
+    """
+    thumbs = []
+    for index in range(24):
+        at = index * duration / 24
+        target = work / f"thumb-{index + 1:03d}.jpg"
+        try:
+            command(resolve_tool_command("ffmpeg") + [
+                "-hide_banner", "-loglevel", "error", "-y",
+                "-ss", f"{at:.6f}", "-threads", "2", "-i", str(source),
+                "-map", "0:v:0", "-an", "-sn", "-dn",
+                "-frames:v", "1", "-vf", "scale=240:-2", "-threads", "1", str(target),
+            ], timeout=30)
+            if not target.is_file() or target.stat().st_size == 0:
+                raise ValueError("未能擷取縮圖。")
+        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+            store.patch("projects", project["id"], thumbnail_warning="部分時間軸縮圖無法建立，仍可播放、分析與匯出原片。")
+            return
+        thumbs.append({"file": target.name, "time": round(at, 3)})
+        store.patch("projects", project["id"], thumbnails=thumbs)
+        reporter.emit("原片已就緒，背景建立時間軸縮圖", "thumbnails", (index + 1) / 24 * 100)
 
 
 def run(root: Path, job_id: str):
@@ -87,9 +123,11 @@ def run(root: Path, job_id: str):
                     "-S",
                     "res,fps",
                     "--merge-output-format",
-                    "mkv",
+                    BROWSER_MERGE_FORMATS,
                     "--print",
                     f"after_move:{SOURCE_PREFIX}%(filepath)s",
+                    "--print",
+                    f"after_move:{TITLE_PREFIX}%(title)j",
                     "-o",
                     str(folder / "source.%(ext)s"),
                     project["url"],
@@ -108,82 +146,29 @@ def run(root: Path, job_id: str):
                 raise ValueError(
                     "無法取得影片，請確認網址可存取、影片已結束且小於 6 小時／40 GB，或改用本機原始錄影。"
                 )
-            store.patch("projects", project["id"], source=record_path(root, source))
+            title_metadata = {}
+            for line in output.splitlines():
+                if line.startswith(TITLE_PREFIX):
+                    try:
+                        title = json.loads(line[len(TITLE_PREFIX):])
+                        if isinstance(title, str) and title.strip():
+                            title_metadata["youtube_title"] = title[:500]
+                    except ValueError:
+                        pass
+            # Keep the original YouTube title in history without overwriting a
+            # project name the user may have changed while downloading.
+            store.patch("projects", project["id"], source=record_path(root, source), **title_metadata)
         metadata = probe(source)
-        reporter.emit("製作 720p 預覽影片", "preview", 0)
-        preview = work / "preview.mp4"
-        command(
-            resolve_tool_command("ffmpeg")
-            + [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostats", "-progress", "pipe:1", "-stats_period", "1",
-                "-y",
-                "-i",
-                str(source),
-                "-map",
-                "0:v:0",
-                "-map",
-                "0:a:0?",
-                "-sn",
-                "-dn",
-                "-vf",
-                "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,fps=30",
-                "-c:v",
-                "libx264",
-                "-threads",
-                "2",
-                "-preset",
-                "ultrafast",
-                "-crf",
-                "28",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "96k",
-                "-movflags",
-                "+faststart",
-                str(preview),
-            ], on_line=reporter.ffmpeg("製作 720p 預覽影片", "preview", metadata["duration"]),
-        )
-        reporter.emit("建立時間軸縮圖", "thumbnails")
-        interval = metadata["duration"] / 24
-        # One decode pass, bounded output; no fixed contact sheet that can hide frames.
-        command(
-            resolve_tool_command("ffmpeg")
-            + [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(preview),
-                "-vf",
-                f"fps=1/{interval}:start_time=0:round=up,scale=240:-2",
-                "-frames:v",
-                "24",
-                "-threads",
-                "1",
-                str(work / "thumb-%03d.jpg"),
-            ]
-        )
-        thumbs = [
-            {"file": p.name, "time": round(i * interval, 3)}
-            for i, p in enumerate(sorted(work.glob("thumb-*.jpg")))
-        ]
-        preview_meta = probe(preview)
-        if abs(preview_meta["duration"] - metadata["duration"]) > 0.25:
-            raise ValueError("預覽與來源長度不一致，請先檢查來源時間戳。")
         store.patch(
             "projects",
             project["id"],
             **metadata,
             ready=True,
-            thumbnails=thumbs,
-            draft={
+            playback="source",
+            source_container=source.suffix.lower().lstrip("."),
+            thumbnails=[],
+            thumbnail_warning=None,
+            draft=project.get("draft") or {
                 "start": 0,
                 "victory": round(max(1, metadata["duration"] - 8), 3),
                 "postroll": 8,
@@ -192,6 +177,8 @@ def run(root: Path, job_id: str):
                 "origin": "manual",
             },
         )
+        reporter.emit("原片已就緒，背景建立時間軸縮圖", "thumbnails", 0)
+        make_thumbnails(store, project, source, work, metadata["duration"], reporter)
     elif job["kind"] == "analyze":
         from .codex_analysis import run_analysis
 

@@ -67,7 +67,9 @@ testing, and current limitations.
 livestreams, and imports public/unlisted archives with optional automatic AI review.
 URL and channel imports default to the highest available source quality, with optional
 2160p, 1440p, 1080p, 720p or 480p caps. Exports retain the downloaded source resolution
-and frame rate; the 720p preview does not limit finished clips.
+and frame rate. New imports play the source directly without generating a full-length
+720p preview. Compatible YouTube streams are losslessly merged into WebM or MP4;
+timeline thumbnails appear in the background. Existing projects retain their previews.
 An opt-in watcher imports new completed streams while the backend is running.
 After reviewing and exporting a clip, use **上傳 YouTube** in **成品** to confirm its
 metadata and upload it privately by default. Upload progress, pause/resume and

@@ -605,7 +605,7 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
                 {"id": VIDEO}, {"id": "lmnopqrstuv"}, {"id": "noimport123"}], "next_page_token": ""})
             with patch.object(self.store, "all", wraps=self.store.all) as read:
                 result = await workspace.broadcasts()
-            read.assert_called_once_with("projects")
+                self.assertEqual([call.args[0] for call in read.call_args_list], ["projects", "youtube_history"])
             self.assertEqual([row["project_id"] for row in result["items"]], ["newer", "linked", None])
         finally:
             await workspace.close()

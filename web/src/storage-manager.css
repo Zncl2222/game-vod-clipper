@@ -1,0 +1,18 @@
+.project-dialog.media-manager { width: min(880px, calc(100vw - 32px)); }
+.media-manager-tools { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 20px 0; }
+.media-manager-tools label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+.media-manager-tools input:not([type=checkbox]), .media-manager-tools select { max-width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: var(--surface); color: var(--ink); }
+.media-manager-tools input[type=checkbox] { width: 16px; height: 16px; }
+.media-manager-list { list-style: none; padding: 0; margin: 0; }
+.media-manager-list li { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.media-manager-list li > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.media-manager-list strong { font-size: 14px; font-weight: 600; }
+.media-manager-list p { margin: 6px 0; }
+.media-manager-list a { font-size: 13px; color: var(--ink); text-decoration: underline; }
+.media-manager .secondary { min-height: 40px; padding: 8px 12px; flex-shrink: 0; }
+.media-manager-list button:disabled { opacity: .5; cursor: not-allowed; }
+.media-selection-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 0; border-block: 1px solid var(--line); font-size: 13px; }
+.media-selection-tools label { display: flex; align-items: center; gap: 8px; }
+.media-selection-tools input, .media-file-check { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--ink); }
+.media-selection-tools > span { flex: 1; min-width: 120px; font-variant-numeric: tabular-nums; }
+.media-delete-files { max-height: 240px; overflow-y: auto; padding-left: 20px; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }

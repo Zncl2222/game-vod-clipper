@@ -33,6 +33,13 @@ export type Project = {
   duration?: number;
   width?: number;
   height?: number;
+  /** Missing on older projects, whose existing 30 FPS preview remains playable. */
+  playback?: "source";
+  frame_rate?: number | null;
+  video_codec?: string | null;
+  audio_codec?: string | null;
+  source_container?: string;
+  thumbnail_warning?: string | null;
   download_quality?: "best" | "2160" | "1440" | "1080" | "720" | "480";
   thumbnails: { file: string; time: number }[];
   draft?: Draft;

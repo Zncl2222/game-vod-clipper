@@ -6,6 +6,7 @@ import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
 import DownloadQuality, { qualityLabel, type DownloadQualityValue } from "./DownloadQuality";
 import { setPreferences, usePreferences } from "./preferences";
 import "./youtube.css";
+import YouTubeHistory, { type ImportHistory } from "./YouTubeHistory";
 
 type Channel = { id: string; title: string };
 type Watch = { enabled: boolean; auto_analyze: boolean; model: string; download_quality?: DownloadQualityValue; last_checked: number | null; error: string | null };
@@ -15,7 +16,7 @@ type UploadRecord = { id: string; export_id: string; project_id: string; channel
 type Account = { configured: boolean; connected: boolean; channel: Channel | null; pending: boolean; error: string | null;
   reconnect_required: boolean; playlist_write_enabled?: boolean; watch: Watch; uploads: UploadRecord[]; imports?: ImportRecord[] };
 type Broadcast = { id: string; title: string; duration: number; ended_at: string; privacy: string; available: boolean;
-  reason: string; project_id: string | null };
+  reason: string; project_id: string | null; import_history?: ImportHistory | null };
 type Model = { id: string; name: string; is_default?: boolean; input_modalities?: string[] };
 export type UploadTarget = { job: Job; project: Project };
 const privacyLabels: Record<string, string> = { private: "私人", unlisted: "不公開", public: "公開" };
@@ -44,6 +45,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
   const [busy, setBusy] = useState("");
   const [error, setError] = useState<Error | null>(null);
   const [notice, setNotice] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [loginUrl, setLoginUrl] = useState("");
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [listLoading, setListLoading] = useState(false);
@@ -285,10 +287,12 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
   }
 
   return <dialog ref={dialog} className="yt-dialog" aria-labelledby="yt-dialog-title" onCancel={event => { event.preventDefault(); onClose(); }}
-    onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
+    onKeyDown={event => { if (event.key === "Escape" && !historyOpen) { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
     <header className="yt-heading"><div><span className="studio-kicker">YOUR CHANNEL, YOUR CLIPS</span><h2 id="yt-dialog-title"><Youtube size={24} aria-hidden="true" />我的 YouTube</h2>
       <p>直播交給 AI 找片段，剪好的成品由你確認上傳。</p></div><button type="button" className="icon-button" aria-label="關閉 YouTube 視窗" onClick={onClose}><X size={22} aria-hidden="true" /></button></header>
     <div className="yt-content">
+      <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setHistoryOpen(true)}>YouTube 匯入歷史</button>
+      {historyOpen && <YouTubeHistory onClose={() => setHistoryOpen(false)} onOpen={onImport} />}
       {error && <div ref={errorRef} tabIndex={-1} className="inline-error yt-message" role="alert"><p>{error.message}</p>
         <div className="yt-actions">{errorLink && <a className="secondary" href={errorLink.href} target="_blank" rel="noreferrer">{errorLink.label}<ExternalLink size={15} aria-hidden="true" /></a>}
           <button type="button" className="text-button" disabled={!!busy || listLoading} onClick={() => void retryConnection()}>重新整理連線</button></div></div>}
@@ -354,9 +358,9 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
                   <label className="yt-select-video"><input type="checkbox" aria-label={`選取直播：${item.title}`} checked={selected.has(item.id)}
                     disabled={!!busy || !selectable(item) || !selected.has(item.id) && selected.size >= 100} onChange={() => toggleSelection(item)} /></label>
                   <div className="yt-video-thumb">{item.privacy !== "private" ? <img src={`https://i.ytimg.com/vi/${item.id}/mqdefault.jpg`} alt="" loading="lazy" /> : <Film size={24} aria-hidden="true" />}<span>{time(item.duration)}</span></div>
-                  <div className="yt-video-copy"><h3>{item.title}</h3><p>{item.ended_at ? new Date(item.ended_at).toLocaleDateString("zh-TW") : "直播已結束"} · {privacyLabels[item.privacy] ?? "狀態待確認"}{item.project_id && " · 已匯入"}</p>{item.reason && <p className="yt-unavailable">{item.reason}</p>}</div>
+                  <div className="yt-video-copy"><h3>{item.title}</h3><p>{item.ended_at ? new Date(item.ended_at).toLocaleDateString("zh-TW") : "直播已結束"} · {privacyLabels[item.privacy] ?? "狀態待確認"}{item.project_id ? " · 已建立專案" : item.import_history ? " · 曾匯入，專案已刪除" : ""}</p>{item.reason && <p className="yt-unavailable">{item.reason}</p>}</div>
                   <button type="button" className={item.project_id ? "secondary" : "primary"} disabled={!!busy || !item.project_id && (!item.available || isQueued(item.id) || autoAnalyze && !chosenModel)} onClick={() => void importVideo(item)} aria-label={`${item.project_id ? "開啟" : "匯入"}直播：${item.title}`}>
-                    {busy === item.id ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : item.project_id ? <ArrowRight size={17} aria-hidden="true" /> : <Film size={17} aria-hidden="true" />}{item.project_id ? "開啟剪輯" : isQueued(item.id) ? "已排隊" : "匯入直播"}</button>
+                    {busy === item.id ? <LoaderCircle className="spin" size={17} aria-hidden="true" /> : item.project_id ? <ArrowRight size={17} aria-hidden="true" /> : <Film size={17} aria-hidden="true" />}{item.project_id ? "開啟剪輯" : isQueued(item.id) ? "已排隊" : item.import_history ? "重新匯入" : "匯入直播"}</button>
                 </article>)}
                 {listLoading && <p className="yt-loading" role="status">正在讀取直播存檔…</p>}
                 {!listLoading && listLoaded && !visible.length && <div className="yt-empty"><Film size={30} aria-hidden="true" /><h3>{query ? "沒有符合的直播" : "還沒有已結束的直播"}</h3><p>{query ? "換個關鍵字，或清除搜尋看看。" : "直播結束並完成存檔後，按重新整理即可選取。"}</p>{query && <button type="button" className="secondary" onClick={() => setQuery("")}>清除搜尋</button>}</div>}

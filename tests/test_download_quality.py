@@ -15,8 +15,9 @@ from yt_dlp import YoutubeDL
 from game_vod_clipper.process import ToolMissingError
 from game_vod_clipper.web import Jobs, create_app
 from game_vod_clipper.web_store import Store
-from game_vod_clipper.web_worker import SOURCE_PREFIX, run
-from game_vod_clipper.youtube import quality_format
+from game_vod_clipper.web_worker import SOURCE_PREFIX, TITLE_PREFIX, run
+from game_vod_clipper.youtube_history import public_history
+from game_vod_clipper.youtube import BROWSER_MERGE_FORMATS, quality_format
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -82,21 +83,27 @@ class DownloadQualityTest(unittest.TestCase):
         for quality in (None, "best", "1440", "720"):
             with self.subTest(quality=quality):
                 store = Store(self.root)
-                store.put("projects", {"id": "video", "url": "https://youtu.be/abcdefghijk",
+                store.put("projects", {"id": "video", "url": "https://www.youtube.com/watch?v=abcdefghijk", "title": "自訂名稱",
                                        **({"download_quality": quality} if quality else {})})
                 store.put("jobs", {"id": "prepare", "project_id": "video", "kind": "prepare"})
                 source = self.root / "downloads/web/video/source.mkv"
                 source.parent.mkdir(parents=True, exist_ok=True)
                 source.touch()
+                original_title = '直播標題「測試」\n第二行'
+                with YoutubeDL({"quiet": True}) as ydl:
+                    printed_title = ydl.evaluate_outtmpl(TITLE_PREFIX + "%(title)j", {"title": original_title})
                 with patch("game_vod_clipper.web_worker.youtube_command", return_value=["yt-dlp"]), \
-                        patch("game_vod_clipper.web_worker.command", return_value=SOURCE_PREFIX + str(source) + "\n") as command, \
+                        patch("game_vod_clipper.web_worker.command", return_value=SOURCE_PREFIX + str(source) + "\n" + printed_title + "\n") as command, \
                         patch("game_vod_clipper.web_worker.probe", return_value={"duration": 16, "width": 2560, "height": 1440}):
                     run(self.root, "prepare")
                 args = command.call_args_list[0].args[0]
                 self.assertEqual(args[args.index("-f") + 1], quality_format(quality or "best"))
                 self.assertEqual(args[args.index("-S") + 1], "res,fps")
-                self.assertEqual(args[args.index("--merge-output-format") + 1], "mkv")
+                self.assertEqual(args[args.index("--merge-output-format") + 1], BROWSER_MERGE_FORMATS)
                 self.assertEqual(store.get("projects", "video")["height"], 1440)
+                self.assertIn(f"after_move:{TITLE_PREFIX}%(title)j", args)
+                self.assertEqual(store.get("projects", "video")["title"], "自訂名稱")
+                self.assertEqual(public_history(store)[0]["title"], original_title)
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "trusted FFmpeg is required")
     def test_export_keeps_1440p_source_even_with_a_720p_preview(self):

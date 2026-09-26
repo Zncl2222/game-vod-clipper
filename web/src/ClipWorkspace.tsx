@@ -7,6 +7,7 @@ import CandidateTimeline from "./CandidateTimeline";
 import SelectionOverlay, { timelinePosition, validSelection } from "./SelectionOverlay";
 import TimeRuler from "./TimeRuler";
 import TimelineZoom, { timelineWindow, zoomTimeline, type TimeWindow } from "./TimelineZoom";
+import { previewStep } from "./playback";
 
 export function candidates(project: Project, jobs: Job[]) {
   return jobs.filter(j => {
@@ -56,6 +57,7 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   const rangeSaved = !!editingCandidate?.manual_edit && (["start", "victory", "postroll"] as const)
     .every(key => editingCandidate.manual_edit![key] === draft[key]);
   const duration = project.duration!;
+  const frameStep = previewStep(project);
   const finish = draft.victory + draft.postroll;
   const valid = validSelection(draft, duration);
   const { from, to } = view;
@@ -98,8 +100,8 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   }, [view, duration, onViewChange, from, span]);
 
   function adjust(edge: "start" | "victory", at: number, base: Draft) {
-    const value = edge === "start" ? Math.max(0, Math.min(base.victory - 1 / 30, at))
-      : Math.max(base.start + 1 / 30, Math.min(duration - base.postroll, at));
+    const value = edge === "start" ? Math.max(0, Math.min(base.victory - frameStep, at))
+      : Math.max(base.start + frameStep, Math.min(duration - base.postroll, at));
     onChange({ [edge]: value });
     onSeek(value);
     return value;
@@ -141,6 +143,7 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     finally { savePending.current = false; setSavingRange(false); }
   }
   return <section className="clip-workspace unified-workbench" aria-label="片段工作區" ref={workspace}>
+    {project.thumbnail_warning && <p className="inline-error" role="status">{project.thumbnail_warning}</p>}
     <TimelineZoom duration={duration} view={view} current={current} selection={{ from: draft.start, to: finish }} onChange={onViewChange}>
       <button type="button" aria-expanded={showEvidence} aria-controls="workbench-evidence" onClick={() => setShowEvidence(value => !value)}>
         <ListFilter size={14} aria-hidden="true" />證據{working && <span className="tiny-dot" />}
@@ -153,13 +156,13 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
         <div className="clip-range-track" data-crowded-markers={crowdedMarkers || undefined} ref={track}>
           <div className="review-thumbnail-strip">{thumbnails.map(t => <img key={t.file} src={media(project, t.file)} alt={`來源縮圖 ${time(t.time)}`} loading="lazy" />)}</div>
           <SelectionOverlay draft={draft} duration={duration} view={view} />
-          <input className="compact-seek" type="range" aria-label="播放位置" min={from} max={to} step={1 / 30}
+          <input className="compact-seek" type="range" aria-label="播放位置" min={from} max={to} step={frameStep}
             aria-valuetext={time(Math.max(from, Math.min(to, current)), true)} value={Math.max(from, Math.min(to, current))} onChange={e => onSeek(Number(e.target.value))} />
           {current >= from && current <= to && <span className="review-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
           {valid && (["start", "victory"] as const).filter(edge => draft[edge] >= from && draft[edge] <= to).map(edge =>
             <button key={edge} className={`clip-range-handle${highlightedFields.includes(edge) ? " ai-target" : ""}`} data-edge={edge} role="slider"
               aria-label={edge === "start" ? "片段開始邊界" : "勝利位置邊界"}
-              aria-valuemin={edge === "start" ? 0 : draft.start + 1 / 30} aria-valuemax={edge === "start" ? draft.victory - 1 / 30 : duration - draft.postroll}
+              aria-valuemin={edge === "start" ? 0 : draft.start + frameStep} aria-valuemax={edge === "start" ? draft.victory - frameStep : duration - draft.postroll}
               aria-valuenow={draft[edge]} aria-valuetext={time(draft[edge], true)}
               style={{ left: `${(draft[edge] - from) / span * 100}%` }}
               title={edge === "start" ? "調整開始位置 · 方向鍵逐格微調，Shift 為 1 秒 · 按 I 設為播放位置"
@@ -181,7 +184,7 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
               onKeyDown={e => {
                 if (!["ArrowLeft", "ArrowRight"].includes(e.key)) return;
                 e.preventDefault(); e.stopPropagation();
-                const value = adjust(edge, draft[edge] + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : 1 / 30), draft);
+                const value = adjust(edge, draft[edge] + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : frameStep), draft);
                 // Follow the handle so it, and keyboard focus, stay on the timeline.
                 if (value < from || value > to) onViewChange(timelineWindow(value - span / 2, span, duration));
               }}><span className="trim-handle-grip" /></button>)}

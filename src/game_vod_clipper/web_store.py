@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import time
 from pathlib import Path
+
+from .youtube_history import remember
+from .locations import project_work
 
 
 class Store:
@@ -15,10 +19,13 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
-            for table in ("projects", "jobs", "usage"):
+            for table in ("projects", "jobs", "usage", "youtube_history", "retained_media"):
                 db.execute(
                     f"CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
                 )
+            db.execute("BEGIN IMMEDIATE")
+            for (data,) in db.execute("SELECT data FROM projects").fetchall():
+                remember(db, json.loads(data))
         from .usage import backfill_usage
         backfill_usage(self)
 
@@ -42,10 +49,13 @@ class Store:
     def put(self, table: str, value: dict):
         self._table(table)
         with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 f"INSERT INTO {table} VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
                 (value["id"], json.dumps(value, ensure_ascii=False, allow_nan=False)),
             )
+            if table == "projects":
+                remember(db, value)
 
     def patch(self, table: str, key: str, **changes):
         self._table(table)
@@ -59,6 +69,8 @@ class Store:
                 f"UPDATE {table} SET data=? WHERE id=?",
                 (json.dumps(value, ensure_ascii=False, allow_nan=False), key),
             )
+            if table == "projects":
+                remember(db, value)
         return value
 
     def set_candidate_review(self, project_id: str, candidate_id: str, review: str, generation: int):
@@ -76,10 +88,23 @@ class Store:
         """Remove workspace records atomically; retain source and generated files."""
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            if not db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone():
+            row = db.execute("SELECT data FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not row:
                 raise KeyError(project_id)
-            keys = [(key,) for key, data in db.execute("SELECT id, data FROM jobs").fetchall()
-                    if json.loads(data).get("project_id") == project_id]
+            remember(db, json.loads(row[0]), deleted=True)
+            # Preserve exact media locations even if the user later changes the
+            # configured folders. These tiny receipts contain no media data.
+            project = json.loads(row[0])
+            related = [json.loads(data) for _, data in db.execute("SELECT id, data FROM jobs").fetchall()
+                       if json.loads(data).get("project_id") == project_id]
+            media = [(project.get("source"), "sources"), (str(project_work(self.root, project) / "preview.mp4"), "previews")]
+            media.extend((job.get("output"), "exports") for job in related if job.get("kind") == "export")
+            for path, category in media:
+                if path:
+                    key = hashlib.sha256(path.encode()).hexdigest()
+                    db.execute("INSERT OR IGNORE INTO retained_media VALUES (?,?)",
+                               (key, json.dumps({"id": key, "path": path, "category": category})))
+            keys = [(job["id"],) for job in related]
             db.executemany("DELETE FROM jobs WHERE id=?", keys)
             db.execute("DELETE FROM projects WHERE id=?", (project_id,))
 
@@ -159,5 +184,5 @@ class Store:
 
     @staticmethod
     def _table(table):
-        if table not in {"projects", "jobs", "usage"}:
+        if table not in {"projects", "jobs", "usage", "youtube_history", "retained_media"}:
             raise ValueError("Unknown table")

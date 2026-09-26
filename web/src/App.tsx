@@ -21,6 +21,7 @@ import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./WorkspaceGuide";
 import { usePanelLayout, usePanelVisibility } from "./ResizableSidebars";
 import { useWorkbenchSize } from "./ResizableWorkbench";
 import { useInspectorWidth } from "./ResizableInspector";
+import { playbackError, playbackFile, previewStep } from "./playback";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -202,7 +203,8 @@ export default function App() {
           onClipsRemoved={(projectId, ids) => ids.forEach(id => deleteClip(projectId, id))} />
         <div className="sidebar-bottom">
           <button className="sidebar-guide" aria-label="使用指南與快捷鍵" title={!libraryOpen ? "使用指南與快捷鍵" : undefined} onClick={() => setGuide(true)}><CircleHelp size={17} /><span>使用指南與快捷鍵</span></button>
-          <LocalStorageUsage refreshKey={state.jobs.filter(job => job.kind !== "analyze").map(job => `${job.id}:${job.status}`).sort().join("|")} />
+          <LocalStorageUsage refreshKey={state.jobs.filter(job => job.kind !== "analyze").map(job => `${job.id}:${job.status}`).sort().join("|")}
+            onClipRemoved={(projectId, ids) => ids.forEach(id => deleteClip(projectId, id))} />
           <span className={`connection ${connected ? "online" : ""}`}>
             <span className="tiny-dot" />
             {connected ? "工作區已連線" : "正在連接本機服務…"}
@@ -298,11 +300,11 @@ export default function App() {
                   "準備影片失敗。"}</p>
                 <button type="button" className="secondary" onClick={() => void action(prepareProblem, "retry")}>
                   <RotateCcw size={14} aria-hidden="true" />重試準備影片</button>
-              </> : <p>{projectJobs.some(active) ? "依序下載原片、製作預覽與時間軸縮圖。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>}
+              </> : <p>{projectJobs.some(active) ? "正在下載與檢查原片，完成後直接開啟剪輯。" : "素材尚未就緒，請查看下方處理紀錄。"}</p>}
               {mediaJobs.filter(job => job.kind === "prepare" && active(job)).slice(0, 1).map(job =>
                 <MediaProgress key={job.id} status={job.status} stage={job.stage} detail={job.media_progress} />)}
               <small>{projectJobs.some(active) ? "準備完成後會自動開啟剪輯。你可以先處理其他專案。"
-                : prepareProblem ? "處理好上面的問題後按「重試」，會從頭下載並製作預覽。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
+                : prepareProblem ? "處理好上面的問題後按「重試」，會繼續準備原片；已取得的素材會保留使用。" : "若工作中斷，可按「重試」接著準備影片。"}</small>
             </div>
           )}
           {!project?.ready && mediaJobs.length > 0 && <ProcessingHistory jobs={mediaJobs} ready={false} onAction={action} />}
@@ -367,7 +369,7 @@ function ProcessingHistory({ jobs, ready, onAction }: {
             : job.status === "succeeded" ? <Check size={17} aria-hidden="true" /> : <CircleHelp size={17} aria-hidden="true" />}
         </div>
         <div className="job-info">
-          <strong>{job.kind === "prepare" ? "準備預覽" : `匯出剪輯 · 版本 ${job.draft?.revision} · ${exportQualityLabel(job.export_quality)}`}</strong>
+          <strong>{job.kind === "prepare" ? "準備素材" : `匯出剪輯 · 版本 ${job.draft?.revision} · ${exportQualityLabel(job.export_quality)}`}</strong>
           <small>{job.error || ({ succeeded: "已完成", failed: "處理失敗", cancelled: "已取消", interrupted: "服務曾中斷，請重試" }[job.status] ?? job.stage)}</small>
           {active(job) && <MediaProgress status={job.status} stage={job.stage} detail={job.media_progress}
             label={job.kind === "prepare" ? "準備影片進度" : "匯出進度"} startedAt={job.kind === "export" && job.status === "running" ? job.started_at : undefined} />}
@@ -420,6 +422,7 @@ function Editor({
   onContext: (context: EditorContext) => void;
 }) {
   const duration = project.duration!;
+  const frameStep = previewStep(project);
   const [draft, setDraft] = useState<Draft>(() => readWorkingDraft(project.id, null, project.draft!));
   const workingDraft = useRef(draft);
   workingDraft.current = draft;
@@ -684,7 +687,11 @@ function Editor({
     stopAt.current = finish;
     void video.current
       ?.play()
-      .catch(() => onError("無法播放預覽，請確認瀏覽器支援此影片。"));
+      .catch(error => { if (error.name !== "AbortError") onError(playbackError(project, video.current?.error?.code)); });
+  }
+  function stepPreview(direction: number) {
+    video.current?.pause();
+    seek((video.current?.currentTime ?? current) + direction * frameStep);
   }
   // Assigned during render so a shortcut always sees the playhead and range currently on screen.
   const shortcuts = useRef<(e: KeyboardEvent) => void>(() => undefined);
@@ -708,11 +715,11 @@ function Editor({
       e.preventDefault();
     }
     if (e.key === "ArrowLeft") {
-      seek(current - 1 / 30);
+      stepPreview(-1);
       e.preventDefault();
     }
     if (e.key === "ArrowRight") {
-      seek(current + 1 / 30);
+      stepPreview(1);
       e.preventDefault();
     }
   };
@@ -727,10 +734,10 @@ function Editor({
     const length = Math.max(1, draft.victory - draft.start);
     let start: number, victory: number;
     if (edge === "start") {
-      start = Math.max(0, Math.min(at, latest - 1 / 30));
+      start = Math.max(0, Math.min(at, latest - frameStep));
       victory = draft.victory > start ? Math.min(draft.victory, latest) : Math.min(latest, start + length);
     } else {
-      victory = Math.max(1 / 30, Math.min(at, latest));
+      victory = Math.max(frameStep, Math.min(at, latest));
       start = draft.start < victory ? Math.max(0, draft.start) : Math.max(0, victory - length);
     }
     change({ start, victory });
@@ -864,7 +871,7 @@ function Editor({
       ? snapshots.current.get(null)?.draft ?? readWorkingDraft(project.id, null, sourceBase) : draft;
     if (editingExportId) snapshots.current.set(editingExportId, { draft, view: timelineView, current, selectedClip });
     const postroll = Math.max(5, Math.min(10, segment.postroll ?? 8));
-    const victory = segment.victory ?? Math.min(duration - postroll, Math.max(segment.start + 1 / 30, segment.end - postroll));
+    const victory = segment.victory ?? Math.min(duration - postroll, Math.max(segment.start + frameStep, segment.end - postroll));
     const cached = candidateDrafts.current!.get(segment.id);
     const next: Draft = cached && (cached.candidate_revision ?? 0) >= (segment.manual_edit?.revision ?? 0)
       ? { ...cached, revision: sourceDraft.revision }
@@ -922,7 +929,8 @@ function Editor({
                 onClick={() => switchWorkspace(null)} title="回到原片，繼續使用完整編輯台">
                 <ArrowLeft size={15} aria-hidden="true" />{editingExportId ? "回到原片" : "原片編輯台"}
               </button>
-              {project.width && project.height && <span className="resolution">{project.width} × {project.height}</span>}
+              {project.width && project.height && <span className="resolution" title={project.playback === "source" ? "直接播放原片，不建立預覽副本" : "此舊專案使用既有預覽"}>
+                {project.width} × {project.height}{project.playback === "source" ? " · 原片直放" : " · 既有預覽"}</span>}
               <button type="button" className="preview-expand" aria-pressed={previewExpanded}
                 onClick={onTogglePreview} title={previewExpanded ? "退出劇院模式（Esc）" : "放大影片並保留剪輯拉條"}>
                 {previewExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
@@ -1000,7 +1008,7 @@ function Editor({
           <div className="video-wrap">
             <video
               ref={video}
-              src={media(project, "preview.mp4")}
+              src={media(project, playbackFile(project))}
               poster={
                 project.thumbnails[0]
                   ? media(project, project.thumbnails[0].file)
@@ -1014,7 +1022,7 @@ function Editor({
               onEnded={() => setPlaying(false)}
               playsInline
               preload="metadata"
-              onError={() => onError("預覽影片載入失敗，請確認服務仍在運作。")}
+              onError={() => onError(playbackError(project, video.current?.error?.code))}
               onTimeUpdate={() => {
                 const v = video.current!;
                 setCurrent(v.currentTime);
@@ -1031,13 +1039,15 @@ function Editor({
           </div>
           <div className="transport">
             <button className="icon-button transport-play" aria-label={playing ? "暫停原片" : "播放原片"}
-              onClick={() => { if (playing) video.current?.pause(); else void video.current?.play().catch(() => onError("無法播放預覽，請確認瀏覽器支援此影片。")); }}>
+              onClick={() => { if (playing) video.current?.pause(); else void video.current?.play().catch(error => {
+                if (error.name !== "AbortError") onError(playbackError(project, video.current?.error?.code));
+              }); }}>
               {playing ? <Pause size={17} /> : <Play size={17} />}
             </button>
             <div className="frame-controls">
               <button
                 className="icon-button"
-                onClick={() => seek(current - 1 / 30)}
+                onClick={() => stepPreview(-1)}
                 title="前一預覽格"
                 aria-label="前一預覽格"
               >
@@ -1048,7 +1058,7 @@ function Editor({
               </span>
               <button
                 className="icon-button"
-                onClick={() => seek(current + 1 / 30)}
+                onClick={() => stepPreview(1)}
                 title="後一預覽格"
                 aria-label="後一預覽格"
               >

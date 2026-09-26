@@ -123,7 +123,7 @@ function ProjectDialog({ project, action, jobs, onClose, onRenamed, onDeleted, o
     finally { setBusy(false); }
   }
   const source = details?.source || details?.url;
-  return <dialog ref={dialog} className="project-dialog" aria-labelledby={titleId} aria-describedby={descriptionId}
+  return <dialog ref={dialog} className="project-dialog" role={danger ? "alertdialog" : "dialog"} aria-labelledby={titleId} aria-describedby={descriptionId}
     onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}>
     <form onSubmit={submit}>
       <div className={`project-dialog-symbol ${danger ? "danger" : ""}`}>
@@ -138,7 +138,8 @@ function ProjectDialog({ project, action, jobs, onClose, onRenamed, onDeleted, o
       {action === "delete" && <div className="project-delete-details">
         <p>此專案的草稿、候選片段與任務紀錄將被移除，無法復原。</p>
         {!!pending && <p className="project-delete-pending">會先停止 {pending} 個下載、分析或匯出任務。</p>}
-        <p>原始影片與已產生的檔案會保留在磁碟上。</p>
+        <p>YouTube 匯入歷史會保留，之後仍可查到這部影片曾經匯入。</p>
+        <p>原始影片與已產生的檔案會保留在磁碟上。刪除後，可到左下「本地影片用量 → 管理影片檔案」永久刪除原片、成品或舊預覽以釋放空間。</p>
       </div>}
       {action === "clean" && <div className="project-delete-details">
         {published.length ? <>

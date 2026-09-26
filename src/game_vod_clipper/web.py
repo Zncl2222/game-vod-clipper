@@ -32,7 +32,7 @@ from .candidates import project_candidates
 from .youtube_routes import YouTubeWorkspace
 from .youtube_account import YouTubeError
 from .usage import quota_change, usage_summary
-from .storage import video_storage
+from .storage import video_inventory, video_storage
 from .game_profiles import KINDS, GameProfiles, ProfileError
 from .locations import LocationError, Locations, export_path, media_path, project_work, record_path
 from .youtube import DownloadQuality, youtube_command
@@ -52,6 +52,23 @@ class ImportRequest(BaseModel):
 class ProjectUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     title: str = Field(min_length=1, max_length=120)
+
+
+class DeleteStoredVideo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class DeleteStoredVideos(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+    @field_validator("ids")
+    @classmethod
+    def valid_ids(cls, values):
+        if any(len(value) != 64 or any(char not in "0123456789abcdef" for char in value) for value in values):
+            raise ValueError("影片檔案編號無效。")
+        return list(dict.fromkeys(values))
 
 
 def plain_text(value: str):
@@ -538,7 +555,53 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     @app.get("/api/storage")
     def storage():
-        return video_storage(root)
+        return video_storage(root, store)
+
+    @app.get("/api/storage/files")
+    def stored_videos():
+        return video_inventory(store, youtube.uploads.all().values(), youtube.uploads.tasks)
+
+    def remove_stored_video(item):
+        if item is None:
+            raise HTTPException(409, "檔案已變更或已刪除，請重新整理清單後確認。")
+        if item["blocked"]:
+            raise HTTPException(409, item["blocked"])
+        if item["job_id"]:
+            freed = remove_clip(item["project_id"], get("jobs", item["job_id"]))
+        else:
+            try:
+                media_path(root, item["path"]).unlink()
+            except OSError:
+                raise HTTPException(409, "檔案無法刪除，請確認權限並重新整理清單。") from None
+            freed = item["bytes"]
+        return {"id": item["id"], "bytes": freed, "job_id": item["job_id"], "project_id": item["project_id"]}
+
+    @app.post("/api/storage/delete")
+    async def delete_stored_video(body: DeleteStoredVideo):
+        # No await between revalidation and unlink: new imports/exports cannot
+        # start using this file while deletion is in progress.
+        async with youtube.lock, youtube.uploads.lock, analysis_lock:
+            inventory = video_inventory(store, youtube.uploads.all().values(), youtube.uploads.tasks)
+            item = next((item for item in inventory["items"] if item["id"] == body.id), None)
+            result = remove_stored_video(item)
+            return {"deleted": True, **{key: value for key, value in result.items() if key != "id"}}
+
+    @app.post("/api/storage/delete-batch")
+    async def delete_stored_videos(body: DeleteStoredVideos):
+        # Scan once for the whole batch. Hold the same locks and do not await
+        # between validation and deletion, just like the single-file endpoint.
+        async with youtube.lock, youtube.uploads.lock, analysis_lock:
+            inventory = video_inventory(store, youtube.uploads.all().values(), youtube.uploads.tasks)
+            by_id = {item["id"]: item for item in inventory["items"]}
+            deleted, failed = [], []
+            for key in body.ids:
+                try:
+                    deleted.append(remove_stored_video(by_id.get(key)))
+                except HTTPException as error:
+                    # Filesystem changes cannot be rolled back: report each
+                    # outcome explicitly instead of claiming an atomic batch.
+                    failed.append({"id": key, "detail": str(error.detail)})
+            return {"deleted": deleted, "failed": failed, "bytes": sum(item["bytes"] for item in deleted)}
 
     @app.get("/api/locations")
     async def read_locations():
@@ -590,7 +653,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         if project.get("analysis_generation", 0) != generation:
             raise HTTPException(409, "影片分析已重置，請重新選取片段。")
         if not project["ready"]:
-            raise HTTPException(409, "請先完成影片預覽。")
+            raise HTTPException(409, "請先完成原片準備。")
         if not body.start < body.end <= project["duration"]:
             raise HTTPException(422, "分析範圍須位於原片內。")
         target = None
@@ -836,7 +899,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def edit_candidate(project_id: str, body: CandidateEditRequest):
         project = get("projects", project_id)
         if not project.get("ready"):
-            raise HTTPException(409, "預覽尚未完成。")
+            raise HTTPException(409, "原片尚未就緒。")
         if not body.start < body.victory or body.victory + body.postroll > project["duration"]:
             raise HTTPException(422, "開始必須早於勝利，且勝利後須保留完整 5–10 秒，不可超出原片。")
         try:
@@ -859,7 +922,7 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     def validate_draft(project: dict, body: Draft):
         if not project["ready"]:
-            raise HTTPException(409, "預覽尚未完成。")
+            raise HTTPException(409, "原片尚未就緒。")
         if (
             not body.start < body.victory
             or body.victory + body.postroll > project["duration"]
@@ -998,7 +1061,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         ):
             raise HTTPException(409, "此專案已有任務執行中。")
         if job["kind"] == "prepare" and get("projects", job["project_id"])["ready"]:
-            raise HTTPException(409, "此專案的預覽已完成，無需重新建立。")
+            raise HTTPException(409, "此專案的原片已就緒，無需重新準備。")
         if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿。")
         return jobs.submit(
@@ -1010,7 +1073,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         async with analysis_lock:
             project = get("projects", project_id)
             if not project.get("ready"):
-                raise HTTPException(409, "請先完成影片預覽。")
+                raise HTTPException(409, "請先完成原片準備。")
             analysis_jobs = [j for j in store.all("jobs")
                              if j["project_id"] == project_id and j["kind"] == "analyze"]
             # Join worker cancellation before removing any checkpoint or database row.
@@ -1047,11 +1110,25 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.get("/api/projects/{project_id}/media/{filename}")
     async def media(project_id: str, filename: str):
         project = get("projects", project_id)
+        if filename == "source":
+            # A fixed endpoint serves only the registered source, never a path
+            # supplied by the browser. Do not re-check today's storage folders:
+            # existing projects keep their original locations when settings change.
+            if not project.get("ready") or not project.get("source"):
+                raise HTTPException(404, "原片尚未就緒。")
+            path = media_path(root, project["source"])
+            if not path.is_file() or path.is_symlink() or path.suffix.lower() not in EXTENSIONS:
+                raise HTTPException(404, "找不到原片，請確認檔案仍在原來的位置。")
+            mime = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm",
+                    ".mov": "video/quicktime", ".mkv": "video/x-matroska"}[path.suffix.lower()]
+            return LocalFileResponse(path, media_type=mime, range_limit=PREVIEW_RANGE_LIMIT)
         allowed = {"preview.mp4"} | {t["file"] for t in project["thumbnails"]}
         if not project["ready"] or filename not in allowed:
             raise HTTPException(404, "找不到預覽。")
-        return LocalFileResponse(project_work(root, project) / filename,
-                                 range_limit=PREVIEW_RANGE_LIMIT)
+        path = project_work(root, project) / filename
+        if not path.is_file():
+            raise HTTPException(404, "找不到預覽。")
+        return LocalFileResponse(path, range_limit=PREVIEW_RANGE_LIMIT)
 
     @app.get("/api/jobs/{job_id}/download")
     async def download(job_id: str):
@@ -1070,7 +1147,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def review_packet(project_id: str):
         project = get("projects", project_id)
         if not project["ready"]:
-            raise HTTPException(409, "預覽尚未完成。")
+            raise HTTPException(409, "原片尚未就緒。")
         return {
             "schema_version": 1,
             "project_id": project_id,

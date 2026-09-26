@@ -77,7 +77,7 @@ class WebTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail("Media worker did not complete within 30s")
 
-    def test_real_import_preview_export_and_persistence(self):
+    def test_real_import_direct_playback_export_and_persistence(self):
         app = create_app(self.root)
         with TestClient(app) as client:
             imported = client.post(
@@ -95,14 +95,21 @@ class WebTest(unittest.TestCase):
                 if p["id"] == project_id
             )
             self.assertTrue(project["ready"])
+            self.assertEqual(project["playback"], "source")
+            self.assertEqual(project["frame_rate"], 30)
+            self.assertEqual(project["video_codec"], "h264")
             self.assertNotIn("source", project)
+            self.assertFalse((self.root / "runs" / "web" / project_id / "preview.mp4").exists())
             self.assertGreaterEqual(len(project["thumbnails"]), 23)
             preview = client.get(
-                f"/api/projects/{project_id}/media/preview.mp4",
+                f"/api/projects/{project_id}/media/source",
                 headers={"Range": "bytes=0-99"},
             )
             self.assertEqual(preview.status_code, 206)
             self.assertEqual(len(preview.content), 100)
+            self.assertEqual(preview.content, self.source.read_bytes()[:100])
+            self.assertEqual(preview.headers["content-type"], "video/mp4")
+            self.assertEqual(client.get(f"/api/projects/{project_id}/media/preview.mp4").status_code, 404)
             self.assertEqual(
                 client.get(f"/api/projects/{project_id}/media/source.mp4").status_code,
                 404,

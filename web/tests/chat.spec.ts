@@ -152,7 +152,7 @@ test("project deletion confirms, handles failures, and switches away without sta
   });
   await page.locator(".project-card").first().click({ button: "right" });
   await page.getByRole("menuitem", { name: "刪除專案…" }).click();
-  const dialog = page.getByRole("dialog", { name: "刪除專案？" });
+  const dialog = page.getByRole("alertdialog", { name: "刪除專案？" });
   await expect(dialog).toContainText("原始影片與已產生的檔案會保留在磁碟上");
   await expect(dialog.getByRole("button", { name: "取消", exact: true })).toBeFocused();
   await page.screenshot({ path: "../runs/project-delete-desktop.png", fullPage: true });

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, HardDrive, RefreshCw } from "lucide-react";
 import { api, type VideoStorage } from "./api";
+import StorageManager from "./StorageManager";
 
 function bytes(value: number) {
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -18,7 +20,10 @@ function validStorage(value: unknown): value is VideoStorage {
       nonnegative(result.categories[key]?.bytes) && nonnegative(result.categories[key]?.files));
 }
 
-export default function LocalStorageUsage({ refreshKey }: { refreshKey: string }) {
+export default function LocalStorageUsage({ refreshKey, onClipRemoved }: {
+  refreshKey: string; onClipRemoved: (project: string, jobs: string[]) => void;
+}) {
+  const [manager, setManager] = useState(false);
   const [storage, setStorage] = useState<VideoStorage | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -48,7 +53,7 @@ export default function LocalStorageUsage({ refreshKey }: { refreshKey: string }
   }, []);
   useEffect(() => { void refresh(); }, [refreshKey]);
 
-  return <details className="local-storage" aria-label="本地影片容量">
+  return <><details className="local-storage" aria-label="本地影片容量">
     <summary>
       <HardDrive size={18} aria-hidden="true" />
       <span><span className="local-storage-label">本地影片用量</span><strong>{storage ? bytes(storage.bytes) : failed ? "暫時無法讀取" : "計算中…"}</strong></span>
@@ -60,6 +65,7 @@ export default function LocalStorageUsage({ refreshKey }: { refreshKey: string }
       <p>{failed ? (storage ? "更新失敗，顯示上次計算結果。" : "無法讀取本地影片容量，請重試。")
         : storage?.incomplete ? "部分檔案無法讀取，顯示已計算的用量。" : "統計此工作區的影片檔案，每 30 秒更新。"}</p>
       <button type="button" disabled={busy} onClick={() => void refresh()} aria-label="更新影片用量"><RefreshCw size={13} aria-hidden="true" />{busy ? "更新中…" : "重新計算"}</button>
+      <button type="button" aria-haspopup="dialog" onClick={() => setManager(true)}>管理影片檔案</button>
     </div>
-  </details>;
+  </details>{manager && createPortal(<StorageManager onClose={() => setManager(false)} onChanged={() => void refresh()} onClipRemoved={onClipRemoved} />, document.body)}</>;
 }

@@ -11,6 +11,11 @@ from .process import ToolMissingError, resolve_tool_command
 
 DownloadQuality = Literal["best", "2160", "1440", "1080", "720", "480"]
 
+# Select the container AFTER selecting the best streams. In particular, do not
+# filter out high-resolution VP9/AV1 to obtain an H.264 MP4. yt-dlp stream-copies
+# compatible pairs into WebM/MP4; uncommon pairs retain the lossless MKV fallback.
+BROWSER_MERGE_FORMATS = "webm/mp4/mkv"
+
 
 def quality_format(quality: DownloadQuality = "best") -> str:
     """Keep the best source, or the best format at/below the selected height."""

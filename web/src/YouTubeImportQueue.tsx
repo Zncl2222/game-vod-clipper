@@ -12,7 +12,7 @@ export type ImportRecord = {
 };
 export const importIsPending = (item: ImportRecord) => ["queued", "importing", "waiting_account"].includes(item.status);
 export const importIsWorking = (item: ImportRecord) => importIsPending(item) || item.status === "preparing";
-const labels: Record<string, string> = { queued: "等待匯入", importing: "正在確認影片", preparing: "下載與製作預覽",
+const labels: Record<string, string> = { queued: "等待匯入", importing: "正在確認影片", preparing: "下載與準備素材",
   ready: "已匯入", failed: "無法加入", needs_attention: "需要重試下載", cancelled: "已取消", removed: "專案已移除", waiting_account: "等待連回原頻道" };
 
 export default function YouTubeImportQueue({ items, busy, channelId, onOpen, onCancel, onRetry }: {

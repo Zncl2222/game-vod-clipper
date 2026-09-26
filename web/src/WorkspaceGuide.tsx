@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { ArrowDownToLine, ArrowUpRight, Check, FolderOpen, Keyboard, Scissors, ShieldCheck, Sparkles, X } from "lucide-react";
 
 const steps = [
-  { title: "匯入素材", detail: "選擇本機錄影或 YouTube 影片，準備好預覽就能開始。", icon: FolderOpen },
+  { title: "匯入素材", detail: "選擇本機錄影或 YouTube 影片，原片就緒即可開始，縮圖在背景建立。", icon: FolderOpen },
   { title: "找到並核對", detail: "讓 AI 尋找成功挑戰，或手動調整起點、勝利與收尾。", icon: Scissors },
   { title: "留下完整勝利", detail: "調整好片段後直接匯出 MP4，完成後會標記已匯出。", icon: ArrowDownToLine },
 ];

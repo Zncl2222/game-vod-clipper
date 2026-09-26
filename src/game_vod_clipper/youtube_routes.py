@@ -18,6 +18,7 @@ from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, iso_duratio
 from .youtube_imports import YouTubeImports
 from .youtube_uploads import YouTubeUploads
 from .youtube import DownloadQuality
+from .youtube_history import backfill_legacy, public_history
 
 ACTIVE = {"queued", "running"}
 
@@ -88,6 +89,7 @@ class YouTubeWorkspace:
         self.lock = asyncio.Lock()
         self.imports = YouTubeImports(store, self.account, self.lock,
                                       lambda key, options: self._import_video(key, ImportBroadcast(**options)))
+        backfill_legacy(store, self.account.files, self.imports.records.values())
         self.sync_lock = asyncio.Lock()
         self.task: asyncio.Task | None = None
         self.stopped = asyncio.Event()
@@ -117,8 +119,10 @@ class YouTubeWorkspace:
 
     async def broadcasts(self, token=""):
         result = await self.account.broadcasts(token)
+        projects = self.store.all("projects")
+        history = {item["id"]: item for item in public_history(self.store, projects)}
         by_url = {}
-        for project in self.store.all("projects"):
+        for project in projects:
             if project.get("youtube_video_id"):
                 by_url.setdefault(f"https://www.youtube.com/watch?v={project['youtube_video_id']}", project)
             if project.get("url"):
@@ -126,6 +130,7 @@ class YouTubeWorkspace:
         for item in result["items"]:
             project = by_url.get(f"https://www.youtube.com/watch?v={item['id']}")
             item["project_id"] = project["id"] if project else None
+            item["import_history"] = history.get(item["id"])
         return result
 
     def watch_is_current(self, settings: dict):
@@ -208,7 +213,7 @@ class YouTubeWorkspace:
                     except ValueError:
                         continue
                     seen = f"{settings['channel_id']}:{item['id']}" in self.account.files.read("imports", {})
-                    if ended < settings["since"] or not item["available"] or seen or item["project_id"]:
+                    if ended < settings["since"] or not item["available"] or seen or item["project_id"] or item.get("import_history"):
                         continue
                     if sum(j["status"] in ACTIVE and j["kind"] == "analyze" for j in self.store.all("jobs")) >= 8:
                         # Revisit this page instead of skipping unqueued videos.
@@ -288,6 +293,11 @@ class YouTubeWorkspace:
         @app.get("/api/youtube")
         async def status():
             return self.status()
+
+        @app.get("/api/youtube/history")
+        async def history():
+            # Local receipts remain available without a connected Google account.
+            return public_history(self.store)
 
         @app.put("/api/youtube/config")
         async def configure(request: Request):

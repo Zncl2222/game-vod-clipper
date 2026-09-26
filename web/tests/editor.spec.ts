@@ -18,6 +18,8 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     timeout: 30_000,
   });
   await expect(page.getByRole("button", { name: "匯出 MP4" })).toBeEnabled();
+  await expect(page.locator(".preview-panel .video-wrap video")).toHaveAttribute("src", /\/media\/source$/);
+  await expect(page.locator(".resolution")).toContainText("原片直放");
   await expect(page.locator(".clip-inspector input[type=checkbox]")).toHaveCount(0);
   await expect
     .poll(() =>

@@ -43,7 +43,7 @@ export default function MediaProgress({ status, stage, detail, label = "匯入�
   const stale = !!detail && LIVE_PHASES.has(detail.phase) && percent !== 100 && now - detail.updated_at > STALE_AFTER[detail.phase];
   const encoding = detail?.phase === "export" || detail?.phase === "preview";
   return <div className="media-progress">
-    <div className="media-progress-heading"><span>{queued ? "排隊等待處理" : stage || "正在下載與準備預覽"}</span>
+    <div className="media-progress-heading"><span>{queued ? "排隊等待處理" : stage || "正在下載與準備原片"}</span>
       {percent !== undefined && <strong>{detail?.total_is_estimate ? "約 " : ""}{percent.toFixed(1)}%</strong>}</div>
     <progress max={100} value={percent} aria-label={label} />
     {queued ? <p>{waitingReason || "等待前面的下載或匯出完成，會自動接續。"}</p> : <>
@@ -59,7 +59,8 @@ export default function MediaProgress({ status, stage, detail, label = "匯入�
         {startedAt && <span>已執行 {clock(now - startedAt)}</span>}
       </div>}
       {detail?.phase === "preview" && <p>原片已就緒，正在製作編輯用預覽；成品仍保留原片畫質。</p>}
-      {detail?.phase === "merge" && <p>下載完成，正在合併影音；完成後會製作預覽。</p>}
+      {detail?.phase === "merge" && <p>下載完成，正在無損合併影音；完成後即可直接播放原片。</p>}
+      {detail?.phase === "thumbnails" && <p>原片已可播放與編輯，時間軸縮圖會陸續出現。</p>}
       {detail?.phase === "verify" && <p>編碼完成，正在檢查成品長度與影像軌。</p>}
       {!detail && startedAt && <p>正在啟動 FFmpeg… 已執行 {clock(now - startedAt)}</p>}
       {stale && <p className="media-progress-wait">{detail.phase === "download"

@@ -179,7 +179,8 @@ class LocationMediaTest(LocationTestCase):
             project_id = imported["project"]["id"]
             self.assertNotIn("work", imported["project"])
             self.assertEqual(self.wait_job(client, imported["job"]["id"])["status"], "succeeded")
-            self.assertTrue((cache / "web" / project_id / "preview.mp4").is_file())
+            self.assertFalse((cache / "web" / project_id / "preview.mp4").exists())
+            self.assertTrue((cache / "web" / project_id / "thumb-001.jpg").is_file())
             self.assertFalse((self.root / "runs" / "web" / project_id).exists())
 
             draft = client.put(f"/api/projects/{project_id}/draft", json={
@@ -197,7 +198,7 @@ class LocationMediaTest(LocationTestCase):
 
             # Changing a location only affects new files; this project keeps working.
             client.put("/api/locations", json={"sources": None, "exports": None, "cache": None})
-            preview = client.get(f"/api/projects/{project_id}/media/preview.mp4", headers={"Range": "bytes=0-9"})
+            preview = client.get(f"/api/projects/{project_id}/media/source", headers={"Range": "bytes=0-9"})
             self.assertEqual(preview.status_code, 206)
             self.assertEqual(client.post(f"/api/projects/{project_id}/reset-analysis").status_code, 200)
             deleted = client.delete(f"/api/projects/{project_id}/clips/{export['id']}")

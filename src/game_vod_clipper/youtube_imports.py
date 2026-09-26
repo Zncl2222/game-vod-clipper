@@ -146,7 +146,7 @@ class YouTubeImports:
                 elif item.get("retry_at", 0) > time.time():
                     row.update(waiting_reason="暫時無法取得影片，稍後自動重試；其他影片可先處理。", retry_at=item["retry_at"])
                 elif preparing_active:
-                    row["waiting_reason"] = "前一部影片仍在下載或製作預覽，完成後會自動接續。"
+                    row["waiting_reason"] = "前一部影片仍在下載或準備素材，完成後會自動接續。"
                 elif len(active) >= 8:
                     row["waiting_reason"] = "處理佇列已滿，有空位後會自動接續。"
                 else:
@@ -165,7 +165,7 @@ class YouTubeImports:
                         row["waiting_reason"] = "已加入下載任務，等待前面的下載或匯出完成。"
                 else:
                     row.update(status="needs_attention", error=job.get("error") if job and job.get("error")
-                               else "下載或預覽尚未完成，請開啟工作區重試。")
+                               else "原片尚未準備完成，請開啟工作區重試。")
             rows.append(row)
         priority = {"importing": 0, "preparing": 0, "queued": 1, "waiting_account": 1, "failed": 2, "needs_attention": 2}
         # Keep the current download visible above even a long waiting list.
