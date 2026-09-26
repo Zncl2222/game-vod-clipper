@@ -338,6 +338,64 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         result = self.uploads.get("slow")
         self.assertEqual((result["status"], result["playlist_status"]), ("paused", "added"))
 
+    async def test_slow_youtube_processing_finishes_without_a_second_press(self):
+        self.export()
+        self.playlist_access()
+        checks = 0
+        def handler(request):
+            nonlocal checks
+            if request.url.path.endswith("/playlists"):
+                return httpx.Response(200, json={"items": [{"id": "PLwins", "snippet": {"channelId": CHANNEL["id"], "title": "勝利"}}]})
+            if request.url.path.endswith("/playlistItems"):
+                return httpx.Response(200, json={"items": []} if request.method == "GET" else {"id": "playlist-item"})
+            if request.method == "POST":
+                return httpx.Response(200, headers={"location": UPLOAD + "?upload_id=clip"})
+            if request.method == "PUT":
+                return httpx.Response(201, json={"id": "uploaded123"})
+            checks += 1
+            # Processing a few-hundred-MB 1080p60 clip takes minutes, well past a one-minute poll.
+            done = checks > 20
+            return httpx.Response(200, json={"items": [{"processingDetails": {"processingStatus": "succeeded" if done else "processing"},
+                                                        "status": {"uploadStatus": "processed" if done else "uploaded", "privacyStatus": "private"}}]})
+        self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False,
+                    "notify_subscribers": False, "playlist_id": "PLwins"}
+        with patch("game_vod_clipper.youtube_uploads.asyncio.sleep", AsyncMock()) as sleep:
+            record = await self.uploads.start("export", metadata, CHANNEL["id"])
+            await asyncio.gather(*list(self.uploads.tasks.values()))
+        result = self.uploads.get(record["id"])
+        self.assertEqual((result["status"], result["playlist_status"], result["error"]), ("succeeded", "added", None))
+        self.assertGreater(sum(call.args[0] for call in sleep.await_args_list), 120)
+
+    async def test_waiting_for_youtube_processing_does_not_hold_the_upload_queue(self):
+        self.export()
+        held = []
+        async def processing(key):
+            held.append(self.uploads.limit.locked())
+        def handler(request):
+            if request.method == "POST":
+                return httpx.Response(200, headers={"location": UPLOAD + "?upload_id=clip"})
+            return httpx.Response(201, json={"id": "uploaded123"})
+        self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False, "notify_subscribers": False}
+        with patch.object(self.uploads, "processing", processing):
+            record = await self.uploads.start("export", metadata, CHANNEL["id"])
+            await asyncio.gather(*list(self.uploads.tasks.values()))
+            # A resume that only needs status checks also stays out of the byte-upload queue.
+            self.uploads.patch(record["id"], status="paused")
+            await self.uploads.resume(record["id"])
+            await asyncio.gather(*list(self.uploads.tasks.values()))
+        self.assertEqual(held, [False, False])
+
+    async def test_uploads_waiting_on_youtube_processing_leave_queue_slots_free(self):
+        self.export()
+        for n in range(8):
+            self.uploads.save({"id": f"sent-{n}", "status": "processing", "video_id": "uploaded123", "channel": CHANNEL, "created": n})
+        metadata = {"title": "clip", "description": "", "privacy": "private", "made_for_kids": False, "notify_subscribers": False}
+        with patch.dict(self.uploads.tasks, {f"sent-{n}": object() for n in range(8)}), patch.object(self.uploads, "launch"):
+            record = await self.uploads.start("export", metadata, CHANNEL["id"])
+        self.assertEqual(record["status"], "queued")
+
     async def test_foreign_playlist_or_missing_permission_is_rejected_before_upload(self):
         self.export()
         metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False,
@@ -587,6 +645,8 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.uploads, "launch"):
             record = await self.uploads.start("export", metadata, CHANNEL["id"])
         key = record["id"]
+        for n in range(8):
+            self.uploads.save({"id": f"busy-{n}", "status": "uploading", "channel": CHANNEL, "created": n})
         with patch.dict(self.uploads.tasks, {f"busy-{n}": object() for n in range(8)}):
             for status, action in (("paused", self.uploads.resume), ("needs_review", self.uploads.restart)):
                 self.uploads.patch(key, status=status)

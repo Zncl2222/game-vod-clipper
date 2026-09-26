@@ -17,7 +17,10 @@ from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, google_erro
 
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 BUSY = {"queued", "uploading", "processing", "adding_to_playlist"}
+SENDING = {"queued", "uploading"}
 CHUNK = 8 * 1024 * 1024
+# A few-hundred-MB clip often takes YouTube several minutes to process.
+PROCESSING_WAIT = 30 * 60
 
 
 def file_hash(path: Path):
@@ -74,7 +77,8 @@ class YouTubeUploads:
         return [self.public(item) for item in sorted(self.records.values(), key=lambda item: item.get("created", 0), reverse=True)]
 
     def ensure_capacity(self):
-        if len(self.tasks) >= 8:
+        # Uploads only waiting on YouTube's processing send no data and do not take a slot.
+        if sum(self.records.get(key, {}).get("status") in SENDING for key in self.tasks) >= 8:
             raise YouTubeError("上傳佇列已滿，請稍後再試。", 429)
 
     def recover(self):
@@ -208,59 +212,12 @@ class YouTubeUploads:
                 item = self.get(key)
                 if (self.account.status()["channel"] or {}).get("id") != item["channel"]["id"]:
                     raise YouTubeError("YouTube 頻道已變更，請連回原頻道。", 409)
-                if item.get("video_id"):
-                    if item.get("video_processed"):
-                        await self.finish_playlist(key)
-                    else:
-                        await self.processing(key)
-                    return
-                _, path = self.validate_export(item["export_id"])
-                if await asyncio.to_thread(file_hash, path) != item["sha256"]:
-                    raise YouTubeError("成品檔案已變更，已停止上傳。請重新匯出。", 409)
-                self.patch(key, status="uploading", error=None)
-                if not item.get("session"):
-                    response = await self.account.authorized("POST", UPLOAD,
-                        params={"uploadType": "resumable", "part": "snippet,status", "notifySubscribers": str(item["notify_subscribers"]).lower()},
-                        headers={"X-Upload-Content-Length": str(item["size"]), "X-Upload-Content-Type": "video/mp4"},
-                        json={"snippet": {"title": item["title"], "description": item["description"], "categoryId": "20"},
-                              "status": {"privacyStatus": item["privacy"], "selfDeclaredMadeForKids": item["made_for_kids"]}})
-                    if response.status_code not in {200, 201}:
-                        google_error(response)
-                    session = response.headers.get("location", "")
-                    parsed = urlparse(session)
-                    if (parsed.scheme != "https" or parsed.hostname not in {"www.googleapis.com", "youtube.googleapis.com"}
-                            or parsed.username or parsed.password or parsed.port not in {None, 443}
-                            or not parsed.path.startswith("/upload/youtube/v3/videos")):
-                        raise YouTubeError("YouTube 沒有回傳有效的續傳連線，請重試。", 502)
-                    self.patch(key, session=session)
-                else:
-                    await self.probe_session(key)
-                stalls = 0
-                with path.open("rb") as source:
-                    while not self.get(key).get("video_id"):
-                        item = self.get(key)
-                        offset = item["offset"]
-                        if offset >= item["size"]:
-                            raise YouTubeError("檔案已傳送，尚未收到影片編號。請稍後按繼續上傳確認。", 502)
-                        source.seek(offset)
-                        block = source.read(CHUNK)
-                        try:
-                            response = await self.account.authorized("PUT", item["session"], content=block,
-                                headers={"Content-Type": "video/mp4", "Content-Range": f"bytes {offset}-{offset + len(block) - 1}/{item['size']}"})
-                            self.accept_response(key, response)
-                        except YouTubeError as error:
-                            if error.status not in {429, 502} or stalls >= 2:
-                                raise
-                            stalls += 1
-                            await asyncio.sleep(2 ** stalls)
-                            await self.probe_session(key)
-                        current = self.get(key)
-                        if not current.get("video_id") and current["offset"] <= offset:
-                            stalls += 1
-                            if stalls > 3:
-                                raise YouTubeError("YouTube 未接受更多資料，請稍後繼續上傳。", 502)
-                        elif current["offset"] > offset:
-                            stalls = 0
+                if not item.get("video_id"):
+                    await self.send(key)
+            # Waiting on YouTube needs no upload slot, so the next clip can start sending meanwhile.
+            if self.get(key).get("video_processed"):
+                await self.finish_playlist(key)
+            else:
                 await self.processing(key)
         except asyncio.CancelledError:
             self.patch(key, status="paused", error="上傳已暫停，可稍後繼續。")
@@ -270,6 +227,57 @@ class YouTubeUploads:
         except Exception:
             # Never persist exception text containing session URLs or credential data.
             self.patch(key, status="failed", error="上傳未完成，進度已保留。請重試或檢查成品檔案。")
+
+    async def send(self, key: str):
+        """Transfer the export's bytes until YouTube returns the new video ID."""
+        item = self.get(key)
+        _, path = self.validate_export(item["export_id"])
+        if await asyncio.to_thread(file_hash, path) != item["sha256"]:
+            raise YouTubeError("成品檔案已變更，已停止上傳。請重新匯出。", 409)
+        self.patch(key, status="uploading", error=None)
+        if not item.get("session"):
+            response = await self.account.authorized("POST", UPLOAD,
+                params={"uploadType": "resumable", "part": "snippet,status", "notifySubscribers": str(item["notify_subscribers"]).lower()},
+                headers={"X-Upload-Content-Length": str(item["size"]), "X-Upload-Content-Type": "video/mp4"},
+                json={"snippet": {"title": item["title"], "description": item["description"], "categoryId": "20"},
+                      "status": {"privacyStatus": item["privacy"], "selfDeclaredMadeForKids": item["made_for_kids"]}})
+            if response.status_code not in {200, 201}:
+                google_error(response)
+            session = response.headers.get("location", "")
+            parsed = urlparse(session)
+            if (parsed.scheme != "https" or parsed.hostname not in {"www.googleapis.com", "youtube.googleapis.com"}
+                    or parsed.username or parsed.password or parsed.port not in {None, 443}
+                    or not parsed.path.startswith("/upload/youtube/v3/videos")):
+                raise YouTubeError("YouTube 沒有回傳有效的續傳連線，請重試。", 502)
+            self.patch(key, session=session)
+        else:
+            await self.probe_session(key)
+        stalls = 0
+        with path.open("rb") as source:
+            while not self.get(key).get("video_id"):
+                item = self.get(key)
+                offset = item["offset"]
+                if offset >= item["size"]:
+                    raise YouTubeError("檔案已傳送，尚未收到影片編號。請稍後按繼續上傳確認。", 502)
+                source.seek(offset)
+                block = source.read(CHUNK)
+                try:
+                    response = await self.account.authorized("PUT", item["session"], content=block,
+                        headers={"Content-Type": "video/mp4", "Content-Range": f"bytes {offset}-{offset + len(block) - 1}/{item['size']}"})
+                    self.accept_response(key, response)
+                except YouTubeError as error:
+                    if error.status not in {429, 502} or stalls >= 2:
+                        raise
+                    stalls += 1
+                    await asyncio.sleep(2 ** stalls)
+                    await self.probe_session(key)
+                current = self.get(key)
+                if not current.get("video_id") and current["offset"] <= offset:
+                    stalls += 1
+                    if stalls > 3:
+                        raise YouTubeError("YouTube 未接受更多資料，請稍後繼續上傳。", 502)
+                elif current["offset"] > offset:
+                    stalls = 0
 
     async def probe_session(self, key: str):
         item = self.get(key)
@@ -303,7 +311,8 @@ class YouTubeUploads:
         # YouTube accepts playlist items while the video is still processing, so a
         # slow processing poll must not leave the playlist step unattempted.
         await self.add_playlist(key)
-        for _ in range(12):
+        waited, delay = 0, 5
+        while True:
             item = self.get(key)
             result = await self.account.api("videos", part="status,processingDetails", id=item["video_id"])
             video = next(iter(result.get("items", [])), {})
@@ -316,7 +325,10 @@ class YouTubeUploads:
                 self.patch(key, video_processed=True, privacy=status.get("privacyStatus", item["privacy"]), progress=100)
                 await self.finish_playlist(key)
                 return
-            await asyncio.sleep(5)
+            if waited >= PROCESSING_WAIT:
+                break
+            await asyncio.sleep(delay)
+            waited, delay = waited + delay, min(30, delay * 2)
         self.patch(key, status="paused", error="影片已上傳，YouTube 仍在處理。稍後按繼續上傳只會查詢狀態。")
 
     async def add_playlist(self, key: str):

@@ -19,7 +19,7 @@ type Broadcast = { id: string; title: string; duration: number; ended_at: string
 type Model = { id: string; name: string; is_default?: boolean; input_modalities?: string[] };
 export type UploadTarget = { job: Job; project: Project };
 const privacyLabels: Record<string, string> = { private: "私人", unlisted: "不公開", public: "公開" };
-const uploadLabels: Record<string, string> = { queued: "等待上傳", uploading: "正在上傳", processing: "YouTube 正在處理", adding_to_playlist: "影片已上傳，正在加入播放清單", succeeded: "上傳完成", paused: "已暫停", failed: "需要重試", needs_review: "請到 YouTube 確認" };
+const uploadLabels: Record<string, string> = { queued: "等待上傳", uploading: "正在上傳", processing: "影片已上傳，等 YouTube 處理完會自動完成", adding_to_playlist: "影片已上傳，正在加入播放清單", succeeded: "上傳完成", paused: "已暫停", failed: "需要重試", needs_review: "請到 YouTube 確認" };
 const isWorking = (item: UploadRecord) => ["queued", "uploading", "processing", "adding_to_playlist"].includes(item.status);
 const errorLinks: Record<string, { href: string; label: string }> = {
   liveStreamingNotEnabled: { href: "https://www.youtube.com/features", label: "檢查 YouTube 直播功能" },
