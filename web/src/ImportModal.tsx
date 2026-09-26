@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, X, Youtube } from "lucide-react";
-import { api, type Project, type Source } from "./api";
+import { api, type Project, type Source, type StorageLocations } from "./api";
 import DownloadQuality from "./DownloadQuality";
 import { setPreferences, usePreferences } from "./preferences";
 
@@ -9,6 +9,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
   const errorSummary = useRef<HTMLParagraphElement>(null);
   const [kind, setKind] = useState<"local" | "youtube">("local");
   const [sources, setSources] = useState<Source[]>([]);
+  const [folder, setFolder] = useState("");
   const [source, setSource] = useState("");
   const [url, setUrl] = useState("");
   // Shares the saved preference, so a choice here is still selected next time.
@@ -20,6 +21,8 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
   const [fieldError, setFieldError] = useState("");
   async function loadSources() {
     setLoading(true); setSourceError("");
+    // Only used to name the folder in the hint; the list itself does not depend on it.
+    void api<StorageLocations>("/locations").then(result => setFolder(result.sources.path)).catch(() => undefined);
     try { setSources(await api<Source[]>("/sources")); }
     catch (reason) { setSourceError((reason as Error).message); }
     finally { setLoading(false); }
@@ -76,9 +79,9 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
           <option value="">{loading ? "正在讀取素材…" : sources.length ? "選擇本機素材…" : "尚未找到本機影片"}</option>
           {sources.map(item => <option key={item.path} value={item.path}>{item.name} · {(item.size / 1024 / 1024).toFixed(0)} MB</option>)}
         </select>
-        <p id="source-help" className="field-help">顯示 downloads/ 與 clips/ 內的影片。將錄影放入 downloads/ 後，按「重新整理素材」即可選取。</p>
+        <p id="source-help" className="field-help">顯示原始影片與輸出成品資料夾內的影片。將錄影放入{folder ? <code className="source-folder">{folder}</code> : "原始影片資料夾"}後，按「重新整理素材」即可選取。資料夾可在偏好設定變更。</p>
         {sourceError ? <p role="alert" className="inline-error">無法載入素材：{sourceError}。請重新整理素材再試一次。</p> : !loading && !sources.length &&
-          <div className="source-empty" role="status"><FolderOpen aria-hidden="true" size={22} /><div><strong>先放入一支錄影</strong><p>將影片放進 downloads/，或切換 YouTube 網址匯入。</p></div></div>}
+          <div className="source-empty" role="status"><FolderOpen aria-hidden="true" size={22} /><div><strong>先放入一支錄影</strong><p>將影片放進原始影片資料夾，或切換 YouTube 網址匯入。</p></div></div>}
       </> : <>
         <label htmlFor="youtube">公開影片網址</label>
         <input id="youtube" type="url" value={url} disabled={busy} placeholder="https://www.youtube.com/watch?v=…" autoComplete="off"

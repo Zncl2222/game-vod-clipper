@@ -50,6 +50,8 @@ export type Job = {
   edit_draft?: Draft;
   source_job_id?: string | null;
   export_quality?: "max" | "high" | "balanced" | "fast";
+  /** Full path of a finished export on the backend's computer. */
+  output_path?: string;
   progress_reset?: boolean;
   candidates?: CandidateSegment[];
   model?: string;
@@ -196,6 +198,8 @@ export function reviewCandidates(project: Project, jobs: Job[]): NumberedCandida
   return [...found.values()].map((segment, i) => ({ ...segment, number: i + 1, review: project.candidate_reviews?.[segment.id] ?? "pending" }));
 }
 export type Source = { path: string; name: string; size: number };
+export type StorageKind = "sources" | "exports" | "cache";
+export type StorageLocations = Record<StorageKind, { path: string; default: string; custom: boolean }>;
 export type VideoStorage = {
   bytes: number; files: number; incomplete: boolean; updated_at: number;
   categories: Record<"sources" | "exports" | "previews", { bytes: number; files: number }>;

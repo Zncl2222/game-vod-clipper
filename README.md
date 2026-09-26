@@ -32,14 +32,21 @@ Open **http://127.0.0.1:8000**. The backend serves the built React app, so only 
 server is needed. Keep this terminal running while processing videos. In a remote
 development container, privately forward port 8000 to your own machine.
 
-Local import lists files already under `downloads/` and `clips/`. Put a new source
-recording in `downloads/`, then open the import dialog. The browser never uploads
-your source file. Preview files and task state live in `runs/web/`; exports and
-their JSON receipts live in `clips/web/`. Source videos are never overwritten.
-Each web export is saved as `clips/web/<project-id>/<job-id>.mp4` under the
-backend workspace (`GAME_VOD_ROOT` if configured). The finished clip's
-**檔案儲存位置** disclosure shows its path. **下載 MP4** saves another copy through
-your browser's download location.
+Local import lists files already in the source and clip folders (`downloads/` and
+`clips/` by default). Put a new source recording in the source folder, then open
+the import dialog. The browser never uploads your source file. Preview files live
+in `runs/web/`; exports and their JSON receipts live in `clips/web/`. Source videos
+are never overwritten. Each web export is saved as
+`<clip folder>/web/<project-id>/<job-id>.mp4`, and the finished clip's
+**檔案儲存位置** disclosure shows its full path. **下載 MP4** saves another copy
+through your browser's download location.
+
+**偏好設定 → 儲存位置** moves the source folder (local imports and YouTube
+downloads), the clip folder, and the preview/temporary folder to any folder on this
+computer, for example another drive. A change applies to new files only: existing
+projects and clips stay where they are and keep working. Task state, YouTube
+sign-in and game profiles always stay in `runs/web/` under the backend workspace
+(`GAME_VOD_ROOT` if configured).
 
 The right-hand **成品** tab shows each project's completed clips. Click a clip to
 edit its source range directly; **回到原片** restores the original editable
@@ -49,7 +56,7 @@ new MP4 after review without overwriting the existing clip.
 The bottom-left **本地影片用量** shows video file sizes in this workspace. Expand it
 for original videos, finished clips, and preview/temporary videos. Totals include
 unimported files and update every 30 seconds or with **重新計算**. Linked copies of
-the same file are counted once; files outside the workspace are excluded.
+the same file are counted once; files outside the storage folders are excluded.
 
 See [the POC guide](docs/web-poc.md) for development, the Agent JSON contract,
 testing, and current limitations.
@@ -392,7 +399,7 @@ A valid final clip should:
 - Exclude earlier failed attempts, death screens, post-death loading, respawns, retry UI, and runback footage.
 - Include the actual victory moment.
 - Keep 5-10 seconds after victory for reward text, achievements, or reaction context.
-- Store generated files under `downloads/`, `runs/`, or `clips/`.
+- Store generated files under `downloads/`, `runs/`, or `clips/` (or the web app's configured storage folders).
 - Avoid uploading or redistributing the user's source video.
 
 This is intentionally agent-guided rather than fully automatic. Boss VODs often contain retries, HP resets, fast deaths, loading screens, and confusing transitions that require visual inspection.

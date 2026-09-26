@@ -22,6 +22,19 @@
 .preference-check input { margin: 3px 0 0; accent-color: var(--accent); }
 .preference-check span { display: flex; flex-direction: column; gap: 2px; }
 .preference-check small { font-size: 12px; color: var(--muted); }
+.storage-locations { display: grid; gap: 14px; }
+.storage-location { display: grid; gap: 6px; min-width: 0; }
+.storage-location-label { display: flex; flex-direction: column; gap: 2px; }
+.storage-location-label label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.storage-location-label small { font-size: 12px; color: var(--muted); }
+.storage-location-row { display: flex; gap: 8px; min-width: 0; }
+.storage-location-row input { flex: 1; min-width: 0; min-height: 40px; padding: 6px 10px; font: 12px ui-monospace, monospace;
+  color: var(--ink); border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
+.storage-location-row input[aria-invalid="true"] { border-color: var(--danger); }
+.storage-location-row button { min-height: 40px; padding: 0 14px; white-space: nowrap; }
+.storage-location-reset { justify-self: start; display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+  min-height: 32px; padding: 0 2px; font-size: 12px; color: var(--accent); text-align: left; }
+.storage-location-reset code { font: 11px ui-monospace, monospace; color: var(--muted); overflow-wrap: anywhere; }
 .topbar-settings { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 10px; font-size: 12px; color: var(--ink); border-radius: var(--radius-sm); }
 .topbar-settings:hover { background: var(--surface-active); color: var(--accent); }
 .export-quality-link { padding: 0 2px; font-size: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; background: none; border: 0; }
@@ -29,5 +42,6 @@
   .topbar-settings { min-height: 44px; min-width: 44px; justify-content: center; }
   .topbar-settings span { display: none; }
   .preference-row select { width: 100%; }
+  .storage-location-row input, .storage-location-row button { min-height: 44px; }
 }
 @media (pointer: coarse) { .quality-choice { min-height: 44px; } }

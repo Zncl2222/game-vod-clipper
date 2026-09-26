@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { qualityOptions, type DownloadQualityValue } from "./DownloadQuality";
 import { exportQualityOptions, setPreferences, usePreferences, type ExportQuality } from "./preferences";
+import StorageLocations from "./StorageLocations";
 import "./preferences.css";
 
 function notificationState() {
@@ -32,7 +33,7 @@ export default function PreferencesDialog({ open, onClose }: { open: boolean; on
   return <dialog ref={dialog} id="preferences" className="editor-tools-dialog preferences-dialog" aria-labelledby={`${id}-title`}
     onCancel={event => { event.preventDefault(); onClose(); }}>
     <header className="editor-tools-heading">
-      <div><h2 id={`${id}-title`}>偏好設定</h2><p>變更會自動儲存在這個瀏覽器，套用到之後新增的匯入與匯出。</p></div>
+      <div><h2 id={`${id}-title`}>偏好設定</h2><p>變更會自動儲存，套用到之後新增的匯入與匯出。</p></div>
       <button type="button" className="icon-button" aria-label="關閉偏好設定" onClick={onClose}><X size={20} aria-hidden="true" /></button>
     </header>
     <div className="editor-tools-content preferences-content">
@@ -58,6 +59,7 @@ export default function PreferencesDialog({ open, onClose }: { open: boolean; on
         </label>
         <p className="preference-note">YouTube 網址匯入與「我的 YouTube」匯入都會使用這個畫質；在匯入視窗改選也會更新這裡。已開啟的自動匯入沿用開啟時的設定。下載不會重新編碼，選最高可用畫質即保留 YouTube 提供的原始串流。</p>
       </fieldset>
+      <StorageLocations />
       <fieldset className="preference-group">
         <legend>通知</legend>
         <label className="preference-check">

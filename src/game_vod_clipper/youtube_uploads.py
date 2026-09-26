@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .locations import LocationError, export_path, media_path, record_path
 from .web_store import Store
 from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, google_error
 
@@ -96,10 +97,14 @@ class YouTubeUploads:
             raise YouTubeError("成品的剪輯範圍無效，請重新匯出。", 422)
         if values[1] + values[2] - values[0] >= project["duration"] - 0.3:
             raise YouTubeError("這份成品涵蓋整支原片，請先剪出需要的片段再上傳。", 422)
-        expected = self.store.root / "clips" / "web" / project["id"] / f"{export_id}.mp4"
-        path = (self.store.root / job.get("output", "")).resolve()
+        root = self.store.root
+        try:
+            expected = export_path(root, job)
+        except LocationError:
+            expected = None
+        path = media_path(root, job.get("output", "")).resolve()
         if (path != expected or not path.is_file() or path.stat().st_size == 0
-                or path == (self.store.root / project.get("source", "")).resolve()):
+                or path == media_path(root, project.get("source", "")).resolve()):
             raise YouTubeError("找不到原本匯出的成品；不會改為上傳來源影片。", 422)
         try:
             receipt = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
@@ -107,7 +112,7 @@ class YouTubeUploads:
             raise YouTubeError("缺少成品驗證紀錄，請重新匯出。", 422) from None
         validation = ("human_reviewed; " if draft.get("reviewed") else "") + "duration_checked; no_automated_visual_validation"
         if (receipt.get("project_id") != project["id"] or receipt.get("draft") != draft
-                or receipt.get("output") != str(path.relative_to(self.store.root))
+                or receipt.get("output") != record_path(root, path)
                 or receipt.get("validation") != validation):
             raise YouTubeError("成品驗證紀錄不一致，請重新匯出。", 422)
         return job, path
@@ -132,7 +137,7 @@ class YouTubeUploads:
                 playlist = await self.account.owned_playlist(playlist_id, channel_id)
                 playlist_title = playlist["snippet"]["title"]
             item = {"id": key, "export_id": export_id, "project_id": job["project_id"], "channel": channel,
-                    **metadata, "path": str(path.relative_to(self.store.root)), "sha256": digest, "size": path.stat().st_size,
+                    **metadata, "path": record_path(self.store.root, path), "sha256": digest, "size": path.stat().st_size,
                     "status": "queued", "progress": 0, "error": None, "created": time.time(), "session": None,
                     "video_id": None, "offset": 0, "playlist_title": playlist_title,
                     "playlist_status": "pending" if playlist_id else None, "playlist_error": None}

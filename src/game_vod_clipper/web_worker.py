@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .media import DEFAULT_EXPORT_QUALITY, EXPORT_QUALITY, clip_video
+from .locations import Locations, media_path, project_work, record_path
 from .media_progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
 from .process import resolve_tool_command
 from .web_store import Store
@@ -47,7 +48,8 @@ def run(root: Path, job_id: str):
     store = Store(root)
     job = store.get("jobs", job_id)
     project = store.get("projects", job["project_id"])
-    work = root / "runs" / "web" / project["id"]
+    locations = Locations(root)
+    work = project_work(root, project)
     work.mkdir(parents=True, exist_ok=True)
 
     def progress(stage: str, percent: float | None, detail=None):
@@ -57,10 +59,10 @@ def run(root: Path, job_id: str):
 
     if job["kind"] == "prepare":
         progress("檢查來源", 5)
-        source = root / project["source"] if project.get("source") else None
+        source = media_path(root, project["source"]) if project.get("source") else None
         if source is None:
             reporter.emit("正在連接 YouTube，取得影片資訊", "download")
-            folder = root / "downloads" / "web" / project["id"]
+            folder = locations.project_folder("sources", project["id"])
             folder.mkdir(parents=True, exist_ok=True)
             output = command(
                 youtube_command()
@@ -106,7 +108,7 @@ def run(root: Path, job_id: str):
                 raise ValueError(
                     "無法取得影片，請確認網址可存取、影片已結束且小於 6 小時／40 GB，或改用本機原始錄影。"
                 )
-            store.patch("projects", project["id"], source=str(source.relative_to(root)))
+            store.patch("projects", project["id"], source=record_path(root, source))
         metadata = probe(source)
         reporter.emit("製作 720p 預覽影片", "preview", 0)
         preview = work / "preview.mp4"
@@ -199,9 +201,9 @@ def run(root: Path, job_id: str):
         quality = job.get("export_quality") or DEFAULT_EXPORT_QUALITY
         expected = draft["victory"] + draft["postroll"] - draft["start"]
         reporter.emit("重新編碼剪輯", "export", 0, processed_seconds=0, total_seconds=round(expected, 1))
-        output = root / "clips" / "web" / project["id"] / f"{job_id}.mp4"
+        output = locations.project_folder("exports", project["id"]) / f"{job_id}.mp4"
         clip_video(
-            root / project["source"],
+            media_path(root, project["source"]),
             output,
             start=str(draft["start"]),
             end=str(draft["victory"]),
@@ -234,7 +236,7 @@ def run(root: Path, job_id: str):
             "project_id": project["id"],
             "source": project["source"],
             "draft": draft,
-            "output": str(output.relative_to(root)),
+            "output": record_path(root, output),
             "export_quality": quality,
             "encoder": {"video": "libx264", "preset": EXPORT_QUALITY[quality][0], "crf": EXPORT_QUALITY[quality][1],
                         "audio": "aac", "audio_bitrate": "192k"},
@@ -244,7 +246,7 @@ def run(root: Path, job_id: str):
         output.with_suffix(".json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        store.patch("jobs", job_id, output=str(output.relative_to(root)))
+        store.patch("jobs", job_id, output=record_path(root, output))
     progress("完成", 100)
 
 

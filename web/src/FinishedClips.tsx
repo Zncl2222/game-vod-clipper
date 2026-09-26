@@ -108,7 +108,7 @@ export default function FinishedClips({ project, jobs, selected, onSelect, onUpl
           </div>
           <details className="finished-clip-details">
             <summary><FolderOpen size={14} aria-hidden="true" />檔案儲存位置<ChevronDown className="finished-clip-details-chevron" size={14} aria-hidden="true" /></summary>
-            <div><p>編輯會另存新成品，原檔保留。</p><code>clips/web/{project.id}/{job.id}.mp4</code></div>
+            <div><p>編輯會另存新成品，原檔保留。</p><code>{job.output_path ?? `clips/web/${project.id}/${job.id}.mp4`}</code></div>
           </details>
         </article>;
       })}

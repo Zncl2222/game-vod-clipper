@@ -12,7 +12,7 @@ The skill contains the full workflow for setup, trusted FFmpeg requirements, dow
 
 - Do not include earlier failed attempts, death screens, loading screens after death, or runback footage before the winning attempt.
 - The final clip must include the boss victory moment and 5-10 seconds after it.
-- Keep generated media under `downloads/`, `runs/`, or `clips/`.
+- Keep generated media under `downloads/`, `runs/`, or `clips/`, or the storage folders the user configured in the web app.
 - Do not upload or redistribute the user's source video.
 
 ## Fallback

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import type { NumberedCandidate, Project, State, VideoStorage } from "../src/api";
+import type { NumberedCandidate, Project, State, StorageLocations, VideoStorage } from "../src/api";
 
 async function workspace(page: Page) {
   const segments: NumberedCandidate[] = [
@@ -452,4 +452,48 @@ test("candidate editing remains usable on narrow screens and invalid ranges cann
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `../runs/candidate-manual-edit-${width}.png` });
   }
+});
+
+test("storage folders can be moved, rejected with a reason, and restored from preferences", async ({ page }) => {
+  await workspace(page);
+  const locations: StorageLocations = {
+    sources: { path: "/work/downloads", default: "/work/downloads", custom: false },
+    exports: { path: "/work/clips", default: "/work/clips", custom: false },
+    cache: { path: "/work/runs", default: "/work/runs", custom: false },
+  };
+  const updates: Record<string, string | null>[] = [];
+  await page.route("**/api/locations", route => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON() as Record<keyof StorageLocations, string | null>;
+      updates.push(body);
+      if (body.exports === "clips") return route.fulfill({ status: 422, json: { detail: "請輸入完整的資料夾路徑，例如 D:\\Videos\\BossCut。" } });
+      for (const [kind, path] of Object.entries(body) as [keyof StorageLocations, string | null][])
+        locations[kind] = { ...locations[kind], path: path ?? locations[kind].default, custom: !!path };
+    }
+    return route.fulfill({ json: locations });
+  });
+  await page.getByRole("button", { name: "偏好設定", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "偏好設定" });
+  const exports = dialog.getByRole("textbox", { name: "輸出成品", exact: true });
+  await expect(exports).toHaveValue("/work/clips");
+  const apply = dialog.locator(".storage-location").filter({ hasText: "輸出成品" }).getByRole("button", { name: "套用" });
+  await expect(apply).toBeDisabled();
+  await exports.fill("clips");
+  await apply.click();
+  await expect(dialog.getByRole("alert")).toContainText("請輸入完整的資料夾路徑");
+  await expect(exports).toHaveAttribute("aria-invalid", "true");
+  await exports.fill("/mnt/d/BossCut/成品");
+  await apply.click();
+  await expect(dialog.getByRole("status").filter({ hasText: "已更新「輸出成品」位置" })).toContainText("/mnt/d/BossCut/成品");
+  await expect(exports).toHaveAttribute("aria-invalid", "false");
+  expect(updates).toEqual([{ exports: "clips" }, { exports: "/mnt/d/BossCut/成品" }]);
+  await dialog.getByRole("group", { name: "儲存位置" }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "../runs/storage-locations.png" });
+  expect((await new AxeBuilder({ page }).include("#preferences").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await dialog.getByRole("button", { name: /還原預設/ }).click();
+  await expect(exports).toHaveValue("/work/clips");
+  await expect(dialog.getByRole("button", { name: /還原預設/ })).toHaveCount(0);
+  expect(updates.at(-1)).toEqual({ exports: null });
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 });

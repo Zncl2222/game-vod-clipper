@@ -363,6 +363,7 @@ dialog::backdrop { background: #11291db3; backdrop-filter: blur(4px); }
 .import-modal select, .import-modal input[type="url"] { min-height: 46px; font-size: 14px; padding: 12px; border-color: var(--control-border); color: var(--ink); border-radius: 8px; }
 .import-modal select:disabled { color: var(--muted); background: var(--surface-subtle); }
 .field-help { font-size: 12px; line-height: 1.9; color: var(--muted); margin: 10px 0 16px; }
+.field-help .source-folder { margin: 0 4px; font: 11px ui-monospace, monospace; color: var(--ink); overflow-wrap: anywhere; }
 .source-empty { display: flex; align-items: flex-start; gap: 12px; padding: 16px; background: var(--surface-subtle); border: 1px dashed var(--control-border); border-radius: var(--radius-md); }
 .source-empty svg { flex-shrink: 0; color: var(--accent); margin-top: 3px; }
 .source-empty strong { font-size: 13px; font-weight: 500; }

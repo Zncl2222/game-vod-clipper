@@ -34,6 +34,7 @@ from .youtube_account import YouTubeError
 from .usage import quota_change, usage_summary
 from .storage import video_storage
 from .game_profiles import KINDS, GameProfiles, ProfileError
+from .locations import LocationError, Locations, export_path, media_path, project_work, record_path
 from .youtube import DownloadQuality, youtube_command
 from .process import ToolMissingError
 
@@ -70,6 +71,15 @@ class CaptionBody(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     caption: str = Field(default="", max_length=1000)
     _text = field_validator("caption")(plain_text)
+
+
+class LocationUpdate(BaseModel):
+    """Only the locations sent are changed; null or an empty path restores the default."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    sources: str | None = Field(default=None, max_length=1000)
+    exports: str | None = Field(default=None, max_length=1000)
+    cache: str | None = Field(default=None, max_length=1000)
+    _text = field_validator("sources", "exports", "cache")(lambda value: value and plain_text(value))
 
 
 class ProfileChoice(BaseModel):
@@ -173,9 +183,10 @@ def youtube_url(value: str) -> str:
 
 
 def local_source(root: Path, source: str) -> Path:
-    path = (root / source).resolve()
-    if not any(path.is_relative_to(root / folder) for folder in ("downloads", "clips")):
-        raise ValueError("本機影片必須位於 downloads/ 或 clips/，且不能連結到目錄外。")
+    path = media_path(root, source).resolve()
+    locations = Locations(root)
+    if not any(path.is_relative_to(locations.folder(kind)) for kind in ("sources", "exports")):
+        raise ValueError("本機影片必須位於原始影片或輸出成品資料夾，且不能連結到資料夾外。")
     if not path.is_file() or path.suffix.lower() not in EXTENSIONS:
         raise ValueError("找不到支援的本機影片。")
     return path
@@ -361,6 +372,7 @@ class LocalServer(uvicorn.Server):
 def create_app(root: Path | None = None) -> FastAPI:
     root = (root or Path(os.environ.get("GAME_VOD_ROOT", "."))).resolve()
     store = Store(root)
+    locations = Locations(root)
     profiles = GameProfiles(root)
     codex = CodexConnection(root, store)
     jobs = Jobs(store, codex)
@@ -430,10 +442,13 @@ def create_app(root: Path | None = None) -> FastAPI:
         return result
 
     def public_project(project):
-        return {k: v for k, v in project.items() if k not in {"source", "url"}}
+        return {k: v for k, v in project.items() if k not in {"source", "url", "work"}}
 
     def public_job(job):
-        return {k: v for k, v in job.items() if k != "output"}
+        public = {k: v for k, v in job.items() if k != "output"}
+        if job.get("output"):
+            public["output_path"] = str(media_path(root, job["output"]))
+        return public
 
     def published(upload: dict):
         # Safe to drop the local MP4 only once YouTube holds the video and any
@@ -524,6 +539,18 @@ def create_app(root: Path | None = None) -> FastAPI:
     @app.get("/api/storage")
     def storage():
         return video_storage(root)
+
+    @app.get("/api/locations")
+    async def read_locations():
+        return locations.status()
+
+    @app.put("/api/locations")
+    async def update_locations(body: LocationUpdate):
+        changes = {kind: getattr(body, kind) for kind in body.model_fields_set}
+        try:
+            return await asyncio.to_thread(locations.update, changes)
+        except LocationError as error:
+            raise HTTPException(422, str(error)) from None
 
     @app.get("/api/codex")
     async def codex_status():
@@ -696,17 +723,20 @@ def create_app(root: Path | None = None) -> FastAPI:
 
     @app.get("/api/sources")
     async def sources():
-        result = []
-        for folder in ("downloads", "clips"):
-            for path in sorted((root / folder).rglob("*")):
+        result, seen = [], set()
+        for kind in ("sources", "exports"):
+            for path in sorted(locations.folder(kind).rglob("*")):
                 if path.suffix.lower() in EXTENSIONS and path.is_file():
                     try:
-                        resolved = local_source(root, str(path.relative_to(root)))
+                        resolved = local_source(root, str(path))
                     except ValueError:
                         continue
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
                     result.append(
                         {
-                            "path": str(resolved.relative_to(root)),
+                            "path": record_path(root, resolved),
                             "name": path.stem,
                             "size": path.stat().st_size,
                         }
@@ -719,7 +749,7 @@ def create_app(root: Path | None = None) -> FastAPI:
     async def import_project(body: ImportRequest):
         try:
             source = (
-                str(local_source(root, body.source).relative_to(root))
+                record_path(root, local_source(root, body.source))
                 if body.kind == "local"
                 else None
             )
@@ -735,11 +765,13 @@ def create_app(root: Path | None = None) -> FastAPI:
                 raise HTTPException(422, str(exc)) from exc
         if sum(j["status"] in ACTIVE and j["kind"] != "analyze" for j in store.all("jobs")) >= 8:
             raise HTTPException(429, "任務佇列已滿，請稍後再試。")
+        project_id = uuid4().hex
         project = {
-            "id": uuid4().hex,
+            "id": project_id,
             "title": Path(source).stem if source else "YouTube · " + url.split("v=")[1],
             "source": source,
             "url": url,
+            "work": record_path(root, locations.project_folder("cache", project_id)),
             "ready": False,
             "created": time.time(),
             "thumbnails": [],
@@ -854,13 +886,15 @@ def create_app(root: Path | None = None) -> FastAPI:
                or item["status"] in {"queued", "uploading", "processing", "adding_to_playlist"})
                for item in youtube.uploads.all().values()):
             raise HTTPException(409, "這個成品正在上傳 YouTube，請先暫停上傳再刪除。")
-        output = root / "clips" / "web" / project_id / f"{job_id}.mp4"
+        # Delete only an MP4 and receipt with the worker's layout, never through symlinks.
+        try:
+            output = export_path(root, job)
+        except LocationError:
+            raise HTTPException(409, "成品檔案位置異常，未刪除資料。") from None
         files = (output, output.with_suffix(".json"))
-        # Never follow stored paths or symlinks when deleting user media.
-        if (job.get("output", str(output.relative_to(root))) != str(output.relative_to(root))
-                or any(path.is_symlink() or path.resolve() != path for path in files)):
+        if any(path.is_symlink() or path.resolve() != path for path in files):
             raise HTTPException(409, "成品檔案位置異常，未刪除資料。")
-        if any(p.get("source") and (root / p["source"]).resolve() in files for p in store.all("projects")):
+        if any(p.get("source") and media_path(root, p["source"]).resolve() in files for p in store.all("projects")):
             raise HTTPException(409, "這個成品正被用作專案原片，請先移除使用它的專案。")
         size = output.stat().st_size if output.is_file() else 0
         try:
@@ -953,7 +987,7 @@ def create_app(root: Path | None = None) -> FastAPI:
             raise HTTPException(409, "此任務不需要重試。")
         if job["kind"] == "analyze":
             bounds = job["analysis"]
-            checkpoint = store.root / "runs" / "web" / job["project_id"] / "codex" / job["id"] / "checkpoint.json"
+            checkpoint = project_work(root, get("projects", job["project_id"])) / "codex" / job["id"] / "checkpoint.json"
             return public_job(await enqueue_analysis(job["project_id"], AnalysisRequest(
                 start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL), effort=bounds.get("effort"),
                 candidate_id=bounds.get("candidate_id")), uuid4().hex,
@@ -982,16 +1016,17 @@ def create_app(root: Path | None = None) -> FastAPI:
             # Join worker cancellation before removing any checkpoint or database row.
             for job in analysis_jobs:
                 await cancel(job["id"])
-            work = root / "runs" / "web"
-            artifacts = work / project_id / "codex"
+            work = project_work(root, project)
+            artifacts = work / "codex"
             if artifacts.is_symlink() or not artifacts.resolve().is_relative_to(work.resolve()):
                 raise HTTPException(409, "分析目錄位置異常，未清除資料。")
+            logs = root / "runs" / "web"
             try:
                 if artifacts.exists():
                     await asyncio.to_thread(shutil.rmtree, artifacts)
                 for job in analysis_jobs:
-                    log = work / f"{job['id']}.log"
-                    if log.parent.resolve() != work.resolve():
+                    log = logs / f"{job['id']}.log"
+                    if log.parent.resolve() != logs.resolve():
                         raise OSError("Unexpected log location")
                     log.unlink(missing_ok=True)
             except OSError as exc:
@@ -1015,7 +1050,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         allowed = {"preview.mp4"} | {t["file"] for t in project["thumbnails"]}
         if not project["ready"] or filename not in allowed:
             raise HTTPException(404, "找不到預覽。")
-        return LocalFileResponse(root / "runs" / "web" / project_id / filename,
+        return LocalFileResponse(project_work(root, project) / filename,
                                  range_limit=PREVIEW_RANGE_LIMIT)
 
     @app.get("/api/jobs/{job_id}/download")
@@ -1026,7 +1061,7 @@ def create_app(root: Path | None = None) -> FastAPI:
         title = (job.get("draft", {}).get("title") or "").strip()
         filename = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", title).strip(" .")
         return LocalFileResponse(
-            root / job["output"],
+            media_path(root, job["output"]),
             filename=f"{filename or 'boss-fight-' + job_id[:8]}.mp4",
             media_type="video/mp4",
         )

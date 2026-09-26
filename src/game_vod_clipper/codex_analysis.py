@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageOps
 from pydantic import BaseModel, ConfigDict, Field
 
 from .game_profiles import GameProfiles
+from .locations import media_path, project_work
 from .process import resolve_tool_command
 from .web_store import Store
 from .codex_runtime import CodexCallError, execute
@@ -523,10 +524,10 @@ def _run_analysis(store: Store, job: dict, project: dict, progress: AnalysisProg
     effort = bounds.get("effort", "medium")
     effort_policy = bounds.get("effort_policy", "adaptive")
     start, end = bounds["start"], bounds["end"]
-    base = store.root / "runs" / "web" / project["id"] / "codex"
+    base = project_work(store.root, project) / "codex"
     work = base / job["id"]
     work.mkdir(parents=True, exist_ok=True)
-    source = store.root / project["source"]
+    source = media_path(store.root, project["source"])
     stat = source.stat()
     identity = {"source": project["source"], "size": stat.st_size, "mtime": stat.st_mtime_ns,
                 "start": start, "end": end, "model": model, "effort": effort}
