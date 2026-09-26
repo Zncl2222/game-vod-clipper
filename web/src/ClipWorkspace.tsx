@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronRight, Crosshair, Film, ListFilter, Pencil, Play, Save, Trophy } from "lucide-react";
+import { Film, ListFilter, Pencil, Play, Save, Trophy } from "lucide-react";
 import { active, api, currentAnalysis, media, reviewCandidates, time, type Draft, type Job, type NumberedCandidate, type Project } from "./api";
 import AIWorkspaceTimeline from "./AIWorkspaceTimeline";
 import CandidateTimeline from "./CandidateTimeline";
@@ -32,12 +32,11 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
   onError: (message: string) => void; view: TimeWindow; onViewChange: (view: TimeWindow) => void;
   onResetProgress: () => Promise<void>; resetting: boolean; highlightedFields?: string[];
   candidateActions?: ReactNode;
-  /** Side-panel slots; when given, clip settings and candidate details render there instead of under the timeline. */
+  /** Side-panel slots; when given, clip actions and candidate details render there instead of under the timeline. */
   timingTarget?: HTMLElement | null; detailTarget?: HTMLElement | null;
 }) {
   const inPanel = (node: ReactNode, target: HTMLElement | null | undefined) =>
     target === undefined ? node : target ? createPortal(node, target) : null;
-  const timing = useRef<HTMLElement>(null);
   const workspace = useRef<HTMLElement>(null);
   const track = useRef<HTMLDivElement>(null);
   const drag = useRef<{ edge: "start" | "victory"; pointer: number; left: number; width: number; from: number; span: number; draft: Draft } | null>(null);
@@ -103,13 +102,25 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
       : Math.max(base.start + 1 / 30, Math.min(duration - base.postroll, at));
     onChange({ [edge]: value });
     onSeek(value);
+    return value;
+  }
+  /** Without number fields, an invalid restored range is fixed by rebuilding it at the playhead. */
+  function repairRange() {
+    const postroll = Math.min(10, Math.max(5, Math.round(Number.isFinite(draft.postroll) ? draft.postroll : 8)), Math.floor(duration - 1));
+    const latest = duration - postroll;
+    const start = Math.max(0, Math.min(current, latest - 1));
+    onChange({ start, victory: Math.min(latest, start + 60), postroll });
+    onSeek(start);
   }
   function editCandidate(candidate: NumberedCandidate) {
     if (draft.candidate_id !== candidate.id) onSelectSegment(candidate);
     setRangeError("");
-    const input = timing.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
-    input?.scrollIntoView({ block: "nearest" });
-    input?.focus({ preventScroll: true });
+    // Selecting a candidate zooms the timeline to it; its handles exist after that render.
+    requestAnimationFrame(() => {
+      const handle = workspace.current?.querySelector<HTMLElement>('.clip-range-handle[data-edge="start"]');
+      handle?.scrollIntoView({ block: "nearest" });
+      handle?.focus({ preventScroll: true });
+    });
   }
   async function saveRange() {
     if (!editingCandidate || !valid || !draft.manually_adjusted || savePending.current) return;
@@ -146,12 +157,13 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
             aria-valuetext={time(Math.max(from, Math.min(to, current)), true)} value={Math.max(from, Math.min(to, current))} onChange={e => onSeek(Number(e.target.value))} />
           {current >= from && current <= to && <span className="review-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
           {valid && (["start", "victory"] as const).filter(edge => draft[edge] >= from && draft[edge] <= to).map(edge =>
-            <button key={edge} className="clip-range-handle" data-edge={edge} role="slider"
+            <button key={edge} className={`clip-range-handle${highlightedFields.includes(edge) ? " ai-target" : ""}`} data-edge={edge} role="slider"
               aria-label={edge === "start" ? "片段開始邊界" : "勝利位置邊界"}
               aria-valuemin={edge === "start" ? 0 : draft.start + 1 / 30} aria-valuemax={edge === "start" ? draft.victory - 1 / 30 : duration - draft.postroll}
               aria-valuenow={draft[edge]} aria-valuetext={time(draft[edge], true)}
-              aria-describedby={edge === "victory" ? "clip-end-explanation" : undefined}
-              style={{ left: `${(draft[edge] - from) / span * 100}%` }} title={edge === "start" ? "調整開始位置 · 方向鍵微調" : "調整勝利位置 · 收尾秒數保持不變"}
+              style={{ left: `${(draft[edge] - from) / span * 100}%` }}
+              title={edge === "start" ? "調整開始位置 · 方向鍵逐格微調，Shift 為 1 秒 · 按 I 設為播放位置"
+                : "調整勝利位置，收尾秒數保持不變 · 方向鍵逐格微調，Shift 為 1 秒 · 按 O 設為播放位置"}
               onPointerDown={e => {
                 if (!e.isPrimary || e.button !== 0 || drag.current) return;
                 e.preventDefault(); e.currentTarget.focus({ preventScroll: true });
@@ -169,7 +181,9 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
               onKeyDown={e => {
                 if (!["ArrowLeft", "ArrowRight"].includes(e.key)) return;
                 e.preventDefault(); e.stopPropagation();
-                adjust(edge, draft[edge] + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : 1 / 30), draft);
+                const value = adjust(edge, draft[edge] + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : 1 / 30), draft);
+                // Follow the handle so it, and keyboard focus, stay on the timeline.
+                if (value < from || value > to) onViewChange(timelineWindow(value - span / 2, span, duration));
               }}><span className="trim-handle-grip" /></button>)}
           {valid && draft.victory >= from && draft.victory <= to && <span className="clip-victory-guide" aria-hidden="true" style={{ left: `${timelinePosition(draft.victory, view)}%` }} />}
           {valid && ([{ kind: "start", at: draft.start, label: "開始" }, { kind: "victory", at: draft.victory, label: "勝利" }, { kind: "end", at: finish, label: "結束" }])
@@ -182,27 +196,12 @@ export default function ClipWorkspace({ project, jobs, draft, selected, onSelect
     </div>
     <div id="source-selection-details" className={valid ? "sr-only" : "inline-error"} role={!valid ? "status" : undefined}>
       {valid ? <>目前剪輯 {time(draft.start, true)} → {time(finish, true)} · 片長 {time(finish - draft.start, true)} · 含收尾 {draft.postroll} 秒</>
-        : "目前區間無效。請讓開始早於勝利，並保留原片內的 5–10 秒收尾。"}
+        : <>目前區間無效。請讓開始早於勝利，並保留原片內的 5–10 秒收尾。
+          <button type="button" className="text-button" onClick={repairRange}>從播放位置重設區間</button></>}
     </div>
     {valid && !selectionInView && <p className="workbench-outside">目前剪輯區間在可視範圍外
       <button className="text-button" onClick={() => onViewChange(timelineWindow(draft.start - 5, finish - draft.start + 10, duration))}>回到目前剪輯</button></p>}
-    {inPanel(<><section className="workbench-timing" aria-label="剪輯設定" ref={timing}>
-      <h2 className="inspector-section-title">剪輯時間</h2>
-      {(["start", "victory"] as const).map(edge => <div className="workbench-time-field" key={edge}>
-        <label htmlFor={edge}>{edge === "start" ? "開始時間" : "勝利時間"}<span>{time(draft[edge], true)}</span></label>
-        <div><input id={edge} className={highlightedFields.includes(edge) ? "ai-target" : undefined} type="number" min="0" max={duration} step="0.001"
-          aria-invalid={edge === "start" ? !Number.isFinite(draft.start) || draft.start < 0 || draft.start >= draft.victory : !Number.isFinite(draft.victory) || draft.victory <= draft.start || finish > duration}
-          aria-describedby={!valid ? "source-selection-details" : undefined} value={draft[edge]} onChange={e => onChange({ [edge]: Number(e.target.value) })} />
-          <span>秒</span><button type="button" aria-label={edge === "start" ? "跳到開始" : "跳到勝利"} onClick={() => onSeek(draft[edge])}><ChevronRight size={14} /></button></div>
-        <button type="button" className="set-to-playhead" title={`設為目前播放位置 · 快捷鍵 ${edge === "start" ? "I" : "O"}`}
-          aria-label={edge === "start" ? "開始設為目前播放位置" : "勝利設為目前播放位置"}
-          onClick={() => onChange({ [edge]: Math.round(current * 1000) / 1000 })}>
-          <Crosshair size={13} aria-hidden="true" />設為目前<kbd>{edge === "start" ? "I" : "O"}</kbd></button>
-      </div>)}
-      <div className="workbench-postroll"><label htmlFor="postroll">勝利後收尾 <output>{draft.postroll} 秒</output></label>
-        <input id="postroll" className={highlightedFields.includes("postroll") ? "ai-target" : undefined} type="range" min="5" max="10" step="1"
-          aria-valuetext={`${draft.postroll} 秒`} aria-describedby="clip-end-explanation" value={draft.postroll} onChange={e => onChange({ postroll: Number(e.target.value) })} />
-        <span>5–10 秒</span><p id="clip-end-explanation">結束＝勝利＋收尾 {draft.postroll} 秒</p></div>
+    {inPanel(<><section className="workbench-timing" aria-label="剪輯設定">
       <div className="workbench-preview-actions">
         {!editingCandidate && draft.manually_adjusted && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
         <button type="button" disabled={!valid} onClick={() => onPlay(draft.start, finish)}><Play size={14} />預覽這段 · {time(Math.max(0, finish - draft.start))}</button>

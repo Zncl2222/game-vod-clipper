@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import type { NumberedCandidate, Project, State, StorageLocations, VideoStorage } from "../src/api";
+import { edgeHandle, expectEdge, setEdge } from "./timing";
 
 async function workspace(page: Page) {
   const segments: NumberedCandidate[] = [
@@ -82,8 +83,8 @@ async function workspace(page: Page) {
 test("selected candidate can be rechecked with its current range and see a separate AI finding", async ({ page }) => {
   const { controls, state, publish } = await workspace(page);
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await page.getByLabel("開始時間").fill("22");
-  await page.getByLabel("勝利時間").fill("65");
+  await setEdge(page, "start", 22);
+  await setEdge(page, "victory", 65);
   await page.getByRole("button", { name: "請 AI 複判片段 #1" }).click();
   await expect.poll(() => controls.rechecks.length).toBe(1);
   expect(controls.rechecks[0]).toMatchObject({ start: 22, end: 73, candidate_id: "scan:one", model: "test-model", analysis_generation: 0 });
@@ -111,8 +112,8 @@ test("selected candidate can be rechecked with its current range and see a separ
   state.jobs[0].result = { ...state.jobs[0].result!, status: "candidate", start: 80, victory: 130, postroll: 8 };
   await publish();
   await expect(result).toContainText("找到可能成功挑戰");
-  await expect(page.getByLabel("開始時間")).toHaveValue("22");
-  await expect(page.getByLabel("勝利時間")).toHaveValue("65");
+  await expectEdge(page, "start", 22);
+  await expectEdge(page, "victory", 65);
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByRole("button", { name: "請 AI 複判片段 #1" })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -121,8 +122,8 @@ test("selected candidate can be rechecked with its current range and see a separ
 test("export needs no keep tag or checkbox and only successful exports leave a persistent mark", async ({ page }) => {
   const { controls, state, publish } = await workspace(page);
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await page.getByLabel("開始時間").fill("22");
-  await page.getByLabel("勝利時間").fill("65");
+  await setEdge(page, "start", 22);
+  await setEdge(page, "victory", 65);
   await expect(page.locator(".clip-inspector input[type=checkbox]")).toHaveCount(0);
   await expect(page.getByLabel("片段 #1 核對標籤")).toHaveValue("pending");
   const exportButton = page.getByRole("button", { name: "匯出 MP4", exact: true });
@@ -146,10 +147,10 @@ test("export needs no keep tag or checkbox and only successful exports leave a p
   await expect(page.getByRole("list", { name: "剪輯流程" }).locator('[aria-current="step"]')).toContainText("匯出成品");
   await page.getByRole("group", { name: "片段 #1 詳情", exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: "../runs/candidate-exported-desktop.png" });
-  await page.getByLabel("開始時間").fill("23");
+  await setEdge(page, "start", 23);
   await expect(page.getByText("此片段曾匯出，目前區間有修改", { exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("開始時間")).toHaveValue("23");
+  await expectEdge(page, "start", 23);
   await expect(page.getByText("此片段曾匯出，目前區間有修改", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: /時間軸片段 #1 .*已匯出/ }).click();
   await expect(page.getByRole("group", { name: "片段 #1 詳情", exact: true }).getByText("已匯出", { exact: true })).toBeVisible();
@@ -217,7 +218,7 @@ test("a newly submitted export replaces the previous completion before the event
   await publish();
   await expect(page.getByRole("region", { name: "匯出狀態" })).toContainText("匯出完成");
 
-  await page.getByLabel("開始時間").fill("12");
+  await setEdge(page, "start", 12);
   await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
   await expect.poll(() => controls.exports).toBe(2);
   const panel = page.getByRole("region", { name: "匯出狀態" });
@@ -250,7 +251,7 @@ test("preferences choose the export and download quality and can silence notific
 
   await page.reload();
   await expect(page.locator("#export-help")).toContainText("MP4 · 平衡");
-  await page.getByLabel("開始時間").fill("12");
+  await setEdge(page, "start", 12);
   await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
   await expect.poll(() => controls.exportQualities).toEqual(["high", "balanced"]);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bosscut:preferences")!)))
@@ -284,22 +285,22 @@ test("single-click candidate editing preserves each range and previews exactly w
   const target = page.getByRole("group", { name: "目前編輯與匯出區間", exact: true });
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await expect(target).toContainText("正在編輯 #1");
-  await expect(page.getByLabel("開始時間")).toHaveValue("20");
+  await expectEdge(page, "start", 20);
   await target.getByRole("button", { name: "調整時間" }).click();
-  await expect(page.getByLabel("開始時間")).toBeFocused();
-  await page.getByLabel("開始時間").fill("22");
-  await page.getByLabel("勝利時間").fill("65");
+  await expect(edgeHandle(page, "start")).toBeFocused();
+  await setEdge(page, "start", 22);
+  await setEdge(page, "victory", 65);
   await expect(target).toContainText("00:00:22.000 → 00:01:13.000");
   await page.getByRole("button", { name: "下一段", exact: true }).click();
   await expect(target).toContainText("正在編輯 #2");
-  await page.getByLabel("開始時間").fill("82");
+  await setEdge(page, "start", 82);
   await page.getByRole("button", { name: "上一段", exact: true }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("22");
-  await expect(page.getByLabel("勝利時間")).toHaveValue("65");
+  await expectEdge(page, "start", 22);
+  await expectEdge(page, "victory", 65);
   // Clicking the same annotation or its shortcut must not reset an edited range.
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await page.getByRole("button", { name: "編輯片段 #1 區間" }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("22");
+  await expectEdge(page, "start", 22);
   await page.getByRole("button", { name: "預覽 #1", exact: true }).click();
   await expect(page.locator(".video-wrap video")).toHaveAttribute("data-played", "22");
   await page.locator(".video-wrap video").evaluate((video: HTMLVideoElement) => {
@@ -309,7 +310,7 @@ test("single-click candidate editing preserves each range and previews exactly w
   await page.reload();
   await expect(target).toContainText("正在編輯 #1");
   await page.getByRole("button", { name: "下一段", exact: true }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("82");
+  await expectEdge(page, "start", 82);
   await page.route("**/api/codex/chat", route => route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({
     type: "reply", project_id: "manual-project", reply: "查看第一段", action: { kind: "select_candidate", candidate_id: "scan:one",
       start: null, victory: null, postroll: null, seconds: null } }) + "\n" }));
@@ -344,7 +345,7 @@ test("late AI edits are rejected after a candidate round trip", async ({ page })
   await page.getByRole("button", { name: "上一段", exact: true }).click();
   release();
   await expect(page.locator(".chat-operation")).toContainText("編輯對象已切換");
-  await expect(page.getByLabel("開始時間")).toHaveValue("20");
+  await expectEdge(page, "start", 20);
 });
 
 test("local capacity shows real totals, keeps stale values on failure and can recover", async ({ page }) => {
@@ -376,18 +377,18 @@ test("local capacity shows real totals, keeps stale values on failure and can re
 test("a candidate with no victory time can be edited, marked, saved and reopened", async ({ page }) => {
   const { project, controls } = await workspace(page);
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("20");
+  await expectEdge(page, "start", 20);
   const edit = page.getByRole("button", { name: "編輯片段 #1 區間" });
   await edit.scrollIntoViewIfNeeded();
   await page.screenshot({ path: "../runs/candidate-edit-button.png" });
   await edit.click();
-  await expect(page.getByLabel("開始時間")).toBeFocused();
-  await expect(page.getByLabel("開始時間")).toHaveValue("20");
-  await expect(page.getByLabel("勝利時間")).toHaveValue("62");
+  await expect(edgeHandle(page, "start")).toBeFocused();
+  await expectEdge(page, "start", 20);
+  await expectEdge(page, "victory", 62);
   await expect(page.locator(".manual-adjustment-badge")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "儲存區間", exact: true })).toBeDisabled();
-  await page.getByLabel("開始時間").fill("22");
-  await page.getByLabel("勝利時間").fill("65");
+  await setEdge(page, "start", 22);
+  await setEdge(page, "victory", 65);
   await expect(page.getByRole("group", { name: "正在編輯片段 #1" })).toContainText("已手動調整");
   await page.getByRole("button", { name: "儲存區間", exact: true }).click();
   await expect(page.getByRole("button", { name: "區間已儲存", exact: true })).toBeDisabled();
@@ -397,16 +398,16 @@ test("a candidate with no victory time can be edited, marked, saved and reopened
   await page.screenshot({ path: "../runs/candidate-manual-edit-desktop.png" });
   expect((await new AxeBuilder({ page }).include(".clip-workspace").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   await page.reload();
-  await page.getByLabel("開始時間").fill("23");
+  await setEdge(page, "start", 23);
   await page.getByRole("button", { name: "儲存區間", exact: true }).click();
   await expect(page.getByRole("button", { name: "區間已儲存", exact: true })).toBeDisabled();
   expect(controls.saves).toBe(2);
   await page.getByRole("button", { name: /時間軸片段 #1 .*已手動調整/ }).click();
   await expect(page.getByRole("group", { name: "片段 #1 詳情" })).toContainText("AI 原始區間 00:00:20.000–00:01:10.000");
   await page.getByRole("button", { name: "編輯片段 #1 區間" }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("23");
-  await expect(page.getByLabel("勝利時間")).toHaveValue("65");
-  await page.getByRole("slider", { name: "片段開始邊界", exact: true }).focus();
+  await expectEdge(page, "start", 23);
+  await expectEdge(page, "victory", 65);
+  await edgeHandle(page, "start").focus();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByRole("button", { name: "儲存區間", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "匯出 MP4", exact: true })).toBeEnabled();
@@ -416,11 +417,11 @@ test("failed range saves retain edits and a late response never changes another 
   const { controls } = await workspace(page);
   await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
   await page.getByRole("button", { name: "編輯片段 #1 區間" }).click();
-  await page.getByLabel("開始時間").fill("23");
+  await setEdge(page, "start", 23);
   controls.failSave = true;
   await page.getByRole("button", { name: "儲存區間", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("其他視窗調整");
-  await expect(page.getByLabel("開始時間")).toHaveValue("23");
+  await expectEdge(page, "start", 23);
   controls.failSave = false;
   let release!: () => void;
   controls.gate = new Promise<void>(resolve => { release = resolve; });
@@ -429,25 +430,25 @@ test("failed range saves retain edits and a late response never changes another 
   await requested;
   await page.getByRole("button", { name: "下一段", exact: true }).click();
   await page.getByRole("button", { name: "編輯片段 #2 區間" }).click();
-  await page.getByLabel("開始時間").fill("82");
+  await setEdge(page, "start", 82);
   release();
   await expect(page.getByRole("button", { name: "儲存區間", exact: true })).toBeEnabled();
-  await expect(page.getByLabel("開始時間")).toHaveValue("82");
-  await expect(page.getByLabel("勝利時間")).toHaveValue("130");
+  await expectEdge(page, "start", 82);
+  await expectEdge(page, "victory", 130);
   expect(controls.saves).toBe(2);
 });
 
-test("candidate editing remains usable on narrow screens and invalid ranges cannot be saved", async ({ page }) => {
+test("candidate editing remains usable on narrow screens and the start cannot pass the victory", async ({ page }) => {
   await workspace(page);
   await page.getByRole("button", { name: "關閉 AI 對話", exact: true }).click();
   for (const width of [375, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: /時間軸片段 #1 / }).click();
     await page.getByRole("button", { name: "編輯片段 #1 區間" }).click();
-    await page.getByLabel("開始時間").fill("75");
-    await expect(page.getByLabel("開始時間")).toHaveAttribute("aria-invalid", "true");
-    await expect(page.getByRole("button", { name: "儲存區間", exact: true })).toBeDisabled();
-    await page.getByLabel("開始時間").fill("25");
+    await setEdge(page, "start", 75);
+    expect(Number(await edgeHandle(page, "start").getAttribute("aria-valuenow"))).toBeLessThan(62);
+    await expectEdge(page, "victory", 62);
+    await setEdge(page, "start", 25);
     await expect(page.getByRole("button", { name: "儲存區間", exact: true })).toBeEnabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: `../runs/candidate-manual-edit-${width}.png` });

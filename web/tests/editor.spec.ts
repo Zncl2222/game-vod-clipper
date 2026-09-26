@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { expectEdge, postroll, setEdge } from "./timing";
 
 test("import, preview, trim, review, export, restore and mobile layout", async ({
   page,
@@ -23,16 +24,17 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.readyState),
     )
     .toBeGreaterThanOrEqual(1);
-  await page.getByLabel("開始時間").fill("1.25");
+  await expect(page.getByLabel("開始時間")).toHaveCount(0);
+  await setEdge(page, "start", 1);
   await page.getByLabel("片段名稱").fill("測試 Boss・完整勝利");
-  await page.getByLabel("勝利時間").fill("8");
-  await page.getByLabel("勝利後收尾").fill("5");
+  await expectEdge(page, "victory", 8);
+  await postroll(page).selectOption("5");
   await page.getByRole("button", { name: /預覽這段/ }).click();
   await expect
     .poll(() =>
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.currentTime),
     )
-    .toBeGreaterThan(1.25);
+    .toBeGreaterThan(1);
   const player = page.locator(".preview-panel .video-wrap video");
   await expect(player).not.toHaveAttribute("controls");
   await page.getByRole("button", { name: "暫停原片", exact: true }).click();
@@ -56,7 +58,7 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   expect(await player.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
   await page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.pause());
   // Timing edits can be exported directly without an extra confirmation step.
-  await page.getByLabel("開始時間").fill("1.5");
+  await setEdge(page, "start", 2);
   await page.getByRole("button", { name: "匯出 MP4" }).click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeAttached({
     timeout: 30_000,
@@ -71,18 +73,18 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await download.saveAs(path.resolve("../runs/web-poc-browser-export.mp4"));
   expect(await download.failure()).toBeNull();
   const metadata = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-show_format", "-of", "json", path.resolve("../runs/web-poc-browser-export.mp4")], { encoding: "utf8" }));
-  expect(Number(metadata.format.duration)).toBeCloseTo(11.5, 0);
+  expect(Number(metadata.format.duration)).toBeCloseTo(11, 0);
   await page.getByRole("button", { name: "關閉專案工具", exact: true }).click();
   await page.getByRole("tab", { name: "成品 1" }).click();
   await page.getByRole("button", { name: "編輯成品 #1", exact: true }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
+  await expectEdge(page, "start", 2);
   await expect(player).toHaveAttribute("data-instance", "original-playing-video");
   await expect(page.getByLabel("片段名稱")).toHaveValue("測試 Boss・完整勝利");
-  await page.getByLabel("開始時間").fill("1.75");
+  await setEdge(page, "start", 3);
   await page.getByRole("button", { name: "回到原片", exact: true }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
+  await expectEdge(page, "start", 2);
   await page.reload();
-  await expect(page.getByLabel("開始時間")).toHaveValue("1.5");
+  await expectEdge(page, "start", 2);
   await page.getByRole("button", { name: "專案工具", exact: true }).click();
   await page.locator(".jobs-details > summary").click();
   await expect(page.locator(".jobs-panel").getByRole("link", { name: "下載 MP4", includeHidden: true })).toBeVisible();
@@ -109,20 +111,20 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     buffer: Buffer.from(
       JSON.stringify({
         project_id: projectId,
-        start: 2,
+        start: 4,
         victory: 8,
         postroll: 5,
       }),
     ),
   });
-  await expect(page.getByLabel("開始時間")).toHaveValue("2");
+  await expectEdge(page, "start", 4);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByRole("button", { name: "儲存草稿" }).click();
   await expect(
     page.getByRole("dialog", { name: "專案工具", exact: true }).getByText("草稿已儲存", { exact: false }),
   ).toBeVisible();
   await page.getByRole("button", { name: "關閉專案工具", exact: true }).click();
-  await page.getByRole("button", { name: "跳到開始", exact: true }).click();
+  await page.getByRole("button", { name: /預覽這段/ }).click();
   await expect
     .poll(() =>
       page.locator(".preview-panel .video-wrap video").evaluate((v: HTMLVideoElement) => v.readyState),
@@ -172,10 +174,10 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
     }),
   );
   await page.reload();
-  await expect(page.getByLabel("開始時間")).toHaveValue("2");
+  await expectEdge(page, "start", 4);
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();
   await page.getByRole("button", { name: /套用候選/ }).click();
-  await expect(page.getByLabel("開始時間")).toHaveValue("3");
+  await expectEdge(page, "start", 3);
   await page.getByRole("tab", { name: "成品 1" }).click();
   const exportedJob = analysisState.jobs.find((job: { kind: string }) => job.kind === "export");
   await page.getByRole("button", { name: "刪除成品 #1", exact: true }).click();

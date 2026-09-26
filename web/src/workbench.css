@@ -106,18 +106,6 @@
 .clip-name-field label { display: flex; flex-direction: column; gap: 2px; color: var(--ink); font-size: 13px; font-weight: 500; }
 .clip-name-field label span { color: var(--muted); font-size: 12px; }
 .clip-name-field input { width: 100%; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--ink); font-size: 14px; }
-.workbench-time-field label { display: flex; align-items: baseline; gap: 10px; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-.workbench-time-field label > span { font: 11px ui-monospace, monospace; color: var(--ink); }
-.workbench-time-field > div { display: flex; align-items: center; min-width: 0; height: 30px; border: 1px solid var(--control-border); border-radius: 6px; background: var(--surface); }
-.workbench-time-field input { width: 85px; min-width: 0; padding: 4px 6px; border: 0; background: none; font: 12px ui-monospace, monospace; }
-.workbench-time-field > div > span { font-size: 11px; color: var(--muted); }
-.workbench-time-field button { width: 26px; height: 28px; display: grid; place-items: center; color: var(--accent); }
-.workbench-postroll { display: grid; grid-template-columns: minmax(80px, 1fr) auto; gap: 3px 8px; align-items: center; max-width: 180px; }
-.workbench-postroll label { grid-column: 1 / -1; display: flex; gap: 12px; justify-content: space-between; font-size: 11px; color: var(--muted); }
-.workbench-postroll output { color: var(--ink); }
-.workbench-postroll input { width: 90px; min-width: 0; height: 28px; accent-color: var(--accent); margin: 0; padding: 0; }
-.workbench-postroll > span { font-size: 10px; color: var(--muted); }
-.workbench-postroll > p { grid-column: 1 / -1; margin: 0; font-size: 11px; color: var(--ink); white-space: nowrap; }
 .workbench-preview-actions { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
 .workbench-preview-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; color: var(--accent); font-size: 12px; }
 .workbench-preview-actions > span { color: var(--muted); font: 11px ui-monospace, monospace; }
@@ -184,11 +172,7 @@
   .workbench-lane-label strong { white-space: normal; flex-wrap: wrap; }
   .workbench-lane-label { gap: 0; }
   .workbench-lane-label svg { display: none; }
-  .workbench-timing { padding-left: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .workbench-time-field label { font-size: 11px; gap: 4px; flex-wrap: wrap; }
-  .workbench-time-field label > span { font-size: 10px; }
-  .workbench-time-field input { flex: 1; width: 70px; }
-  .workbench-time-field > div { height: 36px; }
+  .workbench-timing { padding-left: 0; }
   .workbench-preview-actions button { font-size: 11px; }
   .workbench-preview-actions > span { font-size: 10px; }
   .unified-workbench .candidate-legend { font-size: 10px; gap: 6px; }
@@ -198,7 +182,6 @@
   .has-editor .frame-controls { gap: 2px; }
   .has-editor .frame-controls .mono { font-size: 10px; }
   .has-editor .frame-controls .mono em { display: none; }
-  .has-editor .transport .precision-button { margin: 0 auto; padding-inline: 2px; }
   .has-editor .transport .icon-button { min-width: 26px; min-height: 30px; }
 }
 @container (max-width: 780px) {

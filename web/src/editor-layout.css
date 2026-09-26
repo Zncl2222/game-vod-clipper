@@ -48,8 +48,6 @@
     .app.has-editor .stage-layout > .video-wrap { grid-area: video; width: auto; height: auto; min-height: 0; aspect-ratio: auto; }
     .stage-layout > .transport { grid-area: transport; min-width: 0; }
     .clip-inspector .inspector-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; }
-    /* Timing fields are always visible beside the player, so the shortcut button is redundant. */
-    .has-editor .transport .precision-button { display: none; }
     .stage-layout > .inspector-resize-handle { display: flex; }
   }
 }
@@ -69,31 +67,20 @@
 .clip-inspector { display: flex; flex-direction: column; min-width: 0; background: var(--surface); }
 .inspector-body { display: flex; flex-direction: column; gap: 16px; padding: 14px 16px 16px; }
 .inspector-slot:empty { display: none; }
-.inspector-section-title { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--muted); }
 
 .clip-inspector .active-edit-target { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; }
 .clip-inspector .active-edit-target strong { grid-column: 1; font-size: 15px; }
 .clip-inspector .active-edit-target > span { grid-column: 1 / -1; font: 12px ui-monospace, monospace; color: var(--ink); }
 .clip-inspector .active-edit-target .draft-duration { grid-column: 1 / -1; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .clip-inspector .active-edit-target button { grid-column: 2; grid-row: 1; }
+.clip-inspector .postroll-choice { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.clip-inspector .postroll-choice select { min-height: 32px; padding: 2px 8px; font-size: 12px; color: var(--ink); border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
 
 .clip-inspector .clip-name-field { grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 0; }
 .clip-inspector .clip-name-field label { flex-direction: row; align-items: baseline; gap: 8px; font-size: 12px; }
 .clip-inspector .clip-name-field input { min-height: 40px; }
 
 .clip-inspector .workbench-timing { display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 0; }
-.clip-inspector .workbench-time-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 8px; }
-.clip-inspector .workbench-time-field label { grid-column: 1 / -1; justify-content: space-between; margin: 0; font-size: 12px; }
-.clip-inspector .workbench-time-field > div { height: 36px; }
-.clip-inspector .workbench-time-field input { flex: 1; width: auto; font-size: 13px; }
-.workbench-time-field > .set-to-playhead { display: inline-flex; width: auto; align-items: center; gap: 5px; height: 36px; padding: 0 10px; font-size: 12px; white-space: nowrap;
-  color: var(--accent); background: var(--surface); border: 1px solid var(--control-border); border-radius: var(--radius-sm); }
-.set-to-playhead:hover { background: var(--surface-active); border-color: var(--accent); }
-.set-to-playhead kbd { padding: 0 4px; font: 10px ui-monospace, monospace; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; }
-.clip-inspector .workbench-postroll { max-width: none; grid-template-columns: minmax(0, 1fr) auto; }
-.clip-inspector .workbench-postroll label { font-size: 12px; }
-.clip-inspector .workbench-postroll input { width: 100%; }
-.clip-inspector .workbench-postroll > p { white-space: normal; color: var(--muted); }
 .clip-inspector .workbench-preview-actions { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin: 0; }
 .clip-inspector .workbench-preview-actions button { min-height: 36px; padding: 0 12px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
 .clip-inspector .workbench-preview-actions button:hover:not(:disabled) { background: var(--surface-active); }
@@ -132,9 +119,9 @@
 @media (max-width: 640px) {
   .inspector-body { padding: 12px; }
   .inspector-export { padding: 12px; }
-  .set-to-playhead { height: 44px; }
+  .clip-inspector .postroll-choice select { min-height: 44px; }
 }
-@media (pointer: coarse) { .set-to-playhead { min-height: 44px; } }
+@media (pointer: coarse) { .clip-inspector .postroll-choice select { min-height: 44px; } }
 
 /* Short but wide windows stack the panel under the timeline; use columns instead of 1000px-wide fields. */
 @media (min-width: 641px) and (max-height: 700px) {

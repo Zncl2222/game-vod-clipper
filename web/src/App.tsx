@@ -559,7 +559,7 @@ function Editor({
   useImperativeHandle(chatRef, () => ({
     loadClip: id => {
       switchWorkspace(id);
-      // Stacked layouts put the timing fields below the timeline; keep the player header in view there.
+      // Stacked layouts put the clip actions below the timeline; keep the player header in view there.
       const stage = previewPanel.current?.querySelector(".preview-stage");
       if (stage && getComputedStyle(stage).display !== "contents") focusTiming();
     },
@@ -686,38 +686,58 @@ function Editor({
       ?.play()
       .catch(() => onError("無法播放預覽，請確認瀏覽器支援此影片。"));
   }
-  useEffect(() => {
-    function keydown(e: KeyboardEvent) {
-      if (
-        (e.target as HTMLElement).closest(
-          "input, textarea, select, button, a, video, [contenteditable], [role=slider], [role=separator], [role=group], dialog",
-        ) ||
-        document.querySelector("dialog[open]") ||
-        e.metaKey ||
-        e.ctrlKey ||
-        e.altKey
-      )
-        return;
-      if (e.key.toLowerCase() === "i") {
-        change({ start: current });
-        e.preventDefault();
-      }
-      if (e.key.toLowerCase() === "o") {
-        change({ victory: current });
-        e.preventDefault();
-      }
-      if (e.key === "ArrowLeft") {
-        seek(current - 1 / 30);
-        e.preventDefault();
-      }
-      if (e.key === "ArrowRight") {
-        seek(current + 1 / 30);
-        e.preventDefault();
-      }
+  // Assigned during render so a shortcut always sees the playhead and range currently on screen.
+  const shortcuts = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  shortcuts.current = function keydown(e: KeyboardEvent) {
+    if (
+      (e.target as HTMLElement).closest(
+        "input, textarea, select, button, a, video, [contenteditable], [role=slider], [role=separator], [role=group], dialog",
+      ) ||
+      document.querySelector("dialog[open]") ||
+      e.metaKey ||
+      e.ctrlKey ||
+      e.altKey
+    )
+      return;
+    if (e.key.toLowerCase() === "i") {
+      mark("start", current);
+      e.preventDefault();
     }
+    if (e.key.toLowerCase() === "o") {
+      mark("victory", current);
+      e.preventDefault();
+    }
+    if (e.key === "ArrowLeft") {
+      seek(current - 1 / 30);
+      e.preventDefault();
+    }
+    if (e.key === "ArrowRight") {
+      seek(current + 1 / 30);
+      e.preventDefault();
+    }
+  };
+  useEffect(() => {
+    const keydown = (e: KeyboardEvent) => shortcuts.current(e);
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [current, duration]);
+  }, []);
+  /** Put one edge at the playhead; if it passes the other edge, that edge moves along to keep the range valid. */
+  function mark(edge: "start" | "victory", at: number) {
+    const latest = duration - draft.postroll;
+    const length = Math.max(1, draft.victory - draft.start);
+    let start: number, victory: number;
+    if (edge === "start") {
+      start = Math.max(0, Math.min(at, latest - 1 / 30));
+      victory = draft.victory > start ? Math.min(draft.victory, latest) : Math.min(latest, start + length);
+    } else {
+      victory = Math.max(1 / 30, Math.min(at, latest));
+      start = draft.start < victory ? Math.max(0, draft.start) : Math.max(0, victory - length);
+    }
+    change({ start, victory });
+    // Keep both trim handles on the timeline after marking outside the visible window.
+    if ([start, victory].some(value => value < timelineView.from || value > timelineView.to))
+      setTimelineView(timelineWindow(start - 5, victory + draft.postroll - start + 10, duration));
+  }
   async function save(exportNow = false) {
     if (pendingSave.current) return;
     if (exportNow && !valid) { onError("請先修正剪輯時間範圍，再匯出。"); return; }
@@ -864,10 +884,20 @@ function Editor({
     seek(seconds ?? next.start);
     return next;
   }
-  function focusTiming() {
-    const input = previewPanel.current?.querySelector<HTMLInputElement>(".workbench-time-field input");
-    input?.scrollIntoView({ block: "nearest" });
-    input?.focus({ preventScroll: true });
+  /** Focus the start handle; runs after a workspace switch renders, bringing the range into view if needed. */
+  function focusTiming(retry = true) {
+    requestAnimationFrame(() => {
+      const handle = previewPanel.current?.querySelector<HTMLElement>('.clip-range-handle[data-edge="start"]');
+      if (handle) {
+        handle.scrollIntoView({ block: "nearest" });
+        handle.focus({ preventScroll: true });
+        return;
+      }
+      const current = workingDraft.current;
+      if (!retry || !validSelection(current, duration)) return;
+      setTimelineView(timelineWindow(current.start - 5, current.victory + current.postroll - current.start + 10, duration));
+      focusTiming(false);
+    });
   }
   useEffect(() => {
     const candidate = candidates(project, jobs)[0];
@@ -907,8 +937,16 @@ function Editor({
                   <strong>{editingExport ? `正在編輯成品 #${finished.findIndex(job => job.id === editingExport.id) + 1}`
                     : draftCandidate ? `正在編輯 #${draftCandidate.number}` : "目前剪輯"}</strong>
                   <span>{time(draft.start, true)} → {time(end, true)}</span>
-                  <small className="draft-duration">片長 {time(Math.max(0, end - draft.start))} · 收尾 {draft.postroll} 秒</small>
-                  <button type="button" onClick={focusTiming}>調整時間</button>
+                  <small className="draft-duration">片長 {time(Math.max(0, end - draft.start))}</small>
+                  <div className="postroll-choice">
+                    <label htmlFor="postroll">勝利後收尾</label>
+                    <select id="postroll" className={aiFeedback?.fields.includes("postroll") ? "ai-target" : undefined}
+                      value={draft.postroll} onChange={event => change({ postroll: Number(event.target.value) })}>
+                      {[...new Set([5, 6, 7, 8, 9, 10, draft.postroll])].sort((a, b) => a - b).map(seconds =>
+                        <option key={seconds} value={seconds} disabled={seconds !== draft.postroll && draft.victory + seconds > duration}>{seconds} 秒</option>)}
+                    </select>
+                  </div>
+                  <button type="button" onClick={() => focusTiming()}>調整時間</button>
                 </div>
                 <div className="clip-name-field">
                   <label htmlFor="clip-title">片段名稱 <span>選填</span></label>
@@ -1017,9 +1055,6 @@ function Editor({
                 <ArrowRight size={16} />
               </button>
             </div>
-            {!previewExpanded && <button className="text-button precision-button" onClick={() => {
-              previewPanel.current?.querySelector<HTMLInputElement>("#start")?.focus();
-            }}><SlidersHorizontal size={14} />精確調整</button>}
             <button className="icon-button" aria-label={muted ? "開啟原片聲音" : "將原片靜音"} onClick={() => setMuted(value => !value)}>
               {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
             </button>

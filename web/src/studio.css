@@ -190,7 +190,6 @@ footer { color: var(--muted); font-size: 12px; padding-block: 24px; line-height:
 .preview-badge { background: #182b24d9; color: #d8e7cf; font-size: 10px; letter-spacing: 1px; border: 1px solid #5a6c58; border-radius: 4px; }
 .preview-panel .transport { min-height: 40px; height: 40px; padding: 4px 14px; background: var(--surface); }
 .transport select { min-height: 28px; color: var(--ink); border-color: var(--control-border); font-size: 12px; }
-.precision-button { margin-left: auto; margin-right: 12px; }
 .mono { font-size: 13px; font-variant-numeric: tabular-nums; }
 .mono em { color: var(--muted); }
 .preview-editing { flex-basis: clamp(206px, 27dvh, 260px); background: var(--surface-subtle); scroll-padding-block: 12px; }
@@ -432,8 +431,6 @@ kbd { border: 1px solid var(--control-border); background: var(--surface); color
   .draft-duration { display: none; }
   .library-search { margin-top: 8px; }
   .preview-editing { max-height: 33dvh; }
-  .precision-button { margin-inline: 4px; font-size: 11px; }
-  .precision-button svg { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
