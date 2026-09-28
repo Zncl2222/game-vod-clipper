@@ -9,6 +9,116 @@ This project combines a Python CLI with an agent skill:
 
 The CLI handles deterministic media work. The agent handles visual judgment.
 
+## Run as a persistent service with Docker Compose
+
+Install Docker Engine with the Compose plugin, or Docker Desktop, then run from
+the repository root:
+
+```bash
+docker compose up -d --build --wait
+```
+
+Open **http://127.0.0.1:8000**. The production frontend, Python backend, trusted
+Debian FFmpeg/ffprobe, yt-dlp, Node.js and Codex CLI are included in the image.
+One service is sufficient: FastAPI serves React, SQLite stores local state, and
+the backend starts its media workers and Codex App Server as child processes.
+Keep one service instance per workspace; this is a single-user application.
+
+The container runs as a non-root user. Compose starts it in the background,
+restarts it after a crash or Docker daemon restart unless you explicitly stopped
+it, and gives it 60 seconds to shut down before forced termination. Docker must
+itself be running (enable Docker Desktop at login, or start the Docker Engine
+service on Linux). Closing the terminal does not stop BossCut.
+
+### Persistent data and local videos
+
+The default configuration creates four Docker-managed volumes. Restarting,
+rebuilding, or recreating the container keeps their contents:
+
+| Volume | Container folder | Contents |
+| --- | --- | --- |
+| `downloads` | `/data/downloads` | Source videos and YouTube downloads |
+| `clips` | `/data/clips` | Exported clips and receipts |
+| `runs` | `/data/runs` | SQLite database, thumbnails, analysis, YouTube login/history and settings |
+| `codex` | `/home/bosscut/.codex` | Codex-managed login and configuration |
+
+Compose prefixes volume names with its project name. Keep that project name
+stable when upgrading; starting from a different project name creates separate
+volumes. `docker compose down` keeps named volumes; **`docker compose down -v`
+deletes them**. Back up all four volumes, especially `runs` and `codex`, while the
+service is stopped. Backups contain credentials and should remain private.
+
+For host folders, an external drive, or local video imports, optionally copy
+`.env.example` to `.env`. Set `BOSSCUT_DOWNLOADS_DIR`, `BOSSCUT_CLIPS_DIR`,
+`BOSSCUT_RUNS_DIR` and/or `BOSSCUT_CODEX_DIR` to absolute host paths or paths
+starting with `./`. Empty values retain the corresponding named volume. Create
+host folders first and make them writable by the container user; on Linux set
+`BOSSCUT_UID`/`BOSSCUT_GID` to the results of `id -u`/`id -g`, then rebuild. A
+UID/GID change does not change ownership of existing volumes or host files.
+Prefer host folders outside this repository. Custom folders inside the checkout
+need their own Git ignore rules, especially folders holding account credentials.
+
+Put local recordings in the host folder selected by `BOSSCUT_DOWNLOADS_DIR` and
+choose **匯入 → 本機影片**. The application sees that folder as `/data/downloads`.
+Storage paths chosen inside the UI are **container paths**: select a mounted
+folder, not a host-only Windows/Linux path or a folder in the disposable image.
+Additional host directories can be mounted with a local `compose.override.yaml`.
+
+This starts a new workspace by default; it does not copy your existing local
+database, videos or credentials into the image. To reuse an existing workspace,
+stop its old backend, back it up, and mount its storage explicitly. Existing
+absolute media paths must also exist at the same paths inside the container;
+changing a storage preference does not rewrite old project paths. Never run two
+backends against the same `runs` folder.
+
+### Sign in and operate the service
+
+Open **帳號設定 → 使用 ChatGPT 登入** for device-code login, or run:
+
+```bash
+docker compose exec bosscut codex login --device-auth
+```
+
+Complete the code on the official sign-in page. Device-code login may need to be
+enabled in your ChatGPT account/workspace settings. The container has its own
+persisted Codex login; it does not automatically use the host's login. Use device
+login in a container because its browser callback port is not published.
+YouTube account setup works through the existing **我的 YouTube** interface.
+Manual editing works before AI sign-in; the health check never calls a model.
+
+```bash
+docker compose ps                        # Service and health status
+docker compose logs -f --tail=100 bosscut # Follow service logs
+docker compose stop                     # Stop without deleting data
+docker compose up -d --wait              # Start again
+docker compose up -d --build --wait      # Rebuild after updating the code
+docker compose down                     # Remove container/network; keep volumes
+```
+
+Finish active exports before stopping or upgrading. State and review checkpoints
+persist, but active work can become cancelled/interrupted; use the UI to retry or
+continue eligible jobs after startup. Docker logs are rotated at 10 MB × 3 files;
+application analysis/job files in `runs` follow the app's storage cleanup controls.
+The image health check requests `/api/health` and verifies the local database.
+An `unhealthy` status is diagnostic; Docker's restart policy restarts an exited
+process, not a process that is merely unhealthy.
+
+Set `BOSSCUT_PORT` in `.env` if port 8000 is occupied. Default access is localhost.
+For a trusted LAN, set `BOSSCUT_BIND_ADDRESS` to the host's LAN interface address
+and `BOSSCUT_ALLOWED_HOSTS` to the comma-separated IP addresses/hostnames used in
+the browser, without schemes or ports. Visitors can control this workspace; the
+app has no multi-user access-control login. Keep public access behind your own
+authenticated gateway. `.env` and `compose.override.yaml` are ignored by Git;
+default named volumes live outside the checkout. The Docker build context only
+includes the listed application sources and build inputs.
+
+VS Code Dev Containers selects the separate `development` Dockerfile target,
+which retains npm, uv, Codex, Claude Code and the interactive development
+workflow. The default `runtime` target starts the web service directly.
+
+References: [Docker Compose service settings](https://docs.docker.com/reference/compose-file/services/)
+and [official Codex device login and credential storage](https://learn.chatgpt.com/docs/auth).
+
 ## Web POC — React + FastAPI
 
 A local, single-user editing workspace is now available. It supports importing local
@@ -19,7 +129,8 @@ existing login, reviews sampled frames, and proposes timestamps for human review
 No separate API key is needed when Codex is signed in with ChatGPT. Manual editing
 and external Agent JSON import also remain available.
 
-From the repository root (Python 3.11+, Node 22.12+, trusted FFmpeg and ffprobe):
+For development without Docker, from the repository root (Python 3.11+,
+Node 22.12+, trusted FFmpeg and ffprobe):
 
 ```bash
 uv sync --extra web

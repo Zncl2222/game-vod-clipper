@@ -7,8 +7,9 @@ import json
 import logging
 import os
 import re
-import signal
 import shutil
+import signal
+import sqlite3
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -489,6 +490,18 @@ def create_app(root: Path | None = None) -> FastAPI:
             "projects": [public_project(p) | {"review_candidates": project_candidates(p, all_jobs)} for p in store.all("projects")],
             "jobs": [public_job(j) | ({"youtube_upload": uploads[j["id"]]} if j["id"] in uploads else {}) for j in all_jobs],
         }
+
+    @app.get("/api/health")
+    def health():
+        """Local readiness only; never start Codex or contact an external API."""
+        if shutting_down.is_set():
+            raise HTTPException(503, "Service is shutting down")
+        try:
+            with store.connect() as db:
+                db.execute("SELECT 1 FROM projects LIMIT 1").fetchone()
+        except sqlite3.Error:
+            raise HTTPException(503, "Workspace database is unavailable") from None
+        return {"status": "ok"}
 
     @app.get("/api/state")
     async def read_state():

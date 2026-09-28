@@ -2,7 +2,8 @@
   "name": "Game VOD Clipper",
   "build": {
     "dockerfile": "../Dockerfile",
-    "context": ".."
+    "context": "..",
+    "target": "development"
   },
   // Publish the web app through Docker instead of VS Code port forwarding:
   // VS Code's forwarder buffers streamed preview video in its own memory and
@@ -25,7 +26,7 @@
       "onAutoForward": "ignore"
     }
   },
-  "postCreateCommand": "uv sync --frozen",
+  "postCreateCommand": "uv sync --frozen --extra web",
   "customizations": {
     "vscode": {
       "settings": {

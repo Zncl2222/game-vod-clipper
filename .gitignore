@@ -22,3 +22,10 @@ node_modules/
 playwright-report/
 test-results/
 *.tsbuildinfo
+
+# Local deployment settings (the example contains no credentials)
+.env
+.env.*
+!.env.example
+compose.override.yaml
+compose.override.yml
