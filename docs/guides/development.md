@@ -42,17 +42,43 @@ Vite 開發伺服器會將 `/api` 代理到 `127.0.0.1:8000`。一般使用則�
 | `tests/`、`web/tests/` | Python 與瀏覽器測試 |
 | `scripts/` | 效能測量、播放驗證與一次性遷移工具 |
 
-API 行為以 [web.py](../../src/game_vod_clipper/web.py)、[前端 API 型別](../../web/src/api.ts) 與測試為準。
+API 行為以 [web.py](../../src/game_vod_clipper/web.py)、[前端 API 型別](../../web/src/lib/api.ts) 與測試為準。
 Agent 的媒體檢查流程以 [Skill](../../skills/game-vod-boss-clipper/SKILL.md) 為準，避免在多份文件複製同一套規則。
+
+## 前端目錄規則
+
+```text
+web/src/
+├── main.tsx                 React 啟動與全域樣式載入
+├── App.tsx                  工作區組合與應用程式狀態
+├── components/
+│   ├── ai/                  AI 連線、聊天與分析
+│   ├── editor/              剪輯區間與時間軸
+│   ├── layout/              可調整版面與操作指南
+│   ├── library/             匯入、專案與成品清單
+│   ├── media/               畫質控制與媒體進度
+│   ├── settings/            偏好設定與遊戲設定
+│   ├── storage/             儲存位置與用量管理
+│   └── youtube/             頻道、匯入佇列與播放清單
+├── lib/                     API、播放、草稿與共用狀態邏輯
+└── styles/                  全域及各功能的 CSS
+```
+
+新元件依用途放入對應的 `components/` 子目錄，CSS 放入 `styles/`，共用非 JSX 模組放入 `lib/`。
+使用直接檔案引用，避免為了轉出所有元件而新增 `index.ts`。現有元件匯出的型別與輔助函式仍由原模組提供。
+
+全域樣式由 `main.tsx` 載入，功能樣式由使用它的元件引用。保留載入次序，因為現有 CSS 使用全域選擇器與層疊覆寫。
+動態座標、進度和可調整寬度仍可由元件傳入 inline style；固定視覺規則放在 CSS。
+本次目錄整理沒有拆分大型元件或改寫狀態流程，後續應依功能需求個別重構並驗證。
 
 ## UI 維護原則
 
 樣式以實際 CSS 為準，不另維護一套容易過時的色碼表：
 
-- [studio.css](../../web/src/studio.css)：共用視覺設定與工作區樣式。
-- [workbench.css](../../web/src/workbench.css)：時間軸與下方工作區。
-- [clip-library.css](../../web/src/clip-library.css)：成品清單與相關版面。
-- [youtube.css](../../web/src/youtube.css)：頻道與匯入介面。
+- [studio.css](../../web/src/styles/studio.css)：共用視覺設定與工作區樣式。
+- [workbench.css](../../web/src/styles/workbench.css)：時間軸與下方工作區。
+- [clip-library.css](../../web/src/styles/clip-library.css)：成品清單與相關版面。
+- [youtube.css](../../web/src/styles/youtube.css)：頻道與匯入介面。
 
 調整版面時保留播放器、草稿與未送出的對話，不因縮放側欄、切換成品或開關對話框而重置。
 原片與成品草稿分開保存，選取候選、編輯欄位、預覽及匯出應指向同一區間。
