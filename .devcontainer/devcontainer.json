@@ -1,0 +1,45 @@
+{
+  "name": "Game VOD Clipper",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": "..",
+    "target": "development"
+  },
+  // Publish the web app through Docker instead of VS Code port forwarding:
+  // VS Code's forwarder buffers streamed preview video in its own memory and
+  // can exhaust the WSL VM. Bound to 127.0.0.1 so it stays local-only.
+  "runArgs": ["-p", "127.0.0.1:8000:8000"],
+  "containerEnv": {
+    "GAME_VOD_HOST": "0.0.0.0"
+  },
+  "portsAttributes": {
+    "3000": {
+      "label": "Website APP (frontend)",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "Vite dev server",
+      "onAutoForward": "notify"
+    },
+    "8000": {
+      "label": "API / backend (published by Docker)",
+      "onAutoForward": "ignore"
+    }
+  },
+  "postCreateCommand": "uv sync --frozen --extra web",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/game-vod-clipper-venv/bin/python",
+        "python.terminal.activateEnvironment": true
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  },
+  "remoteUser": "root"
+}

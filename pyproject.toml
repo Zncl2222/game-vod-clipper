@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "game-vod-clipper"
+version = "0.1.0"
+description = "Agent-guided CLI for clipping successful boss fights from game livestream VODs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Jian Yu, Chen" }
+]
+keywords = ["yt-dlp", "ffmpeg", "vod", "clipping", "agents", "boss-fight"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Video"
+]
+dependencies = [
+    "yt-dlp[default]>=2026.8.19",
+]
+
+[project.optional-dependencies]
+web = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "Pillow>=11,<13", "httpx>=0.28,<1"]
+test = ["httpx>=0.28,<1"]
+
+[project.scripts]
+game-vod-clipper = "game_vod_clipper.cli:main"
+game-vod-web = "game_vod_clipper.web:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,31 @@
+services:
+  bosscut:
+    build:
+      context: .
+      target: runtime
+      args:
+        APP_UID: ${BOSSCUT_UID:-1000}
+        APP_GID: ${BOSSCUT_GID:-1000}
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
+    ports:
+      - "${BOSSCUT_BIND_ADDRESS:-127.0.0.1}:${BOSSCUT_PORT:-8000}:8000"
+    environment:
+      GAME_VOD_ALLOWED_HOSTS: ${BOSSCUT_ALLOWED_HOSTS:-}
+    volumes:
+      - "${BOSSCUT_DOWNLOADS_DIR:-downloads}:/data/downloads"
+      - "${BOSSCUT_CLIPS_DIR:-clips}:/data/clips"
+      - "${BOSSCUT_RUNS_DIR:-runs}:/data/runs"
+      - "${BOSSCUT_CODEX_DIR:-codex}:/home/bosscut/.codex"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  downloads:
+  clips:
+  runs:
+  codex:

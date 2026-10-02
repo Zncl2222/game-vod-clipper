@@ -1,0 +1,26 @@
+# Only build inputs enter the Docker context. In particular, no Git history,
+# local docs, videos, database, OAuth state, .env or user Codex configuration.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!src/**
+!skills/
+!skills/game-vod-boss-clipper/
+!skills/game-vod-boss-clipper/SKILL.md
+!web/
+!web/package.json
+!web/package-lock.json
+!web/index.html
+!web/tsconfig.json
+!web/vite.config.ts
+!web/src/
+!web/src/**
+**/__pycache__/
+**/*.egg-info/
+**/*.py[cod]
+**/.env*

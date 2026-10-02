@@ -1,0 +1,136 @@
+/*
+ * Editor layout: the clip settings/export panel sits to the left of the player so the
+ * player's unused width is not wasted, and the timeline keeps the full width below.
+ * When the panel is too narrow (or on phones/short windows) everything stacks in one
+ * column and the page scrolls: player, timeline, then the settings panel.
+ */
+.has-editor .editor-grid { container: editor / inline-size; }
+/* Timeline markers use z-index internally; keep them beneath the sticky top bar when the page scrolls. */
+.app.has-editor .preview-panel { isolation: isolate; }
+
+/* ---- Stacked (default) ---- */
+.app.has-editor .preview-stage, .app.has-editor .stage-layout { display: contents; }
+.stage-layout > .panel-heading { order: 1; }
+.stage-layout > .video-wrap { order: 2; }
+.stage-layout > .transport { order: 3; }
+.preview-panel > .workbench-size-bar { order: 4; }
+.preview-panel > .preview-editing { order: 5; }
+.stage-layout > .clip-inspector { order: 6; border-top: 1px solid var(--line); }
+
+@container editor (max-width: 623px) {
+  .app.has-editor .preview-panel { height: auto; min-height: 0; }
+  .app.has-editor .preview-panel .video-wrap { flex: none; width: 100%; height: auto; aspect-ratio: 16 / 9; max-height: 50dvh; }
+  .app.has-editor .preview-editing { flex: none; max-height: none; overflow: visible; scrollbar-gutter: auto; }
+}
+/* The editor may outgrow the window in stacked mode; the page then scrolls instead of clipping. */
+@media (min-width: 641px) and (min-height: 701px) {
+  .app.has-editor .main-shell { overflow: hidden auto; }
+}
+
+/* ---- Side by side ---- */
+@media (min-width: 641px) and (min-height: 701px) {
+  @container editor (min-width: 624px) {
+    .app.has-editor .preview-stage { display: block; flex: 1; min-height: 0; container-type: size; background: var(--surface); }
+    .app.has-editor .stage-layout {
+      --heading-height: 44px;
+      --transport-height: 40px;
+      /* Give the player the width its aspect ratio can use at this height; the panel gets the rest. */
+      --inspector-auto: clamp(264px, calc(100cqw - (100cqh - var(--heading-height) - var(--transport-height)) * var(--video-aspect, 1.7778)), 440px);
+      /* A width the user dragged to wins, but the player always keeps at least 360px. */
+      --inspector-width: clamp(264px, var(--inspector-preferred, var(--inspector-auto)), max(264px, calc(100cqw - 360px)));
+      display: grid; height: 100%;
+      grid-template-columns: var(--inspector-width) minmax(0, 1fr);
+      grid-template-rows: var(--heading-height) minmax(0, 1fr) var(--transport-height);
+      grid-template-areas: "heading heading" "inspector video" "inspector transport";
+    }
+    .stage-layout > .panel-heading { grid-area: heading; }
+    .stage-layout > .clip-inspector { grid-area: inspector; min-height: 0; border-top: 0; border-right: 1px solid var(--line); }
+    .app.has-editor .stage-layout > .video-wrap { grid-area: video; width: auto; height: auto; min-height: 0; aspect-ratio: auto; }
+    .stage-layout > .transport { grid-area: transport; min-width: 0; }
+    .clip-inspector .inspector-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; }
+    .stage-layout > .inspector-resize-handle { display: flex; }
+  }
+}
+
+/* Vertical handle straddling the panel/player boundary; only shown side by side. */
+.inspector-resize-handle { display: none; grid-area: inspector; justify-self: end; position: relative; z-index: 3; width: 12px; margin-right: -6px;
+  align-items: center; justify-content: center; cursor: col-resize; touch-action: none; user-select: none; }
+.inspector-resize-handle > span { width: 4px; height: 36px; border-radius: 3px; background: var(--control-border); opacity: .55;
+  transition: opacity var(--duration-fast), background var(--duration-fast); }
+.inspector-resize-handle:hover > span, .inspector-resize-handle:focus-visible > span, .is-adjusting-width .inspector-resize-handle > span { opacity: 1; background: var(--accent); }
+.inspector-resize-handle:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.stage-layout.is-adjusting-width { cursor: col-resize; user-select: none; }
+.stage-layout.is-adjusting-width .video-wrap { pointer-events: none; }
+@media (pointer: coarse) { .inspector-resize-handle { width: 24px; margin-right: -12px; } .inspector-resize-handle > span { height: 44px; } }
+
+/* ---- Side panel ---- */
+.clip-inspector { display: flex; flex-direction: column; min-width: 0; background: var(--surface); }
+.inspector-body { display: flex; flex-direction: column; gap: 16px; padding: 14px 16px 16px; }
+.inspector-slot:empty { display: none; }
+
+.clip-inspector .active-edit-target { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; }
+.clip-inspector .active-edit-target strong { grid-column: 1; font-size: 15px; }
+.clip-inspector .active-edit-target > span { grid-column: 1 / -1; font: 12px ui-monospace, monospace; color: var(--ink); }
+.clip-inspector .active-edit-target .draft-duration { grid-column: 1 / -1; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.clip-inspector .active-edit-target button { grid-column: 2; grid-row: 1; }
+.clip-inspector .postroll-choice { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.clip-inspector .postroll-choice select { min-height: 32px; padding: 2px 8px; font-size: 12px; color: var(--ink); border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
+
+.clip-inspector .clip-name-field { grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 0; }
+.clip-inspector .clip-name-field label { flex-direction: row; align-items: baseline; gap: 8px; font-size: 12px; }
+.clip-inspector .clip-name-field input { min-height: 40px; }
+
+.clip-inspector .workbench-timing { display: flex; flex-direction: column; align-items: stretch; gap: 12px; padding: 0; }
+.clip-inspector .workbench-preview-actions { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin: 0; }
+.clip-inspector .workbench-preview-actions button { min-height: 36px; padding: 0 12px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
+.clip-inspector .workbench-preview-actions button:hover:not(:disabled) { background: var(--surface-active); }
+.clip-inspector .candidate-edit-session { margin: 0; }
+
+.clip-inspector .candidate-detail { padding: 12px; }
+.clip-inspector .candidate-heading > div { flex-basis: 100%; min-width: 0; }
+.clip-inspector .candidate-heading > button { flex: 1 1 auto; }
+.clip-inspector .candidate-detail p { font-size: 12px; }
+
+/* Export stays pinned to the bottom of the panel while the settings above scroll. */
+.inspector-export { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--surface); }
+.inspector-export .export-action-group { display: flex; flex-direction: column; gap: 4px; }
+.inspector-export .export-button { width: 100%; min-height: 44px; margin: 0; font-size: 14px; }
+.inspector-export .export-help { display: block; margin: 0; font-size: 11px; line-height: 1.5; text-align: center; color: var(--muted); }
+.inspector-export .export-status-row { border-top: 0; padding-top: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 12px; }
+.inspector-export .draft-status, .inspector-export .export-range-status { margin: 0; font-size: 11px; }
+.inspector-export .export-progress { grid-column: auto; gap: 8px; padding: 8px 10px; grid-template-columns: minmax(0, 1fr) auto; }
+.inspector-export .export-progress-icon { display: none; }
+.inspector-export .export-progress-body > strong { line-height: 1.6; font-size: 12px; }
+/* The export button already draws the bar; the panel adds the numbers, warnings and actions. */
+.inspector-export .export-progress .media-progress-heading { display: none; }
+.inspector-export .export-progress progress { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+.inspector-export .export-progress-actions { align-self: start; min-height: 0; }
+/* While running, the button carries the status line; keep only numbers, warnings and cancel. */
+.inspector-export .export-progress.is-running .export-progress-body > strong,
+.inspector-export:has(.export-progress.is-running) .export-help { display: none; }
+.inspector-export .export-progress.is-running { align-items: center; padding: 6px 10px; }
+.inspector-export .media-transfer-stats { gap: 0 10px; font-size: 11px; line-height: 1.6; }
+.inspector-export .media-progress > p { font-size: 11px; line-height: 1.6; }
+.inspector-export .export-progress-actions .text-button { min-height: 28px; padding: 0 6px; }
+.inspector-export .export-progress:not(.is-running) { position: relative; grid-template-columns: minmax(0, 1fr); padding-right: 36px; }
+.inspector-export .export-progress:not(.is-running) .export-progress-actions { justify-content: flex-start; }
+.inspector-export .export-progress-actions .icon-button { position: absolute; top: 4px; right: 4px; }
+
+@media (max-width: 640px) {
+  .inspector-body { padding: 12px; }
+  .inspector-export { padding: 12px; }
+  .clip-inspector .postroll-choice select { min-height: 44px; }
+}
+@media (pointer: coarse) { .clip-inspector .postroll-choice select { min-height: 44px; } }
+
+/* Short but wide windows stack the panel under the timeline; use columns instead of 1000px-wide fields. */
+@media (min-width: 641px) and (max-height: 700px) {
+  @container editor (min-width: 600px) {
+    .inspector-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; gap: 16px 32px; }
+    .inspector-body > .inspector-slot:last-child { grid-column: 1 / -1; }
+    .inspector-export { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 280px); align-items: start; gap: 8px 24px; }
+    .inspector-export .export-action-group { grid-column: 2; grid-row: 1; }
+    .inspector-export .export-status-row { grid-column: 1; grid-row: 1; align-self: center; justify-content: flex-start; }
+    .inspector-export .export-progress { grid-column: 1 / -1; }
+  }
+}
