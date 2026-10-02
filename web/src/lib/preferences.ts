@@ -46,7 +46,7 @@ export function getPreferences() { return read(); }
 export function setPreferences(changes: Partial<Preferences>) {
   cached = { ...read(), ...changes };
   try { localStorage.setItem(KEY, JSON.stringify(cached)); } catch { /* Preferences still apply for this session. */ }
-  listeners.forEach(listener => listener());
+  listeners.forEach(listener => { listener(); });
 }
 
 function subscribe(listener: () => void) {

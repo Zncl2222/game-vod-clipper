@@ -252,7 +252,7 @@ def switch_paths(manifest, data):
         atomic_json(manifest, data)
         db.execute("BEGIN IMMEDIATE")
         for table in ("projects", "jobs", "retained_media"):
-            for key, raw in db.execute(f"SELECT id,data FROM {table}").fetchall():
+            for key, raw in db.execute(f"SELECT id,data FROM {table}").fetchall():  # nosec B608 # table comes from the fixed tuple above; values are bound.
                 old = json.loads(raw)
                 changed = rewrite(old, data)
                 if table == "projects" and not old.get("work"):
@@ -261,7 +261,7 @@ def switch_paths(manifest, data):
                     if old_work != new_work:
                         changed["work"] = new_work
                 if changed != old:
-                    db.execute(f"UPDATE {table} SET data=? WHERE id=?", (json.dumps(changed, ensure_ascii=False), key))
+                    db.execute(f"UPDATE {table} SET data=? WHERE id=?", (json.dumps(changed, ensure_ascii=False), key))  # nosec B608 # table comes from the fixed tuple above; values are bound.
         if dict(db.execute("SELECT id,data FROM youtube_history")) != before:
             raise ValueError("History unexpectedly changed")
         db.commit()

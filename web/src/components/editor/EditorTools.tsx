@@ -12,7 +12,7 @@ export default function EditorTools({ open, onClose, error, onClearError, childr
     const element = dialog.current;
     element?.showModal();
     return () => {
-      element?.querySelectorAll("video").forEach(video => video.pause());
+      element?.querySelectorAll("video").forEach(video => { video.pause(); });
       element?.close();
       previous?.focus({ preventScroll: true });
     };

@@ -84,6 +84,18 @@ clips/                          匯出成品（不納入 Git）
 
 網頁可自訂影片儲存位置。更換位置只影響新檔案；既有專案不會自動搬移。
 
+## 開發檢查
+
+```bash
+make setup
+make check
+make test-web
+```
+
+CI 執行 Ruff、Biome、TypeScript、Python／瀏覽器測試與正式建置。
+Bandit 與 pip-audit 在 PR 及每週檢查，Dependabot 提出依賴更新。
+環境需求與檢查範圍請見 [開發指南](docs/guides/development.md)。
+
 ## 授權
 
 本專案採用 [MIT License](LICENSE)。

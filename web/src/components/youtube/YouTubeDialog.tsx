@@ -151,7 +151,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
     if (!file) return;
     await perform("configure", async () => {
       if (file.size > 32_000) throw new Error("請選擇 Google 下載的 OAuth JSON，檔案需小於 32 KB。");
-      let data;
+      let data: unknown;
       try { data = JSON.parse(await file.text()); } catch { throw new Error("設定檔不是有效的 JSON，請重新選擇 Google 下載的檔案。"); }
       await api("/youtube/config", "PUT", data);
       await refresh();

@@ -255,7 +255,7 @@ test("preferences choose the export and download quality and can silence notific
   await page.getByRole("button", { name: "匯出 MP4", exact: true }).click();
   await expect.poll(() => controls.exportQualities).toEqual(["high", "balanced"]);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bosscut:preferences")!)))
-    .toEqual({ exportQuality: "balanced", downloadQuality: "1080", notifyOnExport: false });
+    .toEqual({ exportQuality: "balanced", downloadQuality: "1080", notifyOnExport: false, importAutoAnalyze: true, importModel: "" });
   await page.getByRole("button", { name: "偏好設定", exact: true }).click();
   await expect(dialog.getByLabel("預設保留畫質")).toHaveValue("1080");
   await expect(dialog.getByRole("checkbox", { name: /匯出完成或失敗時通知我/ })).not.toBeChecked();

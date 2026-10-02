@@ -200,11 +200,11 @@ export default function App() {
         </div>
         <ProjectLibrary projects={state.projects} selected={project?.id} jobs={state.jobs}
           onSelect={select} onRenamed={renameProject} onDeleted={deleteProject} onError={setError}
-          onClipsRemoved={(projectId, ids) => ids.forEach(id => deleteClip(projectId, id))} />
+          onClipsRemoved={(projectId, ids) => ids.forEach(id => { deleteClip(projectId, id); })} />
         <div className="sidebar-bottom">
           <button className="sidebar-guide" aria-label="使用指南與快捷鍵" title={!libraryOpen ? "使用指南與快捷鍵" : undefined} onClick={() => setGuide(true)}><CircleHelp size={17} /><span>使用指南與快捷鍵</span></button>
           <LocalStorageUsage refreshKey={state.jobs.filter(job => job.kind !== "analyze").map(job => `${job.id}:${job.status}`).sort().join("|")}
-            onClipRemoved={(projectId, ids) => ids.forEach(id => deleteClip(projectId, id))} />
+            onClipRemoved={(projectId, ids) => ids.forEach(id => { deleteClip(projectId, id); })} />
           <span className={`connection ${connected ? "online" : ""}`}>
             <span className="tiny-dot" />
             {connected ? "工作區已連線" : "正在連接本機服務…"}

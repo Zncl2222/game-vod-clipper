@@ -40,3 +40,22 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[dependency-groups]
+dev = [
+    "bandit[toml]>=1.9.4",
+    "pip-audit>=2.10.1",
+    "ruff>=0.16.10",
+]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["downloads", "runs", "clips", "ppt_test", "build", "web/node_modules"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+# Existing compact statements are retained; formatting is a separate migration.
+ignore = ["E701", "E702"]
+
+[tool.bandit]
+exclude_dirs = ["tests", "web/tests", "downloads", "runs", "clips", "ppt_test", "build", ".venv", "web/node_modules"]

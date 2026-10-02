@@ -160,7 +160,7 @@ with FFmpeg sampling and visual review; the host provides these tools by default
 You cannot import, delete or upload media.
 Keep answers useful and concise; do not add unsolicited clipping instructions.
 """ + json.dumps({"history": [m.model_dump() for m in body.history], "project": context,
-                  "message": body.message}, ensure_ascii=False)
+                  "message": body.message}, ensure_ascii=False)  # nosec B608 # Model prompt, never executed as SQL.
     schema = ChatReply.model_json_schema()
     # Nullable end remains backwards compatible in local validation, but the
     # model's strict output schema requires every field.

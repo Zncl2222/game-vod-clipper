@@ -85,6 +85,18 @@ clips/                         Exported clips (ignored by Git)
 
 The web app supports custom storage locations. Changes apply to new files only; existing projects are not moved automatically.
 
+## Development checks
+
+```bash
+make setup
+make check
+make test-web
+```
+
+CI runs Ruff, Biome, TypeScript, Python tests, browser tests, and production builds.
+Bandit and pip-audit run on pull requests and weekly; Dependabot proposes dependency updates.
+See the [development guide](docs/guides/development.md) (Traditional Chinese) for prerequisites and check scope.
+
 ## License
 
 [MIT License](LICENSE).

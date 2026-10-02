@@ -1,0 +1,41 @@
+name: Python security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Bandit and pip-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.9.9"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --all-extras
+      - name: Bandit (medium and high severity)
+        run: uv run --frozen bandit -c pyproject.toml -r src scripts -ll
+      - name: Export locked runtime, test and development dependencies
+        run: |
+          mkdir -p runs/security
+          uv export --frozen --all-extras --no-emit-project --format requirements-txt -o runs/security/requirements.txt > /dev/null
+      - name: Audit pinned dependencies
+        run: uv run --frozen pip-audit --strict --disable-pip --require-hashes -r runs/security/requirements.txt

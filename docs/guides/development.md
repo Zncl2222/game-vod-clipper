@@ -26,7 +26,7 @@ npm --prefix web run dev
 Vite 開發伺服器會將 `/api` 代理到 `127.0.0.1:8000`。一般使用則先執行 `npm --prefix web run build`，由後端直接提供建置後的頁面。
 
 [Dev Container](../../.devcontainer/devcontainer.json) 使用 Dockerfile 的 `development` target；Compose 使用 `runtime` target。
-前者提供互動開發環境，後者直接啟動服務。
+前者提供互動開發環境與 Ruff／Biome 的 VS Code 擴充套件，後者直接啟動服務。
 
 ## 程式結構
 
@@ -86,40 +86,80 @@ web/src/
 控制項需有可辨識名稱與鍵盤焦點。狀態不能只靠顏色區分；對話框支援 Escape、焦點限制與關閉後焦點還原。
 支援窄視窗與 reduced-motion；不要只為展示介面就啟動下載、登入、分析或匯出。
 
-## 驗證
+## 檢查工具與 CI
 
-Python 測試與語法檢查：
+Python 使用 [Ruff](https://docs.astral.sh/ruff/)、[Bandit](https://bandit.readthedocs.io/) 與 [pip-audit](https://github.com/pypa/pip-audit)；前端使用 [Biome](https://biomejs.dev/) 與 TypeScript。
+前端套件管理仍為 npm，使用 `package-lock.json`；Biome 不需要 Bun。
+工具版本由 `uv.lock` 與 `web/package-lock.json` 鎖定，CI 使用 frozen／clean install。
 
-```bash
-uv run --extra web --extra test python -m unittest discover -s tests
-uv run python -m compileall -q src tests
-```
-
-前端型別檢查與建置：
+在根目錄安裝開發與測試依賴：
 
 ```bash
-npm --prefix web run build
+make setup
 ```
 
-首次跑瀏覽器測試，先安裝測試瀏覽器：
+需要 GNU Make、Python 3.11+、uv、Node.js 22.12+、npm 與 FFmpeg／ffprobe。
+沒有 Make 時可直接執行下表的等價指令。
+
+| 檢查 | 指令 |
+| --- | --- |
+| Python lint | `uv run --frozen ruff check src tests scripts web/tests` |
+| 前端 lint（TS／TSX／CSS／JSON） | `npm --prefix web run lint` |
+| TypeScript 型別 | `npm --prefix web run typecheck` |
+| Python 安全靜態分析 | `uv run --frozen bandit -c pyproject.toml -r src scripts -ll` |
+| 鎖定套件的漏洞稽核 | `make security`（包含 Bandit） |
+| Python 單元與媒體整合測試 | `make test` |
+| 前端正式建置 | `make build` |
+| 上述檢查，不含瀏覽器測試 | `make check` |
+
+`make lint` 一次執行 Ruff、Biome 與 TypeScript。`npm --prefix web run lint:fix` 只套用 Biome 的安全修正，請檢查差異後再提交。
+
+目前 lint 著重錯誤檢查，沒有要求全面重新排版：
+
+- Ruff 啟用 `E4`、`E7`、`E9`、`F`；保留既有單行敘述風格，排除 `E701`、`E702`。
+- Biome 啟用 correctness、suspicious、security 的建議規則及部分 ARIA／替代文字檢查。格式化與 import 重排暫不啟用。
+- React effect 依賴、陣列 index key 與 explicit `any` 暫不列為 Biome 阻擋項目；這些既有模式需逐項審查，不能透過自動修正一次改寫。樣式排序與全面無障礙規則也不是本輪門檻；瀏覽器測試仍包含 axe 檢查。
+- Bandit 掃描 `src/` 與 `scripts/`，中／高嚴重度會阻擋 CI。低嚴重度（例如匯入 subprocess）可用不帶 `-ll` 的指令另行檢視。已人工確認的 SQL 誤判以逐行 `nosec B608` 說明，沒有全域忽略 SQL 注入規則。
+- pip-audit 從 `uv.lock` 匯出含 hashes 的完整依賴清單，包含 web、test 與 dev；不安裝未鎖定版本，任何已知漏洞或稽核失敗都會使檢查失敗。稽核需要網路，會查詢套件名稱與版本。
+
+若不使用 Make，可手動稽核：
+
+```bash
+mkdir -p runs/security
+uv export --frozen --all-extras --no-emit-project --format requirements-txt -o runs/security/requirements.txt
+uv run --frozen pip-audit --strict --disable-pip --require-hashes -r runs/security/requirements.txt
+```
+
+[CI workflow](../../.github/workflows/ci.yml) 在 PR、推送到 `main` 與手動觸發時執行 lint、型別、建置、Python 3.11／3.12 測試，以及四組 Chromium 瀏覽器測試。
+[安全檢查](../../.github/workflows/security.yml) 另外每週執行，讓未改程式碼時新公布的漏洞也能被發現。
+Actions 以完整 commit SHA 固定，僅有讀取權限；不需要 AI 或 YouTube 帳號密鑰。
+[Dependabot](../../.github/dependabot.yml) 每週檢查 uv、npm 與 Actions 更新，不自動合併。
+
+Workflow 提交到 GitHub 後才會在遠端執行；如要禁止合併失敗的 PR，維護者還需在 GitHub ruleset／branch protection 將這些 checks 設為必須通過。
+
+## 瀏覽器測試
+
+首次跑瀏覽器測試，先在 `web/` 安裝 Chromium；Linux CI 同時安裝系統函式庫：
 
 ```bash
 cd web
-npx playwright install chromium
+npx --no-install playwright install --with-deps chromium
 ```
 
-以下回到儲存庫根目錄執行；依修改範圍選擇測試：
+回到根目錄，依修改範圍選擇測試：
 
 ```bash
 npm --prefix web run test:chat
 npm --prefix web run test:youtube
 npm --prefix web run test:e2e
-npm --prefix web run test:e2e -- --config playwright.storage.config.ts
+npm --prefix web run test:storage
 ```
 
-`test:chat` 使用模擬 API，涵蓋聊天、工作區與成品等介面，不呼叫真實 AI。
-預設 `test:e2e` 與儲存測試會啟動測試後端並處理合成媒體，需要 FFmpeg。
-截圖、測試結果與媒體產物放入 `runs/`，不要提交影片、登入資料或本機資料庫。
+`make test-web` 會先建置，再依序執行四組測試。YouTube 與儲存測試共用連接埠 8012，本機執行時不要同時跑。
+`test:chat`、`test:youtube` 使用模擬 API，不呼叫真實模型或 Google。
+`test:e2e` 與 `test:storage` 使用獨立暫存工作區與合成媒體，需要 FFmpeg；不使用個人的影片或登入資料。
+
+截圖與測試產物放入 `runs/`。GitHub CI 失敗時上傳 Playwright 報告與測試附件，保留七天；不提交或上傳原始 VOD、登入資料與個人資料庫。
 
 ## 文件與儲存庫整理規則
 
