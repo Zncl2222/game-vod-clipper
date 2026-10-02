@@ -9,12 +9,12 @@ import sys
 from fractions import Fraction
 from pathlib import Path
 
-from .media import DEFAULT_EXPORT_QUALITY, EXPORT_QUALITY, clip_video
-from .locations import Locations, media_path, project_work, record_path
-from .media_progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
+from .media.operations import DEFAULT_EXPORT_QUALITY, EXPORT_QUALITY, clip_video
+from .storage.locations import Locations, media_path, project_work, record_path
+from .media.progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
 from .process import resolve_tool_command
-from .web_store import Store
-from .youtube import BROWSER_MERGE_FORMATS, quality_format, youtube_command
+from .storage.store import Store
+from .youtube.downloader import BROWSER_MERGE_FORMATS, quality_format, youtube_command
 
 SOURCE_PREFIX = "__BOSSCUT_SOURCE__"
 TITLE_PREFIX = "__BOSSCUT_TITLE__"
@@ -180,7 +180,7 @@ def run(root: Path, job_id: str):
         reporter.emit("原片已就緒，背景建立時間軸縮圖", "thumbnails", 0)
         make_thumbnails(store, project, source, work, metadata["duration"], reporter)
     elif job["kind"] == "analyze":
-        from .codex_analysis import run_analysis
+        from .analysis.pipeline import run_analysis
 
         run_analysis(store, job, project)
     else:

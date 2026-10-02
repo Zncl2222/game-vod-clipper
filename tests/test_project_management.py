@@ -11,7 +11,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.storage.store import Store
 
 
 class ProjectManagementTest(unittest.TestCase):
@@ -100,7 +100,7 @@ class ProjectManagementTest(unittest.TestCase):
                 cleanup_has_project.append(manager.store.get("projects", job["project_id"]) is not None)
                 manager.store.patch("jobs", job_id, status="cancelled")
 
-        with patch("game_vod_clipper.web.Jobs.execute", new=worker):
+        with patch("game_vod_clipper.jobs.scheduler.Jobs.execute", new=worker):
             result = self.client.post("/api/projects", json={"kind": "local", "source": "downloads/new.mp4"}).json()
             project_id, job_id = result["project"]["id"], result["job"]["id"]
             self.assertTrue(started.wait(2))

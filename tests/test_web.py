@@ -11,7 +11,8 @@ from pathlib import Path
 try:
     from fastapi.testclient import TestClient
 
-    from game_vod_clipper.web import create_app, youtube_url
+    from game_vod_clipper.web import create_app
+    from game_vod_clipper.api.sources import youtube_url
 
     WEB_AVAILABLE = True
 except ImportError:
@@ -263,7 +264,7 @@ class RangeLimitTest(unittest.TestCase):
     def test_open_ended_ranges_are_capped(self):
         from fastapi import FastAPI
 
-        from game_vod_clipper.web import LocalFileResponse
+        from game_vod_clipper.api.server import LocalFileResponse
 
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "preview.mp4"

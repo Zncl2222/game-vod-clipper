@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from PIL import Image
 
-from game_vod_clipper.codex_analysis import invoke_codex, validate_observation
+from game_vod_clipper.analysis.client import invoke_codex
+from game_vod_clipper.analysis.validation import validate_observation
 
 
 def main():

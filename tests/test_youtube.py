@@ -7,11 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from game_vod_clipper.media import download_video
+from game_vod_clipper.media.operations import download_video
 from game_vod_clipper.process import CommandResult, ToolMissingError, resolve_tool_command
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.storage.store import Store
 from game_vod_clipper.web_worker import SOURCE_PREFIX, run
-from game_vod_clipper.youtube import javascript_runtime, youtube_command
+from game_vod_clipper.youtube.downloader import javascript_runtime, youtube_command
 
 
 class YouTubeTest(unittest.TestCase):
@@ -26,10 +26,10 @@ class YouTubeTest(unittest.TestCase):
         ]
         for versions, expected in cases:
             with self.subTest(versions=versions), patch(
-                "game_vod_clipper.youtube.shutil.which",
+                "game_vod_clipper.youtube.downloader.shutil.which",
                 side_effect=lambda name: f"/tools/{name}" if name in versions else None,
             ), patch(
-                "game_vod_clipper.youtube.subprocess.run",
+                "game_vod_clipper.youtube.downloader.subprocess.run",
                 side_effect=lambda args, **kw: subprocess.CompletedProcess(
                     args, 0, versions[Path(args[0]).name], ""
                 ),
@@ -49,9 +49,9 @@ class YouTubeTest(unittest.TestCase):
             subprocess.CompletedProcess([], 1, "deno 2.3.0", "failed"),
         ):
             with self.subTest(failure=failure), patch(
-                "game_vod_clipper.youtube.shutil.which", side_effect=lambda name: f"/tools/{name}"
+                "game_vod_clipper.youtube.downloader.shutil.which", side_effect=lambda name: f"/tools/{name}"
             ), patch(
-                "game_vod_clipper.youtube.subprocess.run",
+                "game_vod_clipper.youtube.downloader.subprocess.run",
                 side_effect=[failure, subprocess.CompletedProcess([], 0, "v22.0.0", "")],
             ):
                 self.assertEqual(javascript_runtime(), "node:/tools/node")
@@ -72,20 +72,20 @@ class YouTubeTest(unittest.TestCase):
         self.assertIn("--no-js-runtimes", args)
         self.assertEqual(args[args.index("--js-runtimes") + 1], "node:/tools/node")
 
-    @patch("game_vod_clipper.youtube.javascript_runtime", return_value="node:/tools/node")
+    @patch("game_vod_clipper.youtube.downloader.javascript_runtime", return_value="node:/tools/node")
     def test_cli_download_enables_runtime(self, runtime):
         runs = Path(__file__).resolve().parents[1] / "runs"
         runs.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=runs) as directory:
             output = Path(directory) / "source.mp4"
             output.touch()
-            with patch("game_vod_clipper.media.run_command", return_value=CommandResult(
+            with patch("game_vod_clipper.media.operations.run_command", return_value=CommandResult(
                 [], 0, str(output) + "\n", ""
             )) as command:
                 self.assertEqual(download_video("https://youtu.be/abcdefghijk", Path(directory)), output)
             self.assert_runtime_enabled(command.call_args.args[0])
 
-    @patch("game_vod_clipper.youtube.javascript_runtime", return_value="node:/tools/node")
+    @patch("game_vod_clipper.youtube.downloader.javascript_runtime", return_value="node:/tools/node")
     def test_web_download_enables_runtime_despite_ignore_config(self, runtime):
         runs = Path(__file__).resolve().parents[1] / "runs"
         runs.mkdir(exist_ok=True)

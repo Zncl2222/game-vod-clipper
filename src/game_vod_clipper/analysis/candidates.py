@@ -1,7 +1,7 @@
 """Stable, project-scoped review annotations shared by the UI and chat."""
 
 import math
-from .candidate_registry import same_event
+from .registry import same_event
 
 
 def candidate_verification(segment: dict, job: dict, duration: float) -> dict:

@@ -10,10 +10,10 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
-from game_vod_clipper.youtube_account import YouTubeError
-from game_vod_clipper.youtube_imports import YouTubeImports
-from game_vod_clipper.youtube_routes import ImportBroadcast, YouTubeWorkspace
+from game_vod_clipper.storage.store import Store
+from game_vod_clipper.youtube.account import YouTubeError
+from game_vod_clipper.youtube.imports import YouTubeImports
+from game_vod_clipper.youtube.routes import ImportBroadcast, YouTubeWorkspace
 
 ROOT = Path(__file__).resolve().parents[1]
 CHANNEL = {"id": "channel-a", "title": "測試頻道"}
@@ -218,7 +218,7 @@ class BatchImportTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.queue.get(key)["status"], "cancelled")
 
     async def test_capacity_is_atomic_and_route_validates_bulk_input(self):
-        with patch("game_vod_clipper.youtube_imports.MAX_WAITING", 2):
+        with patch("game_vod_clipper.youtube.imports.MAX_WAITING", 2):
             with self.assertRaises(YouTubeError):
                 self.queue.add(choices(3), OPTIONS, CHANNEL)
             self.assertFalse(self.queue.records)

@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from game_vod_clipper.codex_chat import ChatRequest, chat
-from game_vod_clipper.codex_connection import CodexConnection, ConnectionError
+from game_vod_clipper.codex.chat import ChatRequest, chat
+from game_vod_clipper.codex.connection import CodexConnection, ConnectionError
 from game_vod_clipper.web import create_app
 
 
@@ -147,7 +147,7 @@ class ChatTest(unittest.IsolatedAsyncioTestCase):
                     raise AssertionError("Cancellation never reached executor")
                 stopped.set()
                 raise RuntimeError("AI 工作已取消")
-            with patch("game_vod_clipper.codex_connection.execute", side_effect=execute):
+            with patch("game_vod_clipper.codex.connection.execute", side_effect=execute):
                 task = asyncio.create_task(c.respond("hi"))
                 self.assertTrue(await asyncio.to_thread(started.wait, 2))
                 task.cancel()
@@ -161,11 +161,11 @@ class ChatRouteTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             app = create_app(Path(directory))
             with TestClient(app) as client:
-                with patch("game_vod_clipper.web.chat", new=AsyncMock(return_value={"reply": "Hello", "action": None, "model": "test"})):
+                with patch("game_vod_clipper.api.analysis.chat", new=AsyncMock(return_value={"reply": "Hello", "action": None, "model": "test"})):
                     response = client.post("/api/codex/chat", json={"model": "test", "message": "hi"})
                     events = [json.loads(line) for line in response.text.splitlines()]
                     self.assertEqual(events[-1]["reply"], "Hello")
-                with patch("game_vod_clipper.web.chat", new=AsyncMock(side_effect=ConnectionError("額度不足"))):
+                with patch("game_vod_clipper.api.analysis.chat", new=AsyncMock(side_effect=ConnectionError("額度不足"))):
                     response = client.post("/api/codex/chat", json={"model": "test", "message": "hi"})
                     self.assertEqual(json.loads(response.text.splitlines()[-1])["type"], "error")
                 self.assertEqual(client.get("/api/state").json()["jobs"], [])

@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from game_vod_clipper.locations import Locations
+from game_vod_clipper.storage.locations import Locations
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
-from game_vod_clipper.youtube_account import PrivateFiles
-from game_vod_clipper.youtube_history import backfill_legacy, public_history
+from game_vod_clipper.storage.store import Store
+from game_vod_clipper.youtube.account import PrivateFiles
+from game_vod_clipper.youtube.history import backfill_legacy, public_history
 
 
 class CleanupTest(unittest.TestCase):
@@ -72,9 +72,9 @@ class CleanupTest(unittest.TestCase):
         self.assertIsNone(self.store.get("jobs", "clip"))
 
     def test_batch_deduplicates_ids_and_scans_once(self):
-        from game_vod_clipper.storage import video_inventory
+        from game_vod_clipper.storage.inventory import video_inventory
         item = self.item("clip.mp4")
-        with patch("game_vod_clipper.web.video_inventory", wraps=video_inventory) as scan:
+        with patch("game_vod_clipper.api.storage.video_inventory", wraps=video_inventory) as scan:
             result = self.remove_batch(item, item).json()
         scan.assert_called_once()
         self.assertEqual(len(result["deleted"]), 1)
