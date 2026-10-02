@@ -9,7 +9,11 @@
     "preview": "vite preview --host 127.0.0.1",
     "test:e2e": "playwright test",
     "test:chat": "playwright test --config playwright.chat.config.ts",
-    "test:youtube": "playwright test --config playwright.youtube.config.ts"
+    "test:youtube": "playwright test --config playwright.youtube.config.ts",
+    "lint": "biome ci .",
+    "lint:fix": "biome lint --write .",
+    "typecheck": "tsc -b --pretty false",
+    "test:storage": "playwright test --config playwright.storage.config.ts"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.3.7",
@@ -21,6 +25,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
+    "@biomejs/biome": "2.5.15",
     "@playwright/test": "^1.55.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",

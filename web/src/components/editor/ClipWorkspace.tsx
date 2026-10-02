@@ -1,0 +1,249 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Film, ListFilter, Pencil, Play, Save, Trophy } from "lucide-react";
+import { active, api, currentAnalysis, media, reviewCandidates, time, type Draft, type Job, type NumberedCandidate, type Project } from "../../lib/api";
+import AIWorkspaceTimeline from "./AIWorkspaceTimeline";
+import CandidateTimeline from "./CandidateTimeline";
+import SelectionOverlay, { timelinePosition, validSelection } from "./SelectionOverlay";
+import TimeRuler from "./TimeRuler";
+import TimelineZoom, { timelineWindow, zoomTimeline, type TimeWindow } from "./TimelineZoom";
+import { previewStep } from "../../lib/playback";
+
+export function candidates(project: Project, jobs: Job[]) {
+  return jobs.filter(j => {
+    const r = j.result;
+    return j.project_id === project.id && j.kind === "analyze" && j.status === "succeeded"
+      && r?.status === "candidate" && (!r.project_id || r.project_id === project.id)
+      && r.start !== null && r.victory !== null
+      && [r.start, r.victory, r.postroll].every(Number.isFinite)
+      && r.start >= 0 && r.start < r.victory && r.postroll >= 5 && r.postroll <= 10
+      && r.victory + r.postroll <= project.duration!;
+  });
+}
+
+export default function ClipWorkspace({ project, jobs, draft, selected, onSelect, onChange, onPlay, onSeek, current,
+  selectedSegment, onSelectSegment, onCandidateSaved, onError, onRecheck, view, onViewChange, onResetProgress, resetting, candidateActions, highlightedFields = [],
+  timingTarget, detailTarget }: {
+  project: Project; jobs: Job[]; draft: Draft; selected: string | null;
+  onSelect: (job: Job) => void; onChange: (values: Partial<Draft>) => void;
+  onPlay: (start: number, end: number) => void; onSeek: (seconds: number) => void; current: number;
+  selectedSegment: string | null; onSelectSegment: (segment: NumberedCandidate, seconds?: number) => void;
+  onCandidateSaved: (id: string, previousRevision: number, revision: number) => void;
+  onRecheck: (candidateId: string, start: number, end: number) => Promise<string>;
+  onError: (message: string) => void; view: TimeWindow; onViewChange: (view: TimeWindow) => void;
+  onResetProgress: () => Promise<void>; resetting: boolean; highlightedFields?: string[];
+  candidateActions?: ReactNode;
+  /** Side-panel slots; when given, clip actions and candidate details render there instead of under the timeline. */
+  timingTarget?: HTMLElement | null; detailTarget?: HTMLElement | null;
+}) {
+  const inPanel = (node: ReactNode, target: HTMLElement | null | undefined) =>
+    target === undefined ? node : target ? createPortal(node, target) : null;
+  const workspace = useRef<HTMLElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ edge: "start" | "victory"; pointer: number; left: number; width: number; from: number; span: number; draft: Draft } | null>(null);
+  const [showEvidence, setShowEvidence] = useState(false);
+  const [trackWidth, setTrackWidth] = useState(0);
+  const [savedCandidates, setSavedCandidates] = useState<Record<string, NumberedCandidate>>({});
+  const [savingRange, setSavingRange] = useState(false);
+  const [rangeError, setRangeError] = useState("");
+  const savePending = useRef(false);
+  const currentDraft = useRef(draft);
+  currentDraft.current = draft;
+  const segments = reviewCandidates(project, jobs).map(candidate => {
+    const saved = savedCandidates[candidate.id];
+    return saved && (saved.manual_edit?.revision ?? 0) > (candidate.manual_edit?.revision ?? 0) ? saved : candidate;
+  });
+  const editingCandidate = segments.find(candidate => candidate.id === draft.candidate_id);
+  const rangeSaved = !!editingCandidate?.manual_edit && (["start", "victory", "postroll"] as const)
+    .every(key => editingCandidate.manual_edit![key] === draft[key]);
+  const duration = project.duration!;
+  const frameStep = previewStep(project);
+  const finish = draft.victory + draft.postroll;
+  const valid = validSelection(draft, duration);
+  const { from, to } = view;
+  const span = to - from;
+  const clips = candidates(project, jobs);
+  const selectedJob = clips.find(j => j.id === selected);
+  const searches = jobs.filter(j => j.project_id === project.id && currentAnalysis(j));
+  const working = searches.find(active);
+  const thumbnails = project.thumbnails.filter(t => t.time >= from && t.time <= to).slice(0, 14);
+  const selectionInView = valid && draft.start < to && finish > from;
+  const crowdedMarkers = trackWidth > 0 && (draft.victory - draft.start) / span * trackWidth < 96;
+
+  useEffect(() => { setRangeError(""); }, [draft.candidate_id]);
+
+  useEffect(() => {
+    const element = track.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setTrackWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const element = workspace.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const target = (event.target as HTMLElement).closest(".clip-range-track, .candidate-overview, .ai-overview-track");
+      if (!target) return;
+      event.preventDefault();
+      if (drag.current) return;
+      // Candidate scrubbing owns a pointer capture; its time window remains stable.
+      if (element.querySelector('[data-scrubbing="true"]')) return;
+      const rect = target.getBoundingClientRect();
+      const anchor = from + Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)) * span;
+      onViewChange(zoomTimeline(view, duration, Math.exp(-Math.max(-100, Math.min(100, event.deltaY)) * .01), anchor));
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+  }, [view, duration, onViewChange, from, span]);
+
+  function adjust(edge: "start" | "victory", at: number, base: Draft) {
+    const value = edge === "start" ? Math.max(0, Math.min(base.victory - frameStep, at))
+      : Math.max(base.start + frameStep, Math.min(duration - base.postroll, at));
+    onChange({ [edge]: value });
+    onSeek(value);
+    return value;
+  }
+  /** Without number fields, an invalid restored range is fixed by rebuilding it at the playhead. */
+  function repairRange() {
+    const postroll = Math.min(10, Math.max(5, Math.round(Number.isFinite(draft.postroll) ? draft.postroll : 8)), Math.floor(duration - 1));
+    const latest = duration - postroll;
+    const start = Math.max(0, Math.min(current, latest - 1));
+    onChange({ start, victory: Math.min(latest, start + 60), postroll });
+    onSeek(start);
+  }
+  function editCandidate(candidate: NumberedCandidate) {
+    if (draft.candidate_id !== candidate.id) onSelectSegment(candidate);
+    setRangeError("");
+    // Selecting a candidate zooms the timeline to it; its handles exist after that render.
+    requestAnimationFrame(() => {
+      const handle = workspace.current?.querySelector<HTMLElement>('.clip-range-handle[data-edge="start"]');
+      handle?.scrollIntoView({ block: "nearest" });
+      handle?.focus({ preventScroll: true });
+    });
+  }
+  async function saveRange() {
+    if (!editingCandidate || !valid || !draft.manually_adjusted || savePending.current) return;
+    savePending.current = true;
+    setSavingRange(true);
+    setRangeError("");
+    try {
+      const saved = await api<NumberedCandidate>(`/projects/${project.id}/candidate-edit`, "PUT", {
+        candidate_id: editingCandidate.id, start: draft.start, victory: draft.victory, postroll: draft.postroll,
+        analysis_generation: project.analysis_generation ?? 0,
+        revision: savedCandidates[editingCandidate.id]?.manual_edit?.revision ?? draft.candidate_revision ?? 0,
+      });
+      setSavedCandidates(previous => ({ ...previous, [saved.id]: saved }));
+      onCandidateSaved(saved.id, draft.candidate_revision ?? 0, saved.manual_edit!.revision);
+    } catch (error) {
+      if (currentDraft.current.candidate_id === editingCandidate.id) setRangeError((error as Error).message);
+    }
+    finally { savePending.current = false; setSavingRange(false); }
+  }
+  return <section className="clip-workspace unified-workbench" aria-label="片段工作區" ref={workspace}>
+    {project.thumbnail_warning && <p className="inline-error" role="status">{project.thumbnail_warning}</p>}
+    <TimelineZoom duration={duration} view={view} current={current} selection={{ from: draft.start, to: finish }} onChange={onViewChange}>
+      <button type="button" aria-expanded={showEvidence} aria-controls="workbench-evidence" onClick={() => setShowEvidence(value => !value)}>
+        <ListFilter size={14} aria-hidden="true" />證據{working && <span className="tiny-dot" />}
+      </button>
+    </TimelineZoom>
+    <div className="clip-trimmer">
+      <div className="workbench-ruler"><span>原片時間</span><TimeRuler start={from} end={to} /></div>
+      <div className="workbench-trim-row">
+        <div className="workbench-lane-label clip-lane-label"><strong><Film size={14} aria-hidden="true" />目前剪輯</strong><small>匯出範圍 · 可調整</small></div>
+        <div className="clip-range-track" data-crowded-markers={crowdedMarkers || undefined} ref={track}>
+          <div className="review-thumbnail-strip">{thumbnails.map(t => <img key={t.file} src={media(project, t.file)} alt={`來源縮圖 ${time(t.time)}`} loading="lazy" />)}</div>
+          <SelectionOverlay draft={draft} duration={duration} view={view} />
+          <input className="compact-seek" type="range" aria-label="播放位置" min={from} max={to} step={frameStep}
+            aria-valuetext={time(Math.max(from, Math.min(to, current)), true)} value={Math.max(from, Math.min(to, current))} onChange={e => onSeek(Number(e.target.value))} />
+          {current >= from && current <= to && <span className="review-playhead" style={{ left: `${(current - from) / span * 100}%` }} />}
+          {valid && (["start", "victory"] as const).filter(edge => draft[edge] >= from && draft[edge] <= to).map(edge =>
+            <button key={edge} className={`clip-range-handle${highlightedFields.includes(edge) ? " ai-target" : ""}`} data-edge={edge} role="slider"
+              aria-label={edge === "start" ? "片段開始邊界" : "勝利位置邊界"}
+              aria-valuemin={edge === "start" ? 0 : draft.start + frameStep} aria-valuemax={edge === "start" ? draft.victory - frameStep : duration - draft.postroll}
+              aria-valuenow={draft[edge]} aria-valuetext={time(draft[edge], true)}
+              style={{ left: `${(draft[edge] - from) / span * 100}%` }}
+              title={edge === "start" ? "調整開始位置 · 方向鍵逐格微調，Shift 為 1 秒 · 按 I 設為播放位置"
+                : "調整勝利位置，收尾秒數保持不變 · 方向鍵逐格微調，Shift 為 1 秒 · 按 O 設為播放位置"}
+              onPointerDown={e => {
+                if (!e.isPrimary || e.button !== 0 || drag.current) return;
+                e.preventDefault(); e.currentTarget.focus({ preventScroll: true });
+                const rect = track.current!.getBoundingClientRect();
+                drag.current = { edge, pointer: e.pointerId, left: rect.left, width: rect.width, from, span, draft };
+                e.currentTarget.setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={e => {
+                const d = drag.current;
+                if (!d || d.pointer !== e.pointerId) return;
+                adjust(d.edge, d.from + Math.max(0, Math.min(1, (e.clientX - d.left) / d.width)) * d.span, d.draft);
+              }}
+              onPointerUp={e => { drag.current = null; if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}
+              onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}
+              onKeyDown={e => {
+                if (!["ArrowLeft", "ArrowRight"].includes(e.key)) return;
+                e.preventDefault(); e.stopPropagation();
+                const value = adjust(edge, draft[edge] + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 1 : frameStep), draft);
+                // Follow the handle so it, and keyboard focus, stay on the timeline.
+                if (value < from || value > to) onViewChange(timelineWindow(value - span / 2, span, duration));
+              }}><span className="trim-handle-grip" /></button>)}
+          {valid && draft.victory >= from && draft.victory <= to && <span className="clip-victory-guide" aria-hidden="true" style={{ left: `${timelinePosition(draft.victory, view)}%` }} />}
+          {valid && ([{ kind: "start", at: draft.start, label: "開始" }, { kind: "victory", at: draft.victory, label: "勝利" }, { kind: "end", at: finish, label: "結束" }])
+            .filter(point => point.at >= from && point.at <= to).map(point => <span key={point.kind}
+              className={`clip-point-label point-${point.kind}`} aria-hidden="true" data-time={point.at}
+              style={{ left: `clamp(0px, ${timelinePosition(point.at, view)}%, calc(100% - 48px))` }}>{point.label}</span>)}
+          {valid && finish >= from && finish <= to && <span className="clip-end-marker" aria-hidden="true" style={{ left: `${timelinePosition(finish, view)}%` }} />}
+        </div>
+      </div>
+    </div>
+    <div id="source-selection-details" className={valid ? "sr-only" : "inline-error"} role={!valid ? "status" : undefined}>
+      {valid ? <>目前剪輯 {time(draft.start, true)} → {time(finish, true)} · 片長 {time(finish - draft.start, true)} · 含收尾 {draft.postroll} 秒</>
+        : <>目前區間無效。請讓開始早於勝利，並保留原片內的 5–10 秒收尾。
+          <button type="button" className="text-button" onClick={repairRange}>從播放位置重設區間</button></>}
+    </div>
+    {valid && !selectionInView && <p className="workbench-outside">目前剪輯區間在可視範圍外
+      <button className="text-button" onClick={() => onViewChange(timelineWindow(draft.start - 5, finish - draft.start + 10, duration))}>回到目前剪輯</button></p>}
+    {inPanel(<><section className="workbench-timing" aria-label="剪輯設定">
+      <div className="workbench-preview-actions">
+        {!editingCandidate && draft.manually_adjusted && <span className="manual-adjustment-badge"><Pencil size={12} aria-hidden="true" />已手動調整</span>}
+        <button type="button" disabled={!valid} onClick={() => onPlay(draft.start, finish)}><Play size={14} />預覽這段 · {time(Math.max(0, finish - draft.start))}</button>
+        <span className="clip-end-time">片段結束 {time(finish, true)}</span>
+      </div>
+    </section>
+    {editingCandidate && <div className="candidate-edit-session" role="group" aria-label={`正在編輯片段 #${editingCandidate.number}`}>
+      <div><strong><Pencil size={14} aria-hidden="true" />編輯片段 #{editingCandidate.number}
+        {draft.manually_adjusted && <span className="manual-adjustment-badge">已手動調整</span>}</strong>
+        <p>{rangeSaved ? "區間已儲存，可直接匯出。" : "修改暫存於此瀏覽器，切換片段後可繼續編輯。"}</p>
+        {editingCandidate.victory === null && <p>勝利時間尚未確認，目前為暫定值，請定位勝利畫面後調整。</p>}</div>
+      <button type="button" className="secondary" disabled={!valid || !draft.manually_adjusted || savingRange || rangeSaved} onClick={() => void saveRange()}>
+        <Save size={14} aria-hidden="true" />{savingRange ? "儲存中…" : rangeSaved ? "區間已儲存" : "儲存區間"}</button>
+      {rangeError && <p className="inline-error" role="alert">{rangeError}</p>}
+    </div>}</>, timingTarget)}
+    <div className="source-comparison-legend" role="group" aria-label="原片對照圖例">
+      <span><i className="source-legend-selection" aria-hidden="true" />實框：匯出範圍</span>
+      <span><i className="source-legend-postroll" aria-hidden="true" />淡色區：收尾，仍會匯出</span>
+    </div>
+    <div className="workbench-candidate-actions">{candidateActions}</div>
+    <CandidateTimeline project={project} jobs={jobs} draft={draft} segments={segments} selected={selectedSegment} view={view}
+      current={current} detailTarget={detailTarget} onSelect={onSelectSegment} onSeek={onSeek} onPlay={onPlay} onEdit={editCandidate} onError={onError} onRecheck={onRecheck} />
+
+    <div id="workbench-evidence" hidden={!showEvidence}>
+      <AIWorkspaceTimeline project={project} jobs={jobs} view={view} current={current} onSeek={onSeek} onResetProgress={onResetProgress} resetting={resetting} />
+    </div>
+    <details className="workbench-review-tools"><summary>快速核對與 AI 草稿{selectedJob ? ` · ${selectedJob.result!.boss || "成功挑戰"}` : ""}</summary>
+      <div className="review-preview-actions">
+        <button disabled={!valid} onClick={() => onPlay(draft.start, Math.min(finish, draft.start + 8))}><Play size={13} />檢查開頭</button>
+        <button disabled={!valid} onClick={() => onPlay(Math.max(draft.start, draft.victory - 4), Math.min(finish, draft.victory + 3))}><Trophy size={13} />看勝利瞬間</button>
+        <button disabled={!valid} onClick={() => onPlay(draft.victory, finish)}><Play size={13} />檢查收尾</button>
+      </div>
+      {!!clips.length && <div className="clip-candidates" role="group" aria-label="AI 候選片段">
+        {clips.map(job => <button key={job.id} className={selected === job.id ? "selected" : ""} aria-pressed={selected === job.id}
+          aria-label={`選取片段 ${job.result!.boss || "成功挑戰"}`} onClick={() => onSelect(job)}>
+          <Trophy size={13} /><strong>{job.result!.boss || "成功挑戰"}</strong><span>{time(job.result!.victory! + job.result!.postroll - job.result!.start!)}</span>
+        </button>)}
+      </div>}
+      {!!selectedJob?.result?.warnings.length && <details><summary>候選需留意的地方</summary>{selectedJob.result.warnings.map((w, i) => <p key={i}>{w}</p>)}</details>}
+    </details>
+  </section>;
+}

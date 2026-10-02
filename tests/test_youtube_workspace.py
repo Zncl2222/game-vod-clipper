@@ -16,8 +16,8 @@ from fastapi.testclient import TestClient
 
 from game_vod_clipper.web import create_app
 from game_vod_clipper.web_store import Store
-from game_vod_clipper.youtube_account import API, SCOPES, YouTubeAccount, YouTubeError, google_error
-from game_vod_clipper.youtube_routes import ImportBroadcast, WatchSettings, YouTubeWorkspace
+from game_vod_clipper.youtube_account import SCOPES, YouTubeAccount, YouTubeError, google_error
+from game_vod_clipper.youtube_routes import WatchSettings, YouTubeWorkspace
 from game_vod_clipper.youtube_uploads import UPLOAD, YouTubeUploads
 
 ROOT = Path(__file__).resolve().parents[1]

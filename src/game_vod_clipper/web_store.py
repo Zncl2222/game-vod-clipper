@@ -35,14 +35,14 @@ class Store:
     def get(self, table: str, key: str) -> dict | None:
         self._table(table)
         with self.connect() as db:
-            row = db.execute(f"SELECT data FROM {table} WHERE id=?", (key,)).fetchone()
+            row = db.execute(f"SELECT data FROM {table} WHERE id=?", (key,)).fetchone()  # nosec B608 # _table() allowlists identifiers; values are bound.
         return json.loads(row[0]) if row else None
 
     def all(self, table: str) -> list[dict]:
         self._table(table)
         with self.connect() as db:
             rows = db.execute(
-                f"SELECT data FROM {table} ORDER BY rowid DESC"
+                f"SELECT data FROM {table} ORDER BY rowid DESC"  # nosec B608 # _table() allowlists identifiers; values are bound.
             ).fetchall()
         return [json.loads(row[0]) for row in rows]
 
@@ -51,7 +51,7 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             db.execute(
-                f"INSERT INTO {table} VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+                f"INSERT INTO {table} VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",  # nosec B608 # _table() allowlists identifiers; values are bound.
                 (value["id"], json.dumps(value, ensure_ascii=False, allow_nan=False)),
             )
             if table == "projects":
@@ -61,12 +61,12 @@ class Store:
         self._table(table)
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(f"SELECT data FROM {table} WHERE id=?", (key,)).fetchone()
+            row = db.execute(f"SELECT data FROM {table} WHERE id=?", (key,)).fetchone()  # nosec B608 # _table() allowlists identifiers; values are bound.
             if not row:
                 raise KeyError(key)
             value = json.loads(row[0]) | changes
             db.execute(
-                f"UPDATE {table} SET data=? WHERE id=?",
+                f"UPDATE {table} SET data=? WHERE id=?",  # nosec B608 # _table() allowlists identifiers; values are bound.
                 (json.dumps(value, ensure_ascii=False, allow_nan=False), key),
             )
             if table == "projects":

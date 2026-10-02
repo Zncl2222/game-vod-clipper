@@ -36,8 +36,8 @@
       "extensions": [
         "ms-python.python",
         "ms-python.vscode-pylance",
-        "esbenp.prettier-vscode",
-        "bradlc.vscode-tailwindcss"
+        "charliermarsh.ruff",
+        "biomejs.biome"
       ]
     }
   },

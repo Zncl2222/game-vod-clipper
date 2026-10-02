@@ -11,6 +11,7 @@ from game_vod_clipper.web import create_app
 
 
 root = Path(__file__).resolve().parents[2]
+(root / "runs").mkdir(exist_ok=True)
 with tempfile.TemporaryDirectory(prefix="storage-ui-", dir=root / "runs") as folder:
     workspace = Path(folder)
     source = workspace / "downloads" / "qa-original.mp4"
