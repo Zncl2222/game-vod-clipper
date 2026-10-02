@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import type { NumberedCandidate, Project, State, StorageLocations, VideoStorage } from "../src/api";
+import type { NumberedCandidate, Project, State, StorageLocations, VideoStorage } from "../src/lib/api";
 import { edgeHandle, expectEdge, setEdge } from "./timing";
 
 async function workspace(page: Page) {

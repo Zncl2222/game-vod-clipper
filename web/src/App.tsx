@@ -1,27 +1,27 @@
 import { useEffect, useImperativeHandle, useRef, useState, type CSSProperties, type Ref } from "react";
-import BossReviewDock from "./BossReviewDock";
-import MediaProgress, { remaining } from "./MediaProgress";
-import ExportProgress from "./ExportProgress";
-import PreferencesDialog from "./PreferencesDialog";
-import GameProfilesDialog, { effectiveProfile } from "./GameProfiles";
-import { exportQualityLabel, usePreferences } from "./preferences";
-import { clipLength, estimateExportSeconds, rememberExportSpeed, requestExportNotifications, useExportNotifications } from "./exportInsights";
-import FinishedClips from "./FinishedClips";
-import EditorTools from "./EditorTools";
-import { candidateDraftStorageKey, draftStorageKey, readCandidateDrafts, readWorkingDraft } from "./editorDrafts";
-import { validSelection } from "./SelectionOverlay";
-import { timelineWindow, type TimeWindow } from "./TimelineZoom";
-import ClipWorkspace, { candidates } from "./ClipWorkspace";
-import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./ChatPanel";
-import ProjectLibrary from "./ProjectLibrary";
-import LocalStorageUsage from "./LocalStorageUsage";
-import ImportModal from "./ImportModal";
-import YouTubeDialog, { type UploadTarget } from "./YouTubeDialog";
-import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./WorkspaceGuide";
-import { usePanelLayout, usePanelVisibility } from "./ResizableSidebars";
-import { useWorkbenchSize } from "./ResizableWorkbench";
-import { useInspectorWidth } from "./ResizableInspector";
-import { playbackError, playbackFile, previewStep } from "./playback";
+import BossReviewDock from "./components/ai/BossReviewDock";
+import MediaProgress, { remaining } from "./components/media/MediaProgress";
+import ExportProgress from "./components/media/ExportProgress";
+import PreferencesDialog from "./components/settings/PreferencesDialog";
+import GameProfilesDialog, { effectiveProfile } from "./components/settings/GameProfiles";
+import { exportQualityLabel, usePreferences } from "./lib/preferences";
+import { clipLength, estimateExportSeconds, rememberExportSpeed, requestExportNotifications, useExportNotifications } from "./lib/exportInsights";
+import FinishedClips from "./components/library/FinishedClips";
+import EditorTools from "./components/editor/EditorTools";
+import { candidateDraftStorageKey, draftStorageKey, readCandidateDrafts, readWorkingDraft } from "./lib/editorDrafts";
+import { validSelection } from "./components/editor/SelectionOverlay";
+import { timelineWindow, type TimeWindow } from "./components/editor/TimelineZoom";
+import ClipWorkspace, { candidates } from "./components/editor/ClipWorkspace";
+import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./components/ai/ChatPanel";
+import ProjectLibrary from "./components/library/ProjectLibrary";
+import LocalStorageUsage from "./components/storage/LocalStorageUsage";
+import ImportModal from "./components/library/ImportModal";
+import YouTubeDialog, { type UploadTarget } from "./components/youtube/YouTubeDialog";
+import { WelcomeScreen, WorkflowSteps, WorkspaceGuide } from "./components/layout/WorkspaceGuide";
+import { usePanelLayout, usePanelVisibility } from "./components/layout/ResizableSidebars";
+import { useWorkbenchSize } from "./components/layout/ResizableWorkbench";
+import { useInspectorWidth } from "./components/layout/ResizableInspector";
+import { playbackError, playbackFile, previewStep } from "./lib/playback";
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -69,7 +69,7 @@ import {
   type Project,
   type State,
   type ProfileListing,
-} from "./api";
+} from "./lib/api";
 
 export default function App() {
   const [state, setState] = useState<State>({ projects: [], jobs: [] });

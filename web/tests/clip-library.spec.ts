@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import type { Draft, Job, Project } from "../src/api";
+import type { Draft, Job, Project } from "../src/lib/api";
 import { edgeHandle, expectEdge, setEdge } from "./timing";
 
 const source: Project = { id: "clips-project", title: "艾爾登法環 · 成品與原片", ready: true, duration: 7200,
