@@ -189,7 +189,8 @@ class ConnectionRoutesTest(unittest.TestCase):
                 self.assertEqual(client.post("/api/codex/test", headers={"origin": "https://evil.test"}).status_code, 403)
                 connection.probe = AsyncMock(side_effect=ConnectionError("尚未登入"))
                 self.assertEqual(client.post("/api/codex/test").status_code, 503)
-                self.assertEqual(client.get("/api/codex/logout").status_code, 404)
+                # A static frontend mount can turn the rejected GET into a 404.
+                self.assertIn(client.get("/api/codex/logout").status_code, {404, 405})
                 connection.logout.assert_awaited_once()
                 self.assertEqual(client.post("/api/codex/logout", headers={"origin": "https://evil.test"}).status_code, 403)
                 connection.logout = AsyncMock(side_effect=ConnectionError("無法登出"))
