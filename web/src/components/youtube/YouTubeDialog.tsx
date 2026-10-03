@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, ExternalLink, Film, Link2, LoaderCircle, RefreshCw, Upload, X, Youtube } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ExternalLink, Film, Link2, LoaderCircle, RefreshCw, Upload, X, SquarePlay } from "lucide-react";
 import { api, ApiError, time, type Job, type Project } from "../../lib/api";
 import YouTubeImportQueue, { importIsPending, importIsWorking, type ImportRecord } from "./YouTubeImportQueue";
 import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
@@ -288,7 +288,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
 
   return <dialog ref={dialog} className="yt-dialog" aria-labelledby="yt-dialog-title" onCancel={event => { event.preventDefault(); onClose(); }}
     onKeyDown={event => { if (event.key === "Escape" && !historyOpen) { event.preventDefault(); event.stopPropagation(); onClose(); } }}>
-    <header className="yt-heading"><div><span className="studio-kicker">YOUR CHANNEL, YOUR CLIPS</span><h2 id="yt-dialog-title"><Youtube size={24} aria-hidden="true" />我的 YouTube</h2>
+    <header className="yt-heading"><div><span className="studio-kicker">YOUR CHANNEL, YOUR CLIPS</span><h2 id="yt-dialog-title"><SquarePlay size={24} aria-hidden="true" />我的 YouTube</h2>
       <p>直播交給 AI 找片段，剪好的成品由你確認上傳。</p></div><button type="button" className="icon-button" aria-label="關閉 YouTube 視窗" onClick={onClose}><X size={22} aria-hidden="true" /></button></header>
     <div className="yt-content">
       <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setHistoryOpen(true)}>YouTube 匯入歷史</button>
