@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from .codex_connection import CodexConnection, ConnectionError
+from .connection import CodexConnection, ConnectionError
 
 
 class StrictModel(BaseModel):

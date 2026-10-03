@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from game_vod_clipper.codex_connection import MODEL
-from game_vod_clipper.game_profiles import GameProfiles
-from game_vod_clipper.review_prompt import review_prompt
+from game_vod_clipper.codex.connection import MODEL
+from game_vod_clipper.analysis.game_profiles import GameProfiles
+from game_vod_clipper.analysis.prompt import review_prompt
 from game_vod_clipper.web import create_app
 
 
@@ -95,7 +95,7 @@ class GameProfilesTest(unittest.TestCase):
         self.app.state.codex.status = AsyncMock(return_value={"available": True})
         self.app.state.codex.models = AsyncMock(return_value=[{"id": MODEL, "effort": "medium",
                                                                "input_modalities": ["text", "image"]}])
-        with patch("game_vod_clipper.web.Jobs.submit", return_value={"id": "queued"}) as submit:
+        with patch("game_vod_clipper.jobs.scheduler.Jobs.submit", return_value={"id": "queued"}) as submit:
             self.assertEqual(self.client.post("/api/projects/p/analyze", json={"start": 0, "end": 60}).status_code, 202)
         snapshot = submit.call_args.kwargs["analysis"]["profile"]
         self.assertEqual((snapshot["id"], snapshot["title"], [i["kind"] for i in snapshot["images"]]),

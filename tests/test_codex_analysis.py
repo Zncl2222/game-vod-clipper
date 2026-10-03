@@ -15,17 +15,14 @@ from unittest.mock import ANY, AsyncMock, patch
 try:
     from fastapi.testclient import TestClient
 
-    from game_vod_clipper.codex_analysis import (
-        MODEL,
-        AnalysisProgress,
-        invoke_codex,
-        packets,
-        run_analysis,
-        validate_observation,
-    )
+    from game_vod_clipper.analysis.client import MODEL, invoke_codex
+    from game_vod_clipper.analysis.activity import AnalysisProgress
+    from game_vod_clipper.analysis.sampling import packets
+    from game_vod_clipper.analysis.pipeline import run_analysis
+    from game_vod_clipper.analysis.validation import validate_observation
     from game_vod_clipper.web import create_app
-    from game_vod_clipper.web_store import Store
-    from game_vod_clipper.codex_runtime import CodexCallError, call_error
+    from game_vod_clipper.storage.store import Store
+    from game_vod_clipper.codex.runtime import CodexCallError, call_error
 
     AVAILABLE = True
 except ImportError:
@@ -49,7 +46,7 @@ def observation(**changes):
 @unittest.skipUnless(AVAILABLE, "Install web/test extras")
 class CodexStreamingTest(unittest.TestCase):
     def test_analysis_passes_selected_model_to_shared_executor(self):
-        with patch("game_vod_clipper.codex_analysis.execute",
+        with patch("game_vod_clipper.analysis.client.execute",
                    return_value={"reply": "{}", "usage": {}}) as execute:
             invoke_codex(self.work, [], "metadata only", 10, model="picked", effort="low")
         self.assertEqual(execute.call_args.kwargs["model"], "picked")
@@ -108,8 +105,8 @@ sys.stdout.flush()
             self.processes.append(process)
             return process
 
-        with patch("game_vod_clipper.codex_runtime.shutil.which", return_value=sys.executable), patch(
-            "game_vod_clipper.codex_runtime.subprocess.Popen", side_effect=fake_popen
+        with patch("game_vod_clipper.codex.runtime.shutil.which", return_value=sys.executable), patch(
+            "game_vod_clipper.codex.runtime.subprocess.Popen", side_effect=fake_popen
         ):
             return invoke_codex(self.work, [], "fixture prompt" * 20000, timeout, on_event=callback, on_usage=on_usage)
 
@@ -159,7 +156,7 @@ sys.stdout.flush()
         self.assertFalse((self.work / "response.json").exists())
 
     def test_capacity_error_remains_specific_after_bounded_retries(self):
-        with patch("game_vod_clipper.codex_analysis.time.sleep"):
+        with patch("game_vod_clipper.analysis.client.time.sleep"):
             with self.assertRaisesRegex(CodexCallError, "滿載.*重試 2 次.*保留分析進度"):
                 self.invoke("capacity", lambda event: None, timeout=60)
         self.assertEqual(len(self.processes), 3)
@@ -167,9 +164,9 @@ sys.stdout.flush()
             self.assertIn("at capacity", (folder / "events.jsonl").read_text())
 
     def test_retries_share_one_packet_deadline(self):
-        with patch("game_vod_clipper.codex_analysis.execute", side_effect=call_error("chosen", ["at capacity"])) as execute, \
-             patch("game_vod_clipper.codex_analysis.time.monotonic", side_effect=[0, 0, 9]), \
-             patch("game_vod_clipper.codex_analysis.time.sleep") as sleep:
+        with patch("game_vod_clipper.analysis.client.execute", side_effect=call_error("chosen", ["at capacity"])) as execute, \
+             patch("game_vod_clipper.analysis.client.time.monotonic", side_effect=[0, 0, 9]), \
+             patch("game_vod_clipper.analysis.client.time.sleep") as sleep:
             with self.assertRaisesRegex(CodexCallError, "滿載.*等待額度已用完.*保留進度"):
                 invoke_codex(self.work, [], "question", 10, model="chosen")
         self.assertEqual(execute.call_count, 1)
@@ -180,8 +177,8 @@ sys.stdout.flush()
                      {"reply": '{"status":"not_found"}', "usage": {"input_tokens": 7}}]
         events = []
         images = [self.work / "already-extracted.jpg"]
-        with patch("game_vod_clipper.codex_analysis.execute", side_effect=responses) as execute, \
-             patch("game_vod_clipper.codex_analysis.time.sleep"):
+        with patch("game_vod_clipper.analysis.client.execute", side_effect=responses) as execute, \
+             patch("game_vod_clipper.analysis.client.time.sleep"):
             result, usage = invoke_codex(self.work, images, "same question", None,
                                         model="chosen", effort="xhigh", on_event=events.append)
         self.assertEqual(result["status"], "not_found")
@@ -203,7 +200,7 @@ sys.stdout.flush()
                 error = call_error("chosen", [message])
                 self.assertEqual(error.kind, kind)
                 self.assertFalse(error.retryable)
-                with patch("game_vod_clipper.codex_analysis.execute", side_effect=error) as execute:
+                with patch("game_vod_clipper.analysis.client.execute", side_effect=error) as execute:
                     with self.assertRaises(CodexCallError):
                         invoke_codex(self.work, [], "prompt", None, model="chosen")
                     self.assertEqual(execute.call_count, 1)
@@ -217,7 +214,7 @@ sys.stdout.flush()
     def test_heartbeat_is_distinct_from_activity_and_stops_on_exit(self):
         store = Store(self.work)
         store.put("jobs", {"id": "analysis"})
-        with patch("game_vod_clipper.codex_analysis.HEARTBEAT_INTERVAL", 0.02):
+        with patch("game_vod_clipper.analysis.activity.HEARTBEAT_INTERVAL", 0.02):
             with AnalysisProgress(store, "analysis") as progress:
                 progress.codex_event({"type": "item.completed", "item": {"type": "reasoning", "text": "private reasoning"}})
                 initial = store.get("jobs", "analysis")
@@ -316,7 +313,7 @@ class CodexAnalysisTest(unittest.TestCase):
 
     def test_offline_analysis_preserves_existing_draft(self):
         with patch(
-            "game_vod_clipper.codex_analysis.invoke_codex",
+            "game_vod_clipper.analysis.pipeline.invoke_codex",
             return_value=(observation(), {"input_tokens": 10}),
         ) as invoke:
             run_analysis(self.store, self.job, self.project)
@@ -331,7 +328,7 @@ class CodexAnalysisTest(unittest.TestCase):
 
     def test_profile_references_precede_samples_and_are_labelled(self):
         from PIL import Image
-        from game_vod_clipper.game_profiles import GameProfiles
+        from game_vod_clipper.analysis.game_profiles import GameProfiles
         profiles = GameProfiles(self.root)
         profile = profiles.create("Ronin", "")
         picture = self.root / "ref.png"
@@ -339,7 +336,7 @@ class CodexAnalysisTest(unittest.TestCase):
         profile = profiles.add_image(profile["id"], "failure", "死亡畫面", picture.read_bytes())
         job = self.job | {"analysis": {**self.job["analysis"], "profile": profiles.snapshot(profile)}}
         self.store.put("jobs", job)
-        with patch("game_vod_clipper.codex_analysis.invoke_codex",
+        with patch("game_vod_clipper.analysis.pipeline.invoke_codex",
                    return_value=(observation(), {})) as invoke:
             run_analysis(self.store, job, self.project)
         images, prompt = invoke.call_args.args[1], invoke.call_args.args[2]
@@ -351,7 +348,7 @@ class CodexAnalysisTest(unittest.TestCase):
     def test_reject_unobserved_evidence_and_out_of_range_refinement(self):
         with (
             patch(
-                "game_vod_clipper.codex_analysis.invoke_codex",
+                "game_vod_clipper.analysis.pipeline.invoke_codex",
                 return_value=(
                     observation(evidence=[{"time": 0.5, "event": "victory"}]),
                     {},
@@ -361,7 +358,7 @@ class CodexAnalysisTest(unittest.TestCase):
         ):
             run_analysis(self.store, self.job, self.project)
         with patch(
-            "game_vod_clipper.codex_analysis.invoke_codex",
+            "game_vod_clipper.analysis.pipeline.invoke_codex",
             return_value=(
                 observation(sample_requests=[{"start": 50, "end": 60, "every": 1}]),
                 {},
@@ -382,7 +379,7 @@ class CodexAnalysisTest(unittest.TestCase):
         with (
             TestClient(app) as client,
             patch(
-                "game_vod_clipper.web.Jobs.submit", return_value={"id": "queued"}
+                "game_vod_clipper.jobs.scheduler.Jobs.submit", return_value={"id": "queued"}
             ) as submit,
         ):
             for bounds in (
@@ -413,7 +410,7 @@ class CodexAnalysisTest(unittest.TestCase):
         app.state.codex.models = AsyncMock(return_value=[{
             "id": MODEL, "effort": "medium", "supported_efforts": ["medium", "high", "xhigh"],
             "input_modalities": ["text", "image"]}])
-        with TestClient(app) as client, patch("game_vod_clipper.web.Jobs.submit", return_value={"id": "queued"}) as submit:
+        with TestClient(app) as client, patch("game_vod_clipper.jobs.scheduler.Jobs.submit", return_value={"id": "queued"}) as submit:
             for extra, expected in (({}, "adaptive"), ({"effort_policy": "fixed"}, "fixed")):
                 response = client.post("/api/projects/synthetic/analyze", json={
                     "start": 0, "end": 16, "effort": "xhigh", **extra})
