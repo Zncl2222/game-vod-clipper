@@ -366,7 +366,7 @@ test("playlist choice survives failed submission and joining can retry without u
 test("legacy connections can authorize playlists without losing upload fields", async ({ page }) => {
   const state = await setup(page);
   state.account.playlist_write_enabled = false;
-  await page.context().route("https://accounts.google.com/**", route => route.fulfill({ body: "Test authorization" }));
+  await page.context().route("https://accounts.google.com/**", route => route.fulfill({ contentType: "text/html", body: "Test authorization" }));
   await page.getByRole("tab", { name: "成品 1" }).click();
   await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
   const picker = page.getByLabel("加入播放清單", { exact: false });
@@ -378,7 +378,11 @@ test("legacy connections can authorize playlists without losing upload fields", 
   const popup = page.waitForEvent("popup");
   await page.getByRole("button", { name: "授權播放清單", exact: true }).click();
   await request;
-  await (await popup).close();
+  const authorization = await popup;
+  // Wait for the mocked OAuth document before closing the initially blank popup.
+  await expect(authorization).toHaveURL("https://accounts.google.com/o/oauth2/v2/auth?state=test");
+  await expect(authorization.getByText("Test authorization", { exact: true })).toBeVisible();
+  await authorization.close();
   await expect(page.getByRole("button", { name: "取消授權", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeDisabled();
   state.account.pending = false;
