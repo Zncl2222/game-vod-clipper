@@ -13,10 +13,11 @@ from pathlib import Path
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
+from starlette.routing import Mount
 from starlette.websockets import WebSocketDisconnect
 
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.storage.store import Store
 
 
 class WebSocketRoutingTest(unittest.TestCase):
@@ -28,7 +29,7 @@ class WebSocketRoutingTest(unittest.TestCase):
             (frontend / "index.html").write_text("test frontend")
             app = create_app(root)
             # Exercise the static mount even when web/dist has not been built.
-            app.router.routes[:] = [r for r in app.routes if r.name != "frontend"]
+            app.router.routes[:] = [r for r in app.routes if not isinstance(r, Mount) or r.name != "frontend"]
             app.mount("/", StaticFiles(directory=frontend, html=True), name="frontend")
             with TestClient(app) as client:
                 for path in ("/", "/assets/app.js", "/api/events"):
@@ -67,6 +68,7 @@ import asyncio
 import os
 from pathlib import Path
 from game_vod_clipper import web
+from game_vod_clipper.api import analysis
 
 async def pending_chat(*args):
     try:
@@ -74,7 +76,7 @@ async def pending_chat(*args):
     finally:
         (Path(os.environ['GAME_VOD_ROOT']) / 'chat-cancelled').write_text('done')
 
-web.chat = pending_chat
+analysis.chat = pending_chat
 web.main()
 """
         self.process = subprocess.Popen(

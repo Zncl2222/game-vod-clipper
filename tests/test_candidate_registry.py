@@ -1,8 +1,8 @@
 import unittest
 import random
 
-from game_vod_clipper.candidate_registry import CandidateRegistry
-from game_vod_clipper.codex_analysis import PACKET_SIZE, enqueue_unseen, missing_ranges, next_unseen, normalized_request
+from game_vod_clipper.analysis.registry import CandidateRegistry
+from game_vod_clipper.analysis.sampling import PACKET_SIZE, enqueue_unseen, missing_ranges, next_unseen, normalized_request
 
 
 def segment(key, start=0, end=10, **changes):
