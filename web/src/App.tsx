@@ -50,7 +50,7 @@ import {
   Sparkles,
   Trophy,
   X,
-  Youtube,
+  SquarePlay,
   Images,
 } from "lucide-react";
 import {
@@ -193,7 +193,7 @@ export default function App() {
           <span>匯入影片</span>
         </button>
         <button type="button" className="youtube-library-button" aria-label="我的 YouTube" title="我的 YouTube" aria-haspopup="dialog"
-          onClick={() => { setUploadTarget(undefined); setYoutubeOpen(true); }}><Youtube size={18} aria-hidden="true" /><span>我的 YouTube</span></button>
+          onClick={() => { setUploadTarget(undefined); setYoutubeOpen(true); }}><SquarePlay size={18} aria-hidden="true" /><span>我的 YouTube</span></button>
         <div className="nav-caption">
           素材庫{" "}
           <span>{state.projects.length.toString().padStart(2, "0")}</span>

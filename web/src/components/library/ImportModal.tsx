@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, X, Youtube } from "lucide-react";
+import { ArrowRight, FolderOpen, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, X, SquarePlay } from "lucide-react";
 import { api, type Project, type Source, type StorageLocations } from "../../lib/api";
 import DownloadQuality from "../media/DownloadQuality";
 import { setPreferences, usePreferences } from "../../lib/preferences";
@@ -88,7 +88,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
       <p id="import-description">選擇影片來源，原片就緒即可剪輯，不另製作整支預覽。</p>
       <div className="tabs" role="group" aria-label="影片來源">
         <button type="button" disabled={busy} className={`tab ${kind === "local" ? "active" : ""}`} aria-pressed={kind === "local"} onClick={() => chooseKind("local")}><HardDrive aria-hidden="true" size={18} />本機影片</button>
-        <button type="button" disabled={busy} className={`tab ${kind === "youtube" ? "active" : ""}`} aria-pressed={kind === "youtube"} onClick={() => chooseKind("youtube")}><Youtube aria-hidden="true" size={19} />YouTube 網址</button>
+        <button type="button" disabled={busy} className={`tab ${kind === "youtube" ? "active" : ""}`} aria-pressed={kind === "youtube"} onClick={() => chooseKind("youtube")}><SquarePlay aria-hidden="true" size={19} />YouTube 網址</button>
       </div>
       {kind === "local" ? <>
         <div className="source-label"><label htmlFor="source">選擇影片</label><button type="button" className="text-button" disabled={loading || busy} onClick={loadSources}><RefreshCw aria-hidden="true" size={14} className={loading ? "spin" : ""} />重新整理素材</button></div>
@@ -109,7 +109,7 @@ export default function ImportModal({ onClose, onImport, onYouTube }: { onClose:
           {previousImport.project_id ? "專案仍保留" : "專案已刪除，但匯入歷史仍保留"}；繼續會重新匯入並建立新專案。</p>}
         {historyError && <p className="field-help" role="status">暫時無法查詢匯入歷史；本次不會判斷是否重複匯入。</p>}
         <DownloadQuality value={quality} onChange={value => setPreferences({ downloadQuality: value })} disabled={busy} />
-        {onYouTube && <button type="button" className="import-youtube-account" disabled={busy} onClick={onYouTube}><Youtube size={18} aria-hidden="true" />從我的 YouTube 選直播<ArrowRight size={16} aria-hidden="true" /></button>}
+        {onYouTube && <button type="button" className="import-youtube-account" disabled={busy} onClick={onYouTube}><SquarePlay size={18} aria-hidden="true" />從我的 YouTube 選直播<ArrowRight size={16} aria-hidden="true" /></button>}
       </>}
       <p id="import-field-error" className="inline-error" role={fieldError ? "alert" : undefined}>{fieldError}</p>
       <div className="subtle-note"><ShieldCheck aria-hidden="true" size={17} /><span>原片保留在本機。匯入後可自行剪輯，或請 AI 協助尋找成功挑戰。</span></div>
