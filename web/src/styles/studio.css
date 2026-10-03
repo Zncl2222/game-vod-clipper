@@ -306,13 +306,16 @@ footer { color: var(--muted); font-size: 12px; padding-block: 24px; line-height:
 .chat-context { margin: 16px 16px 4px; padding: 8px 10px; background: var(--surface-subtle); font-size: 12px; color: var(--muted); border-color: var(--line); }
 .chat-context > span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .chat-messages { padding: 20px 18px; }
-.chat-welcome { padding: clamp(24px, 7dvh, 64px) 2px 20px; }
-.chat-welcome-icon { width: 48px; height: 48px; display: grid; place-items: center; background: var(--surface-active); color: var(--accent); border-radius: 14px; margin-bottom: 24px; }
-.chat-welcome .eyebrow { font-size: 9px; color: var(--muted); letter-spacing: 1.2px; }
-.chat-welcome h3 { font-size: 24px; line-height: 1.5; font-weight: 500; text-wrap: balance; margin-top: 12px; }
-.chat-welcome p { font-size: 13px; color: var(--muted); max-width: none; line-height: 1.9; }
-.chat-suggestions { margin: 24px 0 12px; gap: 10px; }
-.chat-suggestions button { min-height: 44px; font-size: 12px; color: var(--ink); background: var(--surface-subtle); border-color: var(--line); padding: 12px; gap: 12px; }
+.chat-welcome { padding: 0 0 16px; }
+.chat-welcome-heading { display: flex; align-items: center; gap: 12px; }
+.chat-welcome-icon { width: 36px; height: 36px; flex-shrink: 0; display: grid; place-items: center; background: var(--surface-active); color: var(--accent); border-radius: var(--radius-md); margin: 0; }
+.chat-welcome h3 { font-size: 20px; line-height: 1.5; font-weight: 600; text-wrap: balance; margin: 0; }
+.chat-welcome p { margin: 12px 0 0; font-size: 13px; color: var(--muted); max-width: none; line-height: 1.8; text-wrap: pretty; }
+.chat-suggestions { margin: 16px 0 0; gap: 8px; }
+.chat-suggestions button { min-height: 44px; font-size: 12px; color: var(--ink); background: var(--surface-subtle); border-color: var(--line); padding: 12px; gap: 10px; }
+.chat-suggestions button > svg:first-child { color: var(--accent); }
+.chat-suggestions button > span { flex: 1; min-width: 0; text-wrap: pretty; }
+.chat-suggestions button > svg:last-child { color: var(--muted); }
 .chat-suggestions button:hover { border-color: var(--control-border); background: var(--surface-active); }
 .chat-message-author { color: var(--muted); font-size: 11px; }
 .chat-message-body { font-size: 14px; line-height: 1.9; }
@@ -341,6 +344,41 @@ footer { color: var(--muted); font-size: 12px; padding-block: 24px; line-height:
 .effort-trigger { color: var(--muted); }
 .chat-settings p, .chat-settings button, .chat-settings a { font-size: 12px; }
 .chat-settings .ai-connection { background: var(--surface-subtle); padding: 20px; }
+.ai-connection-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.chat-account-button { flex-shrink: 0; min-height: 32px; padding: 6px 8px; font-size: 12px; color: var(--accent); background: var(--surface-active); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.chat-settings .codex-heading p { display: block; margin-top: 8px; color: var(--muted); text-wrap: pretty; }
+.chat-settings .codex-heading { display: block; }
+.chat-settings .codex-heading .badge { display: inline-block; margin-top: 8px; }
+.chat-settings.login-guidance { max-height: max(160px, calc(100dvh - 300px)); }
+.codex-login-reminder { display: flex; align-items: flex-start; gap: 16px; padding: 20px; margin-bottom: 24px; border: 1px solid var(--control-border); border-radius: var(--radius-md); background: var(--surface-active); }
+.codex-login-reminder > svg { flex-shrink: 0; color: var(--accent); margin-top: 3px; }
+.codex-login-reminder > div { flex: 1; min-width: 0; }
+.codex-login-reminder h2 { font-size: 16px; font-weight: 600; text-wrap: balance; }
+.codex-login-reminder p { margin-top: 6px; font-size: 13px; color: var(--ink); line-height: 1.8; text-wrap: pretty; }
+.codex-login-reminder span { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.codex-login-reminder > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex-shrink: 0; }
+.codex-login-steps { margin: 16px 0; padding-left: 22px; display: grid; gap: 14px; font-size: 12px; }
+.codex-login-steps li::marker { color: var(--accent); font-weight: 600; }
+.codex-login-steps li > strong { font-size: 13px; color: var(--ink); }
+.codex-login-steps p { margin: 4px 0 0; color: var(--muted); text-wrap: pretty; }
+.codex-device-code { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding: 12px; border: 1px solid var(--control-border); border-radius: var(--radius-sm); background: var(--surface); }
+.codex-device-code > span { width: 100%; color: var(--muted); }
+.codex-device-code > strong { font-family: monospace; font-size: 20px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.codex-device-code > button { display: inline-flex; align-items: center; gap: 6px; }
+.codex-official-login { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 12px; text-decoration: none; }
+.codex-login-help { font-size: 12px; color: var(--muted); }
+.codex-login-help summary { cursor: pointer; padding-block: 6px; }
+.codex-login-help p { margin-top: 8px; text-wrap: pretty; }
+@media (max-width: 1400px) {
+  .codex-login-reminder { flex-wrap: wrap; }
+  .codex-login-reminder > button { margin-left: 40px; }
+}
+@media (max-width: 640px) {
+  .codex-login-reminder { padding: 16px; gap: 12px; }
+  .codex-login-reminder > button { margin-left: 0; width: 100%; }
+  .chat-header .chat-mark { display: none; }
+  .chat-header h2, .chat-header > div:nth-child(2) > span { white-space: nowrap; }
+}
 .analysis-progress, .assistant-task { background: var(--surface-subtle); border-color: var(--line); }
 .assistant-task > header { font-size: 13px; }
 .analysis-metrics, .analysis-activity summary, .analysis-status > span, .assistant-task > header span { font-size: 12px; color: var(--muted); }
@@ -412,7 +450,6 @@ kbd { border: 1px solid var(--control-border); background: var(--surface); color
 @media (max-height: 780px) and (min-width: 641px) {
   .preview-panel { min-height: 560px; }
   .preview-editing { flex-basis: 200px; }
-  .chat-welcome { padding-top: 16px; }
 }
 /* Retain the existing narrow-window fallback; this iteration targets desktop. */
 @media (max-width: 640px) {

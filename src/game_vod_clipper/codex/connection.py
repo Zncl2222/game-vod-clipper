@@ -188,6 +188,18 @@ class CodexConnection:
             self.login = None
         return {"cancelled": True}
 
+    async def logout(self):
+        if self.busy.locked():
+            raise ConnectionError("AI 連線操作進行中，請等候完成後再登出。")
+        async with self.busy:
+            await self.start()
+            if self.login and self.login.get("status") == "pending":
+                await self.rpc("account/login/cancel", {"loginId": self.login["loginId"]})
+            await self.rpc("account/logout")
+            self.login = None
+            self.completed_login = None
+        return {"logged_out": True}
+
     async def models(self):
         await self.start()
         models = {}

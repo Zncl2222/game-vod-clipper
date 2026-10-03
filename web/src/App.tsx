@@ -13,6 +13,8 @@ import { validSelection } from "./components/editor/SelectionOverlay";
 import { timelineWindow, type TimeWindow } from "./components/editor/TimelineZoom";
 import ClipWorkspace, { candidates } from "./components/editor/ClipWorkspace";
 import ChatPanel, { type EditorContext, type EditorChatHandle, type ChatHandle } from "./components/ai/ChatPanel";
+import CodexLoginReminder from "./components/ai/CodexLoginReminder";
+import type { Connection } from "./components/ai/AIConnection";
 import ProjectLibrary from "./components/library/ProjectLibrary";
 import LocalStorageUsage from "./components/storage/LocalStorageUsage";
 import ImportModal from "./components/library/ImportModal";
@@ -77,6 +79,7 @@ export default function App() {
     localStorage.getItem("bosscut:selected"),
   );
   const [connected, setConnected] = useState(false);
+  const [aiConnection, setAIConnection] = useState<Connection | null>(null);
   const [modal, setModal] = useState(false);
   const [youtubeOpen, setYoutubeOpen] = useState(false);
   const [uploadTarget, setUploadTarget] = useState<UploadTarget | undefined>();
@@ -256,6 +259,7 @@ export default function App() {
             </div>
           )}
           {project?.youtube_analysis_error && <div role="status" className="notice">{project.youtube_analysis_error}</div>}
+          <CodexLoginReminder connection={aiConnection} onLogin={() => { openChat(); aiChat.current?.login(); }} />
           {!project ? (
             <WelcomeScreen onImport={() => setModal(true)} onGuide={() => setGuide(true)} />
           ) : project.ready ? (
@@ -326,6 +330,7 @@ export default function App() {
         clipCount={project ? finishedClips(project.id, projectJobs).length : 0}
         jobs={projectJobs}
         searchRef={aiChat}
+        onConnectionChange={setAIConnection}
         onSearchError={(message) => { setError(message); openChat(); }}
         open={chatOpen}
         onToggle={toggleChat}

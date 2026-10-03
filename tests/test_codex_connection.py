@@ -59,6 +59,43 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ConnectionError):
                 await self.connection.begin_login("chatgpt")
 
+    async def test_logout_clears_login_state_and_uses_official_rpc(self):
+        self.connection.start = AsyncMock()
+        self.connection.rpc = AsyncMock(return_value={})
+        self.connection.login = {"status": "succeeded"}
+        self.connection.completed_login = {"loginId": "1", "success": True}
+        self.assertEqual(await self.connection.logout(), {"logged_out": True})
+        self.connection.rpc.assert_awaited_once_with("account/logout")
+        self.assertIsNone(self.connection.login)
+        self.assertIsNone(self.connection.completed_login)
+
+    async def test_logout_cancels_pending_login_before_signing_out(self):
+        self.connection.start = AsyncMock()
+        self.connection.rpc = AsyncMock(return_value={})
+        self.connection.login = {"status": "pending", "loginId": "1"}
+        await self.connection.logout()
+        self.assertEqual([call.args for call in self.connection.rpc.await_args_list], [
+            ("account/login/cancel", {"loginId": "1"}), ("account/logout",),
+        ])
+        self.assertIsNone(self.connection.login)
+
+    async def test_failed_logout_does_not_claim_success_or_clear_login_state(self):
+        self.connection.start = AsyncMock()
+        self.connection.rpc = AsyncMock(side_effect=ConnectionError("無法登出"))
+        self.connection.login = {"status": "succeeded"}
+        with self.assertRaises(ConnectionError):
+            await self.connection.logout()
+        self.assertEqual(self.connection.login, {"status": "succeeded"})
+
+    async def test_logout_refuses_to_interrupt_active_connection_operations(self):
+        self.connection.start = AsyncMock()
+        self.connection.rpc = AsyncMock()
+        async with self.connection.busy:
+            with self.assertRaisesRegex(ConnectionError, "等候完成後再登出"):
+                await self.connection.logout()
+        self.connection.start.assert_not_awaited()
+        self.connection.rpc.assert_not_awaited()
+
     async def test_early_login_notification_is_not_lost(self):
         self.connection.start = AsyncMock()
         self.connection.completed_login = {"loginId": "1", "success": True}
@@ -139,16 +176,24 @@ class ConnectionRoutesTest(unittest.TestCase):
             connection.probe = AsyncMock(return_value={"reply": "AI 連線成功。"})
             connection.begin_login = AsyncMock(return_value={"status": "pending"})
             connection.cancel_login = AsyncMock(return_value={"cancelled": True})
+            connection.logout = AsyncMock(return_value={"logged_out": True})
             with TestClient(app) as client:
                 self.assertEqual(client.get("/api/codex").status_code, 200)
                 self.assertEqual(client.post("/api/codex/login", json={}).status_code, 200)
                 self.assertEqual(client.post("/api/codex/login/cancel").status_code, 200)
+                self.assertEqual(client.post("/api/codex/logout").json(), {"logged_out": True})
+                connection.logout.assert_awaited_once()
                 self.assertEqual(client.post("/api/codex/test").json()["reply"], "AI 連線成功。")
                 self.assertEqual(client.get("/api/state").json()["jobs"], [])
                 self.assertEqual(client.post("/api/codex/login", json={"method": "apiKey"}).status_code, 422)
                 self.assertEqual(client.post("/api/codex/test", headers={"origin": "https://evil.test"}).status_code, 403)
                 connection.probe = AsyncMock(side_effect=ConnectionError("尚未登入"))
                 self.assertEqual(client.post("/api/codex/test").status_code, 503)
+                self.assertEqual(client.get("/api/codex/logout").status_code, 404)
+                connection.logout.assert_awaited_once()
+                self.assertEqual(client.post("/api/codex/logout", headers={"origin": "https://evil.test"}).status_code, 403)
+                connection.logout = AsyncMock(side_effect=ConnectionError("無法登出"))
+                self.assertEqual(client.post("/api/codex/logout").status_code, 503)
 
 
 if __name__ == "__main__":

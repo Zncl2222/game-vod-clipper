@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { ArrowUp, Check, ChevronDown, FolderOpen, PanelRightClose, PanelRightOpen, Plus, Settings2, Sparkles, Square } from "lucide-react";
-import AIConnection, { type Connection } from "./AIConnection";
+import { ArrowUp, Check, ChevronDown, FolderOpen, Gamepad2, PanelRightClose, PanelRightOpen, Plus, Scissors, Sparkles, Square, Type } from "lucide-react";
+import AIConnection, { type Connection, type ConnectionHandle } from "./AIConnection";
 import { active, currentAnalysis, api, apiError, time, type Draft, type Job } from "../../lib/api";
 import AIActivity from "./AIActivity";
 import AnalysisTask from "./AnalysisTask";
@@ -20,7 +20,7 @@ export type EditorChatHandle = {
   loadClip: (id: string) => void;
   apply: (action: ChatAction, expected: EditorContext) => string;
 };
-export type ChatHandle = { search: () => Promise<void>; reviewCandidate: (candidateId: string, start: number, end: number) => Promise<string> };
+export type ChatHandle = { login: () => void; search: () => Promise<void>; reviewCandidate: (candidateId: string, start: number, end: number) => Promise<string> };
 type Message = { project_id?: string; analysis_generation?: number; id: string; role: "user" | "assistant"; content: string; model?: string; operation?: string; failed?: boolean };
 type Reply = { type: string; reply?: string; model?: string; action?: ChatAction | null; project_id?: string; detail?: string };
 type Conversation = { messages: Message[]; input: string };
@@ -50,7 +50,8 @@ function readConversation(): Conversation {
   } catch { return emptyConversation(); }
 }
 
-export default function ChatPanel({ context, onAction, open, onToggle, jobs, searchRef, onSearchError, clips, clipCount = 0 }: {
+export default function ChatPanel({ context, onAction, open, onToggle, jobs, searchRef, onSearchError, onConnectionChange, clips, clipCount = 0 }: {
+  onConnectionChange?: (value: Connection) => void;
   clips?: ReactNode;
   clipCount?: number;
   context: EditorContext | null;
@@ -79,6 +80,9 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
   const [busy, setBusy] = useState(false);
   const inputTooLong = input.length > 4000;
   const [settings, setSettings] = useState(false);
+  const accountConnection = useRef<ConnectionHandle>(null);
+  const loginPending = connection?.login?.status === "pending";
+  const settingsExpanded = settings || (!!connection && !connection.available) || loginPending;
   const [searchStart, setSearchStart] = useState(0);
   const [showSearchHistory, setShowSearchHistory] = useState(false);
   const [searchEnd, setSearchEnd] = useState(0);
@@ -123,6 +127,11 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
     previousGeneration.current = generation;
   }, [context?.project_id, context?.analysis_generation]);
   useImperativeHandle(searchRef, () => ({
+    login: () => {
+      setDrawerTab("ai");
+      setSettings(false);
+      if (!loginPending) accountConnection.current?.login();
+    },
     search: async () => { setDrawerTab("ai"); await send(true); },
     reviewCandidate: async (candidateId, start, end) => {
       if (!context || !Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= end || end > context.duration)
@@ -298,11 +307,11 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
     <aside id="ai-chat-panel" className={`chat-panel ${open ? "is-open" : ""}`} aria-label="AI 對話">
       <header className="chat-header">
         <div className="chat-mark"><Sparkles size={18} /></div>
-        <div><h2>你的 AI 夥伴</h2><span><i className={connection?.available ? "online" : ""} />{connection?.available ? "已連接 · 隨時聊聊" : "連接帳號開始對話"}</span></div>
+        <div><h2>你的 AI 夥伴</h2><span><i className={connection?.available ? "online" : ""} />{connection?.available ? "Codex 已連接" : connection ? "請先登入 Codex" : "正在確認帳號…"}</span></div>
         <button className="chat-icon" title="新對話" aria-label="新對話" disabled={busy || (!messages.length && !input)} onClick={() => {
           setConversation(emptyConversation()); setError("");
         }}><Plus size={18} /></button>
-        <button className="chat-icon" title="帳號設定" aria-label="帳號設定" aria-expanded={settings} onClick={() => { setDrawerTab("ai"); setSettings(!settings); }}><Settings2 size={18} /></button>
+        <button className="chat-account-button" title="Codex 帳號設定" aria-label="帳號設定" aria-expanded={settingsExpanded} aria-controls="codex-account-settings" onClick={() => { setDrawerTab("ai"); setSettings(!settings); }}>Codex 帳號</button>
         <button className="chat-close chat-icon" aria-label="關閉 AI 對話" title="收合 AI 側欄" aria-expanded={open} aria-controls="ai-chat-panel" onClick={onToggle}><PanelRightClose size={18} aria-hidden="true" /></button>
       </header>
       {!!clips && <div className="workspace-drawer-tabs" role="tablist" aria-label="AI 與成品">
@@ -320,20 +329,28 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
       <UsagePanel projectId={context?.project_id} visible={open && !showClips}
         accountKey={`${connection?.auth_mode}:${connection?.email}:${connection?.plan}`}
         refreshKey={`${busy}:${analysis?.id}:${analysis?.status}:${JSON.stringify(analysis?.quota_change)}`} />
-      <div className={`chat-settings ${settings ? "expanded" : ""}`} inert={!settings}>
-        <AIConnection onChange={setConnection} />
+      <div id="codex-account-settings" className={`chat-settings ${settingsExpanded ? "expanded" : ""} ${connection && (!connection.available || loginPending) ? "login-guidance" : ""}`} inert={!settingsExpanded}>
+        <AIConnection ref={accountConnection} onChange={value => { setConnection(value); onConnectionChange?.(value); }} />
       </div>
       {context && <div className="chat-context"><span className="tiny-dot" /><span title={context.title}>{context.clip_id ? "目前編輯成品" : "目前原片"} · {context.title}</span></div>}
       <div className="chat-messages" role="log" aria-label="對話紀錄" aria-live="polite">
         {!messages.length && <div className="chat-welcome">
-          <div className="chat-welcome-icon"><Sparkles size={28} strokeWidth={1.4} /></div>
-          <span className="eyebrow">YOUR CREATIVE COMPANION</span>
-          <h3>想聊些什麼？</h3>
+          <div className="chat-welcome-heading">
+            <div className="chat-welcome-icon"><Sparkles size={20} aria-hidden="true" /></div>
+            <h3>想聊些什麼？</h3>
+          </div>
           <p>聊遊戲、想標題，也能直接幫你調整剪輯。</p>
           <div className="chat-suggestions">
-            {["幫我想三個有趣的直播標題", ...(context ? ["搜尋整部影片的成功挑戰", "把勝利後收尾改成 8 秒"] : ["陪我聊聊最近玩的遊戲"])].map((text) => <button key={text} onClick={() => { setInput(text); composer.current?.focus(); }}>{text}<ArrowUp size={13} /></button>)}
+            {[
+              { text: "幫我想三個有趣的直播標題", icon: Type },
+              ...(context ? [
+                { text: "搜尋整部影片的成功挑戰", icon: Sparkles },
+                { text: "把勝利後收尾改成 8 秒", icon: Scissors },
+              ] : [{ text: "陪我聊聊最近玩的遊戲", icon: Gamepad2 }]),
+            ].map(({ text, icon: Icon }) => <button type="button" key={text} onClick={() => { setInput(text); composer.current?.focus(); }}>
+              <Icon size={17} aria-hidden="true" /><span>{text}</span><ArrowUp size={14} aria-hidden="true" />
+            </button>)}
           </div>
-          {!connection?.available && <button className="primary" onClick={() => setSettings(true)}>連接 AI 帳號</button>}
         </div>}
         {messages.map((message) => <article key={message.id} className={`chat-message ${message.role} ${message.failed ? "failed" : ""} ${!restoredMessageIds.current.has(message.id) ? "is-new" : ""}`}>
           <span className="chat-message-author">{message.role === "user" ? "你" : message.model ?? "AI"}{message.failed && " · 未完成"}</span>

@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 60s
     ports:
-      - "${BOSSCUT_BIND_ADDRESS:-127.0.0.1}:${BOSSCUT_PORT:-8000}:8000"
+      - "${BOSSCUT_BIND_ADDRESS:-127.0.0.1}:${BOSSCUT_PORT:-8003}:8000"
     environment:
       GAME_VOD_ALLOWED_HOSTS: ${BOSSCUT_ALLOWED_HOSTS:-}
     volumes:
