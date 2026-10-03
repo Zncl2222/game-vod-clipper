@@ -11,9 +11,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from game_vod_clipper.media_progress import DOWNLOAD_PREFIX, DOWNLOAD_TEMPLATE, MediaProgress, streamed_command
-from game_vod_clipper.web import Jobs
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.media.progress import DOWNLOAD_PREFIX, DOWNLOAD_TEMPLATE, MediaProgress, streamed_command
+from game_vod_clipper.jobs.scheduler import Jobs
+from game_vod_clipper.storage.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
 

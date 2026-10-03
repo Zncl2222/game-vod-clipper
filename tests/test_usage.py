@@ -9,10 +9,11 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from game_vod_clipper.codex_connection import CodexConnection, ConnectionError
-from game_vod_clipper.usage import backfill_usage, quota_buckets, quota_change, record_usage, tokens, usage_summary
-from game_vod_clipper.web import Jobs, create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.codex.connection import CodexConnection, ConnectionError
+from game_vod_clipper.codex.usage import backfill_usage, quota_buckets, quota_change, record_usage, tokens, usage_summary
+from game_vod_clipper.jobs.scheduler import Jobs
+from game_vod_clipper.web import create_app
+from game_vod_clipper.storage.store import Store
 
 
 def snapshot(used=20, reset=200000, account="fixture", fetched=1000):
@@ -171,7 +172,7 @@ class QuotaConnectionTest(unittest.IsolatedAsyncioTestCase):
         def execute(*args, on_usage, **kwargs):
             on_usage({"input_tokens": 100, "output_tokens": 20})
             raise RuntimeError("fixture invalid response")
-        with patch("game_vod_clipper.codex_connection.execute", side_effect=execute):
+        with patch("game_vod_clipper.codex.connection.execute", side_effect=execute):
             with self.assertRaises(ConnectionError):
                 await self.connection.respond("fixture", project_id="p")
         result = usage_summary(Store(self.root), "p")

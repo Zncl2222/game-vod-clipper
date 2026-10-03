@@ -32,18 +32,106 @@ Vite 開發伺服器會將 `/api` 代理到 `127.0.0.1:8000`。一般使用則�
 
 | 位置 | 責任 |
 | --- | --- |
-| `src/game_vod_clipper/cli.py`、`media.py` | 命令列與媒體處理 |
-| `web.py`、`web_store.py`、`web_worker.py` | HTTP API、專案保存與背景任務 |
-| `codex_*.py`、`review_*.py` | AI 連線、聊天、影像分析與進度 |
-| `candidate_registry.py`、`candidates.py` | 候選識別與區間資料 |
-| `youtube_*.py` | 帳號、直播匯入、歷史與成品上傳 |
-| `locations.py`、`storage.py` | 儲存位置與資料管理 |
+| `src/game_vod_clipper/cli.py` | 命令列入口 |
+| `web.py`、`web_worker.py` | Web 伺服器與背景程序入口 |
+| `api/` | 應用程式組裝、HTTP 路由、請求驗證與工作區資源 |
+| `jobs/` | 背景任務排程、取消與子程序生命週期 |
+| `analysis/` | Boss 影像分析、判讀提示、進度、候選管理與遊戲設定 |
+| `codex/` | Codex 連線、模型呼叫、聊天與用量紀錄 |
+| `youtube/` | yt-dlp 設定、帳號、直播匯入、歷史、成品上傳與路由 |
+| `media/` | 下載、抽幀、縮圖總覽、裁切與媒體處理進度 |
+| `storage/` | SQLite 狀態保存、儲存位置與檔案用量管理 |
+| `process.py`、`timecode.py` | 外部工具執行與時間碼轉換 |
 | `web/src/` | React 編輯器與樣式 |
 | `tests/`、`web/tests/` | Python 與瀏覽器測試 |
 | `scripts/` | 效能測量、播放驗證與一次性遷移工具 |
 
-API 行為以 [web.py](../../src/game_vod_clipper/web.py)、[前端 API 型別](../../web/src/lib/api.ts) 與測試為準。
+API 行為以 [api/](../../src/game_vod_clipper/api/)、[前端 API 型別](../../web/src/lib/api.ts) 與測試為準。
 Agent 的媒體檢查流程以 [Skill](../../skills/game-vod-boss-clipper/SKILL.md) 為準，避免在多份文件複製同一套規則。
+
+## 後端目錄規則
+
+```text
+src/game_vod_clipper/
+├── __init__.py
+├── __main__.py
+├── cli.py
+├── web.py
+├── web_worker.py
+├── api/
+│   ├── app.py               建立 app、生命週期與 middleware
+│   ├── context.py           每個 app 共用的資源、鎖與關閉事件
+│   ├── schemas.py           HTTP 請求資料模型
+│   ├── server.py            媒體串流回應與伺服器關閉
+│   ├── sources.py           本機來源與 YouTube URL 驗證
+│   ├── system.py            健康檢查、工作區狀態與 SSE
+│   ├── profiles.py          遊戲參考設定
+│   ├── storage.py           儲存位置與清理
+│   ├── analysis.py          AI 帳號、聊天、搜尋與重置
+│   ├── projects.py          匯入、專案與候選管理
+│   ├── clips.py             草稿、匯出與成品管理
+│   ├── jobs.py              任務取消與重試 API
+│   ├── media.py             播放與下載
+│   └── youtube.py           YouTube 匯入與分析的回呼銜接
+├── jobs/
+│   └── scheduler.py         工作佇列、取消與 worker 執行
+├── analysis/
+│   ├── pipeline.py          分析流程、檢查點與結果組裝
+│   ├── models.py            觀察結果、證據與候選模型
+│   ├── validation.py        判讀結果與勝利證據驗證
+│   ├── sampling.py          抽樣密度、覆蓋範圍與佇列規則
+│   ├── extraction.py        FFmpeg 抽幀與判讀圖組
+│   ├── client.py            判讀模型呼叫、schema 與重試
+│   ├── activity.py          執行活動與心跳回報
+│   ├── prompt.py
+│   ├── progress.py
+│   ├── candidates.py
+│   ├── registry.py
+│   └── game_profiles.py
+├── codex/
+│   ├── connection.py
+│   ├── runtime.py
+│   ├── chat.py
+│   └── usage.py
+├── youtube/
+│   ├── downloader.py
+│   ├── account.py
+│   ├── imports.py
+│   ├── uploads.py
+│   ├── history.py
+│   └── routes.py
+├── media/
+│   ├── operations.py
+│   └── progress.py
+├── storage/
+│   ├── store.py
+│   ├── locations.py
+│   └── inventory.py
+├── process.py
+└── timecode.py
+```
+
+各功能套件另有精簡的 `__init__.py`。新增程式先依功能歸類，直接引用實際模組，例如
+`from game_vod_clipper.media.operations import clip_video`，不透過套件入口大量重新匯出。
+Boss 判讀規則放在 `analysis/`，Codex 連線與執行細節放在 `codex/`；共用模組避免反向依賴 HTTP 入口。
+
+HTTP 路由依功能放在 `api/`，以 `WorkspaceDep` 取得所屬 app 的 `Workspace`。
+`api/app.py` 建立唯一的 Store、Jobs、Codex 連線與 YouTube 工作區，並組裝路由。
+路由模組不建立全域工作區、不另建鎖，也不反向引用 `web.py` 或 `api/app.py`。
+跨路由共用操作明確傳入 `Workspace`，維持匯入、聊天、重試與 YouTube 回呼使用同一套驗證。
+
+`jobs/scheduler.py` 管理背景程序，不依賴 HTTP；`api/jobs.py` 處理任務 API 的驗證與回應。
+分析周邊職責由專屬模組提供，`analysis/pipeline.py` 保留分析步驟、檢查點及結果組裝。
+調整模型資料格式時看 `models.py`，修改抽樣規則時看 `sampling.py`，修改 FFmpeg 抽幀時看 `extraction.py`。
+
+分層保留既有資料格式與執行流程。
+`game-vod-clipper`、`game-vod-web`、`python -m game_vod_clipper` 與
+`python -m game_vod_clipper.web_worker` 入口不變；直接使用舊內部模組路徑的外部腳本需更新引用。
+`web.create_app` 仍可供測試與外部啟動腳本使用；其餘內部類別與輔助函式從各自模組引用。
+
+搬移模組時，同步更新測試的 mock 路徑、`scripts/` 中的引用與原始碼路徑。
+驗證使用 `make check` 和 `make test-web`，涵蓋 Python 測試、靜態檢查、前端建置與瀏覽器流程。
+路由拆分還需確認 OpenAPI 契約、每個 app 的狀態隔離、分析取消／接續與伺服器關閉行為。
 
 ## 前端目錄規則
 

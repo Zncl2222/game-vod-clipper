@@ -14,11 +14,11 @@ from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, iso_duration
-from .youtube_imports import YouTubeImports
-from .youtube_uploads import YouTubeUploads
-from .youtube import DownloadQuality
-from .youtube_history import backfill_legacy, public_history
+from .account import VIDEO_ID, YouTubeAccount, YouTubeError, iso_duration
+from .imports import YouTubeImports
+from .uploads import YouTubeUploads
+from .downloader import DownloadQuality
+from .history import backfill_legacy, public_history
 
 ACTIVE = {"queued", "running"}
 

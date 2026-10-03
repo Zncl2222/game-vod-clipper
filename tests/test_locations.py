@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from game_vod_clipper.locations import LocationError, Locations, export_path, project_work
-from game_vod_clipper.storage import video_storage
+from game_vod_clipper.storage.locations import LocationError, Locations, export_path, project_work
+from game_vod_clipper.storage.inventory import video_storage
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.storage.store import Store
 from game_vod_clipper.web_worker import SOURCE_PREFIX, run
 
 
@@ -64,7 +64,7 @@ class LocationsTest(LocationTestCase):
 
     def test_unwritable_folder_is_rejected(self):
         target = self.outside / "locked"
-        with patch("game_vod_clipper.locations.tempfile.TemporaryFile", side_effect=PermissionError("denied")):
+        with patch("game_vod_clipper.storage.locations.tempfile.TemporaryFile", side_effect=PermissionError("denied")):
             with self.assertRaisesRegex(LocationError, "無法寫入"):
                 Locations(self.root).update({"cache": str(target)})
 
@@ -128,7 +128,7 @@ class LocationStorageTest(LocationTestCase):
 
 
 class LocationWorkerTest(LocationTestCase):
-    @patch("game_vod_clipper.youtube.javascript_runtime", return_value="node:/tools/node")
+    @patch("game_vod_clipper.youtube.downloader.javascript_runtime", return_value="node:/tools/node")
     def test_youtube_download_goes_to_chosen_source_folder(self, runtime):
         sources = self.outside / "sources"
         Locations(self.root).update({"sources": str(sources)})

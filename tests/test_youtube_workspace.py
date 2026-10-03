@@ -15,10 +15,10 @@ import httpx
 from fastapi.testclient import TestClient
 
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
-from game_vod_clipper.youtube_account import SCOPES, YouTubeAccount, YouTubeError, google_error
-from game_vod_clipper.youtube_routes import WatchSettings, YouTubeWorkspace
-from game_vod_clipper.youtube_uploads import UPLOAD, YouTubeUploads
+from game_vod_clipper.storage.store import Store
+from game_vod_clipper.youtube.account import SCOPES, YouTubeAccount, YouTubeError, google_error
+from game_vod_clipper.youtube.routes import WatchSettings, YouTubeWorkspace
+from game_vod_clipper.youtube.uploads import UPLOAD, YouTubeUploads
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = {"web": {"client_id": "test.apps.googleusercontent.com", "client_secret": "test-secret"}}
@@ -55,7 +55,7 @@ class RouteTest(unittest.TestCase):
             "title": "Clip", "made_for_kids": False, "playlist_id": "../bad"}).status_code, 422)
 
     def test_playlist_authorization_is_optional_and_granted_scopes_are_persisted(self):
-        from game_vod_clipper.youtube_account import PLAYLIST_SCOPE
+        from game_vod_clipper.youtube.account import PLAYLIST_SCOPE
         self.account.configure(CONFIG)
         plain = self.client.post("/api/youtube/login").json()["url"]
         self.assertNotIn(PLAYLIST_SCOPE, parse_qs(urlparse(plain).query)["scope"][0].split())
@@ -136,7 +136,7 @@ class RouteTest(unittest.TestCase):
         self.account.files.write("account", account_data())
         body = {"channel_id": CHANNEL["id"], "auto_analyze": False, "model": "", "download_quality": "1440"}
         with patch.object(self.app.state.jobs, "submit", return_value={"id": "prepare-job"}) as submit, \
-                patch("game_vod_clipper.web.youtube_command", return_value=["yt-dlp"]):
+                patch("game_vod_clipper.api.projects.youtube_command", return_value=["yt-dlp"]):
             first = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
             second = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
             self.assertEqual(first.status_code, 202, first.text)
@@ -245,7 +245,7 @@ class GoogleErrorTest(unittest.TestCase):
 
 class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
     def playlist_access(self):
-        from game_vod_clipper.youtube_account import PLAYLIST_SCOPE
+        from game_vod_clipper.youtube.account import PLAYLIST_SCOPE
         self.account.files.write("account", account_data() | {"scopes": list(SCOPES | {PLAYLIST_SCOPE})})
 
     async def test_playlist_addition_follows_upload_and_preserves_video_privacy(self):
@@ -330,7 +330,7 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.account, "add_to_playlist", AsyncMock()) as add, \
                 patch.object(self.account, "api", AsyncMock(return_value={"items": [{
                     "processingDetails": {"processingStatus": "processing"}, "status": {"uploadStatus": "uploaded"}}]})), \
-                patch("game_vod_clipper.youtube_uploads.asyncio.sleep", AsyncMock()):
+                patch("game_vod_clipper.youtube.uploads.asyncio.sleep", AsyncMock()):
             self.uploads.save({"id": "slow", "channel": CHANNEL, "video_id": "uploaded123", "playlist_id": "PLwins",
                                "playlist_status": "pending", "privacy": "private", "status": "processing"})
             await self.uploads.processing("slow")
@@ -360,7 +360,7 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
         self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         metadata = {"title": "Clip", "description": "", "privacy": "private", "made_for_kids": False,
                     "notify_subscribers": False, "playlist_id": "PLwins"}
-        with patch("game_vod_clipper.youtube_uploads.asyncio.sleep", AsyncMock()) as sleep:
+        with patch("game_vod_clipper.youtube.uploads.asyncio.sleep", AsyncMock()) as sleep:
             record = await self.uploads.start("export", metadata, CHANNEL["id"])
             await asyncio.gather(*list(self.uploads.tasks.values()))
         result = self.uploads.get(record["id"])
@@ -685,7 +685,7 @@ class AsyncYouTubeTest(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(201, json={"id": "uploaded123"})
             return httpx.Response(200, json={"items": [{"status": {"uploadStatus": "processed"}}]})
         self.account.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-        with patch("game_vod_clipper.youtube_uploads.CHUNK", 4):
+        with patch("game_vod_clipper.youtube.uploads.CHUNK", 4):
             await self.uploads.resume(record["id"])
             await asyncio.gather(*list(self.uploads.tasks.values()))
         self.assertEqual(b"".join(received), content[4:])

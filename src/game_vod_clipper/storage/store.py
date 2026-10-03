@@ -8,7 +8,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .youtube_history import remember
+from ..youtube.history import remember
 from .locations import project_work
 
 
@@ -26,7 +26,7 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             for (data,) in db.execute("SELECT data FROM projects").fetchall():
                 remember(db, json.loads(data))
-        from .usage import backfill_usage
+        from ..codex.usage import backfill_usage
         backfill_usage(self)
 
     def connect(self):
@@ -120,7 +120,7 @@ class Store:
             db.execute("DELETE FROM jobs WHERE id=?", (job_id,))
 
     def set_candidate_edit(self, project_id: str, candidate_id: str, edit: dict):
-        from .candidates import project_candidates
+        from ..analysis.candidates import project_candidates
 
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
