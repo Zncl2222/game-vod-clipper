@@ -8,8 +8,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from game_vod_clipper.web import Jobs, create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.jobs.scheduler import Jobs
+from game_vod_clipper.web import create_app
+from game_vod_clipper.storage.store import Store
 
 
 async def no_media_worker(_self, _job_id):

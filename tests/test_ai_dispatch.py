@@ -16,7 +16,7 @@ class DispatchTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         async def idle_worker(*args):
             await asyncio.Future()
-        self.worker = patch("game_vod_clipper.web.Jobs.execute", new=idle_worker)
+        self.worker = patch("game_vod_clipper.jobs.scheduler.Jobs.execute", new=idle_worker)
         self.worker.start()
         self.app = create_app(Path(self.temp.name))
         self.store = self.app.state.store
@@ -327,7 +327,7 @@ class ResetAnalysisTest(unittest.TestCase):
     def test_progress_reset_rejects_late_search_and_failed_cleanup_is_retryable(self):
         self.prepare_reset()
         queued = self.request(intent="search", search_start=0, search_end=120)
-        with patch("game_vod_clipper.web.shutil.rmtree", side_effect=OSError("busy")):
+        with patch("game_vod_clipper.api.analysis.shutil.rmtree", side_effect=OSError("busy")):
             response = self.client.post('/api/projects/p/reset-analysis-progress')
         self.assertEqual(response.status_code, 500)
         self.assertFalse(self.store.get("jobs", queued["job_id"]).get("progress_reset"))

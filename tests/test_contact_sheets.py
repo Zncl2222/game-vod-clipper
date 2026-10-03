@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 from game_vod_clipper.cli import main
-from game_vod_clipper.media import create_contact_sheet
+from game_vod_clipper.media.operations import create_contact_sheet
 
 
 @unittest.skipUnless(shutil.which("ffmpeg"), "FFmpeg required")

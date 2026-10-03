@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from game_vod_clipper.storage import video_storage
+from game_vod_clipper.storage.inventory import video_storage
 from game_vod_clipper.web import create_app
 
 

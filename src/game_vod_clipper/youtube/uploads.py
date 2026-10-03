@@ -11,9 +11,9 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .locations import LocationError, export_path, media_path, record_path
-from .web_store import Store
-from .youtube_account import VIDEO_ID, YouTubeAccount, YouTubeError, google_error
+from ..storage.locations import LocationError, export_path, media_path, record_path
+from ..storage.store import Store
+from .account import VIDEO_ID, YouTubeAccount, YouTubeError, google_error
 
 UPLOAD = "https://www.googleapis.com/upload/youtube/v3/videos"
 BUSY = {"queued", "uploading", "processing", "adding_to_playlist"}

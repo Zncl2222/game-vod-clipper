@@ -19,10 +19,11 @@ from pathlib import Path
 import uvicorn
 from yt_dlp import YoutubeDL
 
-from game_vod_clipper.web import LocalServer, create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.api.server import LocalServer
+from game_vod_clipper.web import create_app
+from game_vod_clipper.storage.store import Store
 from game_vod_clipper.web_worker import probe, run
-from game_vod_clipper.youtube import BROWSER_MERGE_FORMATS, quality_format
+from game_vod_clipper.youtube.downloader import BROWSER_MERGE_FORMATS, quality_format
 
 
 def ffmpeg(*args):

@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .media import (
+from .media.operations import (
     DEFAULT_EXPORT_QUALITY,
     EXPORT_QUALITY,
     check_tools,

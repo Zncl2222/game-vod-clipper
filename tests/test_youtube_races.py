@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock
 import httpx
 
 from game_vod_clipper.web import create_app
-from game_vod_clipper.web_store import Store
-from game_vod_clipper.youtube_routes import WatchSettings, YouTubeWorkspace
-from game_vod_clipper.youtube_uploads import UPLOAD
+from game_vod_clipper.storage.store import Store
+from game_vod_clipper.youtube.routes import WatchSettings, YouTubeWorkspace
+from game_vod_clipper.youtube.uploads import UPLOAD
 
 
 ROOT = Path(__file__).resolve().parents[1]

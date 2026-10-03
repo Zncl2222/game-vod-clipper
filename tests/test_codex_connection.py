@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from fastapi.testclient import TestClient
 
-from game_vod_clipper.codex_connection import CodexConnection, ConnectionError, MODEL
+from game_vod_clipper.codex.connection import CodexConnection, ConnectionError, MODEL
 from game_vod_clipper.web import create_app
 
 
@@ -23,7 +23,7 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
         self.temp.cleanup()
 
     async def test_missing_cli_is_not_ready(self):
-        with patch("game_vod_clipper.codex_connection.shutil.which", return_value=None):
+        with patch("game_vod_clipper.codex.connection.shutil.which", return_value=None):
             self.assertFalse((await self.connection.status())["available"])
 
     async def test_account_modes_and_no_credentials_exposed(self):
@@ -84,20 +84,20 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(kwargs["model"], MODEL)
             (work / "response.json").write_text("AI 連線成功。", encoding="utf-8")
             return {"reply": "AI 連線成功。", "model": MODEL, "usage": {}}
-        with patch("game_vod_clipper.codex_connection.execute", side_effect=execute):
+        with patch("game_vod_clipper.codex.connection.execute", side_effect=execute):
             result = await self.connection.probe()
         self.assertEqual(result["reply"], "AI 連線成功。")
         self.assertEqual(list((Path(self.temp.name) / "runs/web/ai-check").iterdir()), [])
 
     async def test_probe_failure_does_not_fabricate_reply(self):
         self.connection.status = AsyncMock(return_value={"available": True, "auth_mode": "chatgpt"})
-        with patch("game_vod_clipper.codex_connection.execute", side_effect=RuntimeError("模型呼叫失敗")):
+        with patch("game_vod_clipper.codex.connection.execute", side_effect=RuntimeError("模型呼叫失敗")):
             with self.assertRaises(ConnectionError):
                 await self.connection.probe()
 
     async def test_probe_timeout_is_reported(self):
         self.connection.status = AsyncMock(return_value={"available": True, "auth_mode": "chatgpt"})
-        with patch("game_vod_clipper.codex_connection.execute", side_effect=RuntimeError("AI 回應超過 60 秒，已停止")):
+        with patch("game_vod_clipper.codex.connection.execute", side_effect=RuntimeError("AI 回應超過 60 秒，已停止")):
             with self.assertRaisesRegex(ConnectionError, "60 秒"):
                 await self.connection.probe()
 

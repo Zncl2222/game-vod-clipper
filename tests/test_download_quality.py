@@ -13,11 +13,12 @@ from fastapi.testclient import TestClient
 from yt_dlp import YoutubeDL
 
 from game_vod_clipper.process import ToolMissingError
-from game_vod_clipper.web import Jobs, create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.jobs.scheduler import Jobs
+from game_vod_clipper.web import create_app
+from game_vod_clipper.storage.store import Store
 from game_vod_clipper.web_worker import SOURCE_PREFIX, TITLE_PREFIX, run
-from game_vod_clipper.youtube_history import public_history
-from game_vod_clipper.youtube import BROWSER_MERGE_FORMATS, quality_format
+from game_vod_clipper.youtube.history import public_history
+from game_vod_clipper.youtube.downloader import BROWSER_MERGE_FORMATS, quality_format
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,7 +53,7 @@ class DownloadQualityTest(unittest.TestCase):
 
     def test_url_and_account_imports_validate_and_persist_quality_before_worker_starts(self):
         with patch.object(Jobs, "execute", new=AsyncMock()), \
-                patch("game_vod_clipper.web.youtube_command", return_value=["yt-dlp"]), \
+                patch("game_vod_clipper.api.projects.youtube_command", return_value=["yt-dlp"]), \
                 TestClient(create_app(self.root)) as client:
             for quality in (None, "1440", "720"):
                 body = {"kind": "youtube", "source": "https://www.youtube.com/watch?v=abcdefghijk"}
@@ -72,7 +73,7 @@ class DownloadQualityTest(unittest.TestCase):
     def test_youtube_import_without_downloader_runtime_fails_before_creating_a_project(self):
         message = "YouTube 下載需要 Deno >= 2.3 或 Node.js >= 22。請安裝其中一個，確認位於後端的 PATH，再重試。"
         with patch.object(Jobs, "execute", new=AsyncMock()) as execute, \
-                patch("game_vod_clipper.web.youtube_command", side_effect=ToolMissingError(message)), \
+                patch("game_vod_clipper.api.projects.youtube_command", side_effect=ToolMissingError(message)), \
                 TestClient(create_app(self.root)) as client:
             response = client.post("/api/projects", json={"kind": "youtube", "source": "https://www.youtube.com/watch?v=abcdefghijk"})
             self.assertEqual((response.status_code, response.json()["detail"]), (422, message))
@@ -129,7 +130,7 @@ class DownloadQualityTest(unittest.TestCase):
 
 class ExportQualityTest(unittest.TestCase):
     def test_presets_map_to_x264_settings_and_default_is_high(self):
-        from game_vod_clipper import media
+        from game_vod_clipper.media import operations as media
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.mkv"
             source.write_bytes(b"x")
