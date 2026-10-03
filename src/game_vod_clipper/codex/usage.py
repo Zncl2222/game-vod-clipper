@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 if TYPE_CHECKING:
-    from .web_store import Store
+    from ..storage.store import Store
 
 TOKEN_FIELDS = ("input_tokens", "output_tokens", "cached_input_tokens",
                 "cache_write_input_tokens", "reasoning_output_tokens")

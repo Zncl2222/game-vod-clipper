@@ -14,10 +14,11 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from game_vod_clipper.codex_analysis import PACKET_SIZE, SEARCH_PACKET_SIZE, missing_ranges, run_analysis
-from game_vod_clipper.candidate_registry import CandidateRegistry
+from game_vod_clipper.analysis.sampling import PACKET_SIZE, SEARCH_PACKET_SIZE, missing_ranges
+from game_vod_clipper.analysis.pipeline import run_analysis
+from game_vod_clipper.analysis.registry import CandidateRegistry
 from game_vod_clipper.process import resolve_tool_command
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.storage.store import Store
 
 
 def main():
@@ -41,11 +42,8 @@ def main():
     root = args.resume_root.resolve(strict=True) if args.resume_root else Path(tempfile.mkdtemp(prefix=f"luna-{args.effort}-", dir=parent))
     repo = Path(__file__).resolve().parents[1]
     fingerprint = {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
-                   for path in [repo / "src/game_vod_clipper/codex_analysis.py",
-                                repo / "src/game_vod_clipper/candidate_registry.py",
-                                repo / "src/game_vod_clipper/review_prompt.py",
-                                repo / "src/game_vod_clipper/review_progress.py",
-                                repo / "src/game_vod_clipper/codex_runtime.py",
+                   for path in [*sorted((repo / "src/game_vod_clipper/analysis").glob("*.py")),
+                                repo / "src/game_vod_clipper/codex/runtime.py",
                                 repo / "skills/game-vod-boss-clipper/SKILL.md"]}
     if args.resume_root and (root / "metrics.json").exists():
         (root / "metrics.json").rename(root / f"metrics-before-resume-{time.time_ns()}.json")

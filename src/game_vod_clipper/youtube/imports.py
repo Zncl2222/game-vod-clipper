@@ -9,7 +9,7 @@ import time
 
 from fastapi import HTTPException
 
-from .youtube_account import YouTubeError
+from .account import YouTubeError
 
 WAITING = {"queued", "importing"}
 MAX_WAITING = 200

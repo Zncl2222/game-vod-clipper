@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from typing import Literal
 
-from .process import ToolMissingError, resolve_tool_command
+from ..process import ToolMissingError, resolve_tool_command
 
 DownloadQuality = Literal["best", "2160", "1440", "1080", "720", "480"]
 

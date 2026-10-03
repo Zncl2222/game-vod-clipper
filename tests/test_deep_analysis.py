@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from game_vod_clipper.codex_analysis import Observation, missing_ranges, packet_effort, packets, run_analysis, validate_observation, verified_outcome
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.analysis.models import Observation
+from game_vod_clipper.analysis.sampling import missing_ranges, packet_effort, packets
+from game_vod_clipper.analysis.pipeline import run_analysis
+from game_vod_clipper.analysis.validation import validate_observation, verified_outcome
+from game_vod_clipper.storage.store import Store
 
 
 def answer(**changes):
@@ -160,7 +163,7 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertTrue(result["review_complete"])
 
     def test_stalled_provider_call_keeps_the_inflight_packet_unreviewed(self):
-        from game_vod_clipper.codex_runtime import CodexCallError
+        from game_vod_clipper.codex.runtime import CodexCallError
         def stalled(*args, **kwargs):
             raise CodexCallError("stalled", kind="timeout")
         with self.assertRaises(CodexCallError):
@@ -281,7 +284,7 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertLess(result["rounds"], 10)
 
     def test_analysis_bounds_a_stuck_call_without_a_whole_vod_round_budget(self):
-        from game_vod_clipper.codex_analysis import MAX_CALLS
+        from game_vod_clipper.analysis.pipeline import MAX_CALLS
         self.assertIsNone(MAX_CALLS)
         def observe(work, images, prompt, timeout, **kwargs):
             self.assertEqual(timeout, 180)
@@ -372,9 +375,9 @@ class DeepAnalysisTest(unittest.TestCase):
         return [], {"start": a, "end": b, "every": step, "timestamps": times}
 
     def run_review(self, observation=None, calls=240, job=None):
-        with patch("game_vod_clipper.codex_analysis.extract_packet", side_effect=self.extract), \
-             patch("game_vod_clipper.codex_analysis.invoke_codex", side_effect=observation or (lambda *a, **k: (answer(), {}))), \
-             patch("game_vod_clipper.codex_analysis.MAX_CALLS", calls):
+        with patch("game_vod_clipper.analysis.pipeline.extract_packet", side_effect=self.extract), \
+             patch("game_vod_clipper.analysis.pipeline.invoke_codex", side_effect=observation or (lambda *a, **k: (answer(), {}))), \
+             patch("game_vod_clipper.analysis.pipeline.MAX_CALLS", calls):
             run_analysis(self.store, job or self.job, self.project)
         return self.store.get("jobs", (job or self.job)["id"])["result"]
 
@@ -617,7 +620,7 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertEqual(list(missing_ranges(0, 4, .5, history)), [(1.5, 2.5)])
 
     def test_stopped_extraction_retries_pending_packet_from_checkpoint(self):
-        with patch("game_vod_clipper.codex_analysis.extract_packet", side_effect=RuntimeError("stopped")):
+        with patch("game_vod_clipper.analysis.pipeline.extract_packet", side_effect=RuntimeError("stopped")):
             with self.assertRaisesRegex(RuntimeError, "stopped"):
                 run_analysis(self.store, self.job, self.project)
         saved = json.loads((self.root / "runs/web/p/codex/first/checkpoint.json").read_text())

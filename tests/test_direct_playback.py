@@ -11,10 +11,11 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from yt_dlp import YoutubeDL
 
-from game_vod_clipper.web import PREVIEW_RANGE_LIMIT, create_app
-from game_vod_clipper.web_store import Store
+from game_vod_clipper.api.server import PREVIEW_RANGE_LIMIT
+from game_vod_clipper.web import create_app
+from game_vod_clipper.storage.store import Store
 from game_vod_clipper import web_worker
-from game_vod_clipper.youtube import BROWSER_MERGE_FORMATS, quality_format
+from game_vod_clipper.youtube.downloader import BROWSER_MERGE_FORMATS, quality_format
 
 ROOT = Path(__file__).resolve().parents[1]
 
