@@ -8,6 +8,10 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
 }) => {
   const consoleErrors: string[] = [];
   page.on("pageerror", (error) => consoleErrors.push(error.message));
+  // Keep signed-out layout coverage independent of the machine's Codex account.
+  await page.route("**/api/codex", route => route.fulfill({ json: {
+    available: false, model: "fixture-model", detail: "尚未連接 ChatGPT 帳號。",
+  } }));
   await page.goto("/");
   await expect(page.getByText("工作區已連線")).toBeVisible();
   await page.screenshot({ path: "../runs/web-poc-empty.png", fullPage: true });
@@ -178,7 +182,8 @@ test("import, preview, trim, review, export, restore and mobile layout", async (
   await page.reload();
   await expectEdge(page, "start", 4);
   await page.getByRole("button", { name: "AI 對話", exact: true }).click();
-  await page.getByRole("button", { name: /套用候選/ }).click();
+  await expect(page.locator("#codex-account-settings")).toBeVisible();
+  await page.getByRole("button", { name: /套用候選/ }).click({ timeout: 5000 });
   await expectEdge(page, "start", 3);
   await page.getByRole("tab", { name: "成品 1" }).click();
   const exportedJob = analysisState.jobs.find((job: { kind: string }) => job.kind === "export");

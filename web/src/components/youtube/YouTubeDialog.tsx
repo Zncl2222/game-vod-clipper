@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, ExternalLink, Film, Link2, LoaderCircle, RefreshCw, Upload, X, SquarePlay } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, ExternalLink, Film, History, Link2, LoaderCircle, RefreshCw, Upload, X, SquarePlay } from "lucide-react";
 import { api, ApiError, time, type Job, type Project } from "../../lib/api";
 import YouTubeImportQueue, { importIsPending, importIsWorking, type ImportRecord } from "./YouTubeImportQueue";
 import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
@@ -291,7 +291,10 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
     <header className="yt-heading"><div><span className="studio-kicker">YOUR CHANNEL, YOUR CLIPS</span><h2 id="yt-dialog-title"><SquarePlay size={24} aria-hidden="true" />我的 YouTube</h2>
       <p>直播交給 AI 找片段，剪好的成品由你確認上傳。</p></div><button type="button" className="icon-button" aria-label="關閉 YouTube 視窗" onClick={onClose}><X size={22} aria-hidden="true" /></button></header>
     <div className="yt-content">
-      <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setHistoryOpen(true)}>YouTube 匯入歷史</button>
+      <div className="yt-workflow-toolbar">
+        <span className="yt-workflow-label">剪輯流程</span>
+        <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setHistoryOpen(true)}><History size={16} aria-hidden="true" />YouTube 匯入歷史</button>
+      </div>
       {historyOpen && <YouTubeHistory onClose={() => setHistoryOpen(false)} onOpen={onImport} />}
       {error && <div ref={errorRef} tabIndex={-1} className="inline-error yt-message" role="alert"><p>{error.message}</p>
         <div className="yt-actions">{errorLink && <a className="secondary" href={errorLink.href} target="_blank" rel="noreferrer">{errorLink.label}<ExternalLink size={15} aria-hidden="true" /></a>}

@@ -54,6 +54,11 @@ async def codex_test(ctx: WorkspaceDep):
     return await ctx.codex.probe()
 
 
+@router.post("/api/codex/logout")
+async def codex_logout(ctx: WorkspaceDep):
+    return await ctx.codex.logout()
+
+
 @router.get("/api/codex/models")
 async def codex_models(ctx: WorkspaceDep):
     return {"models": await ctx.codex.models()}

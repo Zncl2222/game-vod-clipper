@@ -59,7 +59,7 @@ export function WorkspaceGuide({ onClose }: { onClose: () => void }) {
     <p className="guide-intro">你的桌面剪輯工作區，照自己的步調完成。</p>
     <ol className="guide-steps">
       <li><FolderOpen aria-hidden="true" size={20} /><div><h3>01 · 帶入影片</h3><p>按「我的 YouTube」連接頻道、選取直播，勾選「匯入後自動找片段」即可接著分析。也能按「匯入影片」貼上網址或選擇原始影片資料夾裡的本機錄影；資料夾位置可在偏好設定變更。</p></div></li>
-      <li><Sparkles aria-hidden="true" size={20} /><div><h3>02 · 尋找成功挑戰</h3><p>按「一鍵搜尋成功挑戰」，或開啟 AI 對話指定範圍。第一次使用 AI，先到「帳號設定」連接帳號並選擇模型。也可以直接手動剪輯。</p></div></li>
+      <li><Sparkles aria-hidden="true" size={20} /><div><h3>02 · 尋找成功挑戰</h3><p>第一次使用 AI，先按工作區提醒的「使用 ChatGPT 登入」，依指引取得驗證碼並在官方頁面完成授權。看到「Codex 已連接」後，按「一鍵搜尋成功挑戰」，或開啟 AI 對話指定範圍。帳號可在側欄的「Codex 帳號」管理，也可以直接手動剪輯。</p></div></li>
       <li><Scissors aria-hidden="true" size={20} /><div><h3>03 · 點選片段直接編輯</h3><p>點選候選就會載入該段，預覽、時間調整與匯出都使用同一區間。拖曳邊界調整開始與勝利，選取把手後可用方向鍵逐格微調；切換候選會保留各段在此瀏覽器的修改。底部固定顯示正在編輯的編號與匯出起迄時間。結束＝勝利時間＋收尾秒數。保留／排除只用來整理候選，不影響匯出。</p></div></li>
       <li><ArrowDownToLine aria-hidden="true" size={20} /><div><h3>04 · 匯出與上傳</h3><p>調整好區間、保留勝利後 5–10 秒，直接按「匯出 MP4」，會自動儲存草稿。匯出成功後，對應候選會標記「已匯出」。到右側「成品」選擇下載，或按「上傳 YouTube」確認標題與觀看權限後上傳；預設為私人影片。</p></div></li>
     </ol>

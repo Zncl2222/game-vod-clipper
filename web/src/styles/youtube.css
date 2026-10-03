@@ -17,9 +17,12 @@
 .yt-dialog summary { cursor: pointer; min-height: 44px; padding-block: 10px; font-weight: 600; }
 .yt-dialog details > p { font-size: 13px; color: var(--muted); margin: 6px 0 12px; }
 .yt-dialog .text-button { text-decoration: underline; text-underline-offset: 3px; }
-.yt-steps { display: flex; list-style: none; padding: 0; margin: 0 0 24px; gap: 16px; }
-.yt-steps li { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
-.yt-steps li > span { display: grid; place-items: center; border-radius: 50%; width: 28px; height: 28px; background: var(--surface-subtle); border: 1px solid var(--line); flex-shrink: 0; }
+.yt-workflow-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.yt-workflow-label { font-size: 14px; font-weight: 600; }
+.yt-workflow-toolbar .secondary { margin-left: auto; }
+.yt-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); list-style: none; padding: 16px; margin: 0 0 28px; gap: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-subtle); }
+.yt-steps li { min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.yt-steps li > span { display: grid; place-items: center; border-radius: 50%; width: 28px; height: 28px; background: var(--surface); border: 1px solid var(--line); flex-shrink: 0; }
 .yt-steps li[aria-current=step] { color: var(--ink); font-weight: 600; }
 .yt-steps li[aria-current=step] > span { background: var(--green); border-color: var(--green); }
 .yt-connect { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 12px 0 20px; gap: 16px; }
@@ -117,8 +120,8 @@
   .yt-heading h2 { font-size: 21px; }
   .yt-heading .studio-kicker { font-size: 10px; }
   .yt-heading p { font-size: 12px; }
-  .yt-steps { gap: 8px; }
-  .yt-steps li { font-size: 12px; gap: 4px; }
+  .yt-steps { padding: 12px; gap: 8px; margin-bottom: 24px; }
+  .yt-steps li { flex-direction: column; text-align: center; font-size: 12px; gap: 8px; }
   .yt-steps li > span { width: 24px; height: 24px; }
   .yt-list-toolbar { gap: 8px; }
   .yt-list-toolbar .secondary { padding-inline: 8px; font-size: 12px; }
