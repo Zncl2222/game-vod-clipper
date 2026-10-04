@@ -6,6 +6,7 @@ import AIActivity from "./AIActivity";
 import AnalysisTask from "./AnalysisTask";
 import ModelSettings, { type Model } from "./ModelSettings";
 import UsagePanel from "./UsagePanel";
+import { preferredModel, readVerificationPreference } from "../../lib/models";
 
 export type EditorContext = { analysis_generation?: number; project_id: string; title: string; duration: number; draft: Draft; clip_id?: string | null; selection_generation?: number };
 export type ChatAction = {
@@ -18,6 +19,7 @@ export type ChatAction = {
 };
 export type EditorChatHandle = {
   loadClip: (id: string) => void;
+  pauseVideo: () => void;
   apply: (action: ChatAction, expected: EditorContext) => string;
 };
 export type ChatHandle = { login: () => void; search: () => Promise<void>; reviewCandidate: (candidateId: string, start: number, end: number) => Promise<string> };
@@ -67,6 +69,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
   const [connection, setConnection] = useState<Connection | null>(null);
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState(() => localStorage.getItem("bosscut:chat-model") ?? "");
+  const [verifyWithSol, setVerifyWithSol] = useState(readVerificationPreference);
   const [modelError, setModelError] = useState("");
   const [effort, setEffort] = useState(() => localStorage.getItem("bosscut:effort") ?? "");
   const selectedModel = models.find(m => m.id === model);
@@ -142,6 +145,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
       const job = await api<Job>(`/projects/${context.project_id}/analyze`, "POST", {
         start, end, candidate_id: candidateId, analysis_generation: context.analysis_generation ?? 0,
         model, effort: effectiveEffort || null,
+        verify_with_sol: verifyWithSol,
       });
       return job.id;
     },
@@ -174,7 +178,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
       const data = await api<{ models: Model[] }>("/codex/models");
       setModels(data.models);
       setModel((current) => data.models.some((m) => m.id === current) ? current :
-        (data.models.find((m) => m.is_default) ?? data.models[0])?.id ?? "");
+        preferredModel(data.models)?.id ?? "");
       if (!data.models.length) setModelError("尚無可選模型，請檢查登入狀態後重新整理。");
     } catch (e) { setModelError((e as Error).message); }
   }
@@ -245,7 +249,7 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
     try {
       const response = await fetch("/api/codex/chat", {
         method: "POST", headers: { "Content-Type": "application/json" }, signal: abort.signal,
-        body: JSON.stringify({ message: text, model, effort: effectiveEffort || null, history, request_id: userId,
+        body: JSON.stringify({ message: text, model, effort: effectiveEffort || null, verify_with_sol: verifyWithSol, history, request_id: userId,
           intent: search ? "search" : "message", search_start: search ? searchStart : null,
           search_end: search ? searchEnd : null,
           context: snapshot ? { project_id: snapshot.project_id, analysis_generation: snapshot.analysis_generation ?? 0, draft: validDraft ? {
@@ -411,6 +415,12 @@ export default function ChatPanel({ context, onAction, open, onToggle, jobs, sea
           </div>
         </form>
         {inputTooLong && <p id="chat-input-error" className="inline-error" role="alert">每則訊息最多 4,000 字，請分次送出。</p>}
+        {model === "gpt-5.6-luna" && models.some(item => item.id === "gpt-6.1-sol") && <label className="chat-verification-policy">
+          <input type="checkbox" checked={verifyWithSol} disabled={busy} onChange={event => {
+            setVerifyWithSol(event.target.checked);
+            localStorage.setItem("bosscut:verify-with-sol", String(event.target.checked));
+          }} />關鍵畫面用 Sol 複查（最多 3 次，增加用量）
+        </label>}
         <p className="chat-footnote">{connection?.auth_mode === "apiKey" ? "API 用量另外計費" : "使用你的 Codex 額度"} · Shift + Enter 換行</p>
       </div>
       </div>

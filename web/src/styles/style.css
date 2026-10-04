@@ -1860,6 +1860,7 @@ footer > span {
 .chat-composer textarea::placeholder { color: #a4ad9c; }
 .chat-composer-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
 .chat-model-settings { display: flex; flex: 1; align-items: center; min-width: 0; gap: 4px; }
+.chat-verification-policy { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; font-size: 12px; line-height: 1.6; }
 .model-trigger, .effort-trigger { display: inline-flex; align-items: center; justify-content: flex-start; gap: 6px; min-width: 0; height: 32px; padding: 0 7px; border: 1px solid transparent; border-radius: 8px; font-size: 12px; font-weight: 500; color: #344436; transition: color .15s, background .15s, border-color .15s; }
 .model-trigger { flex: 0 1 auto; }
 .model-trigger > span:not(.model-trigger-chevron) { min-width: 0; }

@@ -10,6 +10,7 @@ from fractions import Fraction
 from pathlib import Path
 
 from .media.operations import DEFAULT_EXPORT_QUALITY, EXPORT_QUALITY, clip_video
+from .media.validation import validate_export
 from .storage.locations import Locations, media_path, project_work, record_path
 from .media.progress import DOWNLOAD_TEMPLATE, POSTPROCESS_TEMPLATE, MediaProgress, streamed_command
 from .process import resolve_tool_command
@@ -189,36 +190,20 @@ def run(root: Path, job_id: str):
         expected = draft["victory"] + draft["postroll"] - draft["start"]
         reporter.emit("重新編碼剪輯", "export", 0, processed_seconds=0, total_seconds=round(expected, 1))
         output = locations.project_folder("exports", project["id"]) / f"{job_id}.mp4"
+        pending = output.with_suffix(".partial.mp4")
         clip_video(
             media_path(root, project["source"]),
-            output,
+            pending,
             start=str(draft["start"]),
             end=str(draft["victory"]),
             postroll=draft["postroll"],
             quality=quality,
             on_progress=reporter.ffmpeg("重新編碼剪輯", "export", expected),
         )
-        reporter.emit("驗證輸出長度", "verify", 99)
-        # Export may be shorter than the minimum input length accepted by probe().
-        result = json.loads(
-            command(
-                resolve_tool_command("ffprobe")
-                + [
-                    "-v",
-                    "error",
-                    "-show_format",
-                    "-show_streams",
-                    "-of",
-                    "json",
-                    str(output),
-                ]
-            )
-        )
-        if (
-            not any(s["codec_type"] == "video" for s in result["streams"])
-            or abs(float(result["format"]["duration"]) - expected) > 0.3
-        ):
-            raise ValueError("輸出長度驗證失敗。")
+        reporter.emit("檢查成品影音完整性", "verify", 0)
+        validation = validate_export(pending, expected, has_audio=bool(project.get("audio_codec")), command=command,
+                                     on_progress=reporter.ffmpeg("檢查成品影音完整性", "verify", expected))
+        pending.replace(output)
         manifest = {
             "project_id": project["id"],
             "source": project["source"],
@@ -229,6 +214,7 @@ def run(root: Path, job_id: str):
                         "audio": "aac", "audio_bitrate": "192k"},
             "validation": ("human_reviewed; " if draft.get("reviewed") else "")
                           + "duration_checked; no_automated_visual_validation",
+            "media_validation": validation,
         }
         output.with_suffix(".json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"

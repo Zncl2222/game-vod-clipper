@@ -28,9 +28,12 @@ def invoke_codex(
     schema["required"].append("review_complete")
     schema["required"].append("entry_status")
     schema["required"].append("outcome")
+    schema["required"].extend(["encounter", "entry_proof", "ending_proof"])
     schema["$defs"]["CandidateSegment"]["required"].append("replaces")
-    schema["$defs"]["CandidateSegment"]["properties"]["replaces"].pop("default", None)
-    for field in ("suspicious_windows", "candidates", "review_complete", "entry_status", "outcome"):
+    schema["$defs"]["CandidateSegment"]["required"].extend(["encounter", "ending_window"])
+    for field in ("replaces", "encounter", "ending_window"):
+        schema["$defs"]["CandidateSegment"]["properties"][field].pop("default", None)
+    for field in ("suspicious_windows", "candidates", "review_complete", "entry_status", "outcome", "encounter", "entry_proof", "ending_proof"):
         schema["properties"][field].pop("default", None)
     for attempt in range(len(MODEL_RETRY_DELAYS) + 1):
         # Keep every failed attempt's diagnostics. Reuse extracted images and

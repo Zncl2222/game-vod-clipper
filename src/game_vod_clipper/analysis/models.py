@@ -20,6 +20,25 @@ class Evidence(BaseModel):
     event: str
 
 
+class EncounterIdentity(BaseModel):
+    """Boss eligibility for this encounter, independent of who won."""
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["confirmed", "ordinary", "unknown"]
+    signal: Literal["boss_hud", "duel_hud", "boss_objective", "boss_reward", "none"]
+    evidence: list[Evidence] = Field(max_length=4)
+
+
+class EntryProof(Evidence):
+    kind: Literal["arena_entry", "first_combat", "boss_reveal", "checkpoint", "mid_fight", "unknown"]
+
+
+class EndingProof(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phase: Literal["onset", "already_over", "unresolved"]
+    last_combat: Evidence | None
+    first_defeat: Evidence | None
+
+
 class CandidateSegment(BaseModel):
     """A review annotation, never a claim that a clip is safe to export."""
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -34,6 +53,8 @@ class CandidateSegment(BaseModel):
     summary: str
     warnings: list[str]
     evidence: list[Evidence]
+    encounter: EncounterIdentity | None = None
+    ending_window: SampleRequest | None = None
 
 
 class Outcome(BaseModel):
@@ -60,3 +81,6 @@ class Observation(BaseModel):
     review_complete: bool = False
     entry_status: Literal["unknown", "clean", "mid_fight"] = "unknown"
     outcome: Outcome | None = None
+    encounter: EncounterIdentity | None = None
+    entry_proof: EntryProof | None = None
+    ending_proof: EndingProof | None = None

@@ -84,10 +84,15 @@ async def enqueue_analysis(ctx: Workspace, project_id: str, body: AnalysisReques
     status = await ctx.codex.status()
     if not status["available"]:
         raise ConnectionError(status["detail"])
-    selected = next((m for m in await ctx.codex.models() if m["id"] == body.model), None)
+    models = await ctx.codex.models()
+    selected = next((m for m in models if m["id"] == body.model), None)
     if not selected or "image" not in selected.get("input_modalities", []):
         raise ConnectionError("所選模型不支援畫面判讀，請在同一模型選單選擇支援影像的模型。")
     effort = resume_job["analysis"].get("effort") if resume_job else resolve_effort(selected, body.effort)
+    verifier = next((m for m in models if m["id"] == "gpt-6.1-sol" and "image" in m.get("input_modalities", [])), None)
+    verification = ({"verification_model": verifier["id"], "verification_effort": resolve_effort(verifier,
+                     "medium" if "medium" in verifier.get("supported_efforts", []) else None)}
+                    if verifier and body.verify_with_sol and body.model == "gpt-5.6-luna" else {})
     effort_policy = resume_job["analysis"].get("effort_policy", body.effort_policy) if resume_job else body.effort_policy
     if "high" not in selected.get("supported_efforts", []) and selected.get("effort") != "high":
         effort_policy = "fixed"
@@ -115,6 +120,8 @@ async def enqueue_analysis(ctx: Workspace, project_id: str, body: AnalysisReques
                 ("id", "start", "end", "victory", "kind", "boss", "summary")}} if target else {}),
             "effort": effort,
             "effort_policy": effort_policy,
+            **({k: resume_job["analysis"][k] for k in ("verification_model", "verification_effort")
+                if k in resume_job["analysis"]} if resume_job else verification),
             **({"profile": reference} if reference else {}),
             "request_id": request_id, **({"resume_from": resume_job["id"]} if resume_job else {})})
         if project.get("youtube_analysis_error"):
@@ -139,7 +146,8 @@ async def codex_chat(ctx: WorkspaceDep, body: ChatRequest):
             if project is None:
                 raise ConnectionError("請先選擇影片。")
             job = await enqueue_analysis(ctx, project["id"], AnalysisRequest(
-                start=action["start"], end=action["end"], model=body.model, effort=body.effort), body.request_id,
+                start=action["start"], end=action["end"], model=body.model, effort=body.effort,
+                verify_with_sol=body.verify_with_sol), body.request_id,
                 expected_generation=body.context.analysis_generation)
             result = {**result, "action": None, "job_id": job["id"],
                       "reply": "已建立成功挑戰搜尋任務。進度與結果會顯示在這段對話下方，你也可以繼續提問。"}

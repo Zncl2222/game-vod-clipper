@@ -17,11 +17,12 @@ def candidate_verification(segment: dict, job: dict, duration: float) -> dict:
         value["warnings"] += result.get("warnings", [])
         postroll = result.get("postroll", 8)
         value["postroll"] = postroll
+        value["entry_proof"] = result.get("entry_proof")
         checks = result.get("checks") or {}
         verified = (job.get("status") == "succeeded" and result.get("status") == "candidate"
                     and result.get("review_complete") is True and not result.get("can_continue")
                     and all(checks.get(k) is True for k in
-                            ("search", "entry", "outcome", "boundaries", "dense", "continuity"))
+                            ("search", "encounter", "ending", "entry", "outcome", "boundaries", "dense", "continuity"))
                     and all(checks.values())
                     and 5 <= postroll <= 10 and segment["victory"] + postroll <= duration)
         if verified:
@@ -81,6 +82,8 @@ def project_candidates(project: dict, jobs: list[dict]) -> list[dict]:
                       if segment.get("victory") is not None else segment["end"])
             if segment["verification"] != "blocked" and any(
                     c["kind"] == "death_retry" and c["confidence"] == "high"
+                    and not (c["end"] == segment["start"] and segment["verification"] == "verified"
+                             and (segment.get("entry_proof") or {}).get("kind") in {"arena_entry", "first_combat", "boss_reveal"})
                     and c["start"] <= finish and segment["start"] <= c["end"] for c in consolidated):
                 segment["verification"] = "blocked"
                 segment["warnings"] = list(dict.fromkeys(segment["warnings"] +

@@ -170,6 +170,15 @@ class WebTest(unittest.TestCase):
                 float(metadata["format"]["duration"]), 11.75, delta=0.1
             )
             self.assertTrue(output.with_suffix(".json").is_file())
+            receipt = json.loads(output.with_suffix(".json").read_text())
+            self.assertTrue(receipt["media_validation"]["full_decode_checked"])
+            self.assertTrue(receipt["media_validation"]["audio"])
+            self.assertFalse(output.with_suffix(".partial.mp4").exists())
+            preview = client.get(f"/api/jobs/{job['id']}/preview", headers={"Range": "bytes=0-127"})
+            self.assertEqual(preview.status_code, 206)
+            self.assertEqual(preview.content, output.read_bytes()[:128])
+            self.assertNotIn("attachment", preview.headers.get("content-disposition", ""))
+            self.assertEqual(client.get(f"/api/jobs/{data['job']['id']}/preview").status_code, 404)
             # The publishing boundary accepts the actual worker's validated export receipt.
             _, publishable = app.state.youtube.uploads.validate_export(job["id"])
             self.assertEqual(publishable, output)

@@ -112,7 +112,7 @@ class CandidatesTest(unittest.TestCase):
         segment = dict(self.segment, kind="possible_win", victory=35)
         result = {"status": "candidate", "start": 20, "victory": 35, "postroll": 6,
                   "review_complete": True, "warnings": [],
-                  "checks": dict.fromkeys(("search", "entry", "outcome", "boundaries", "dense", "continuity"), True)}
+                  "checks": dict.fromkeys(("search", "encounter", "ending", "entry", "outcome", "boundaries", "dense", "continuity"), True)}
         job = self.job | {"status": "succeeded", "result": result, "candidates": [segment]}
         verified = project_candidates(self.project, [job])[0]
         self.assertEqual(verified["verification"], "verified")

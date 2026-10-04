@@ -95,6 +95,10 @@ def google_error(response: httpx.Response):
         raise YouTubeError("這個播放清單已不存在或無法編輯，請到 YouTube 確認清單與頻道權限。", 422)
     if "playlistContainsMaximumNumberOfVideos" in reasons:
         raise YouTubeError("播放清單已滿，請先在 YouTube 整理清單後重試。", 422)
+    if "maxPlaylistExceeded" in reasons:
+        raise YouTubeError("這個頻道的播放清單數量已達上限，請先到 YouTube 整理清單。", 422)
+    if reasons & {"playlistTitleRequired", "invalidPlaylistSnippet"}:
+        raise YouTubeError("播放清單名稱無效，請修改名稱後再建立。", 422)
     if "youtubeSignupRequired" in reasons:
         raise YouTubeError("這個 Google 帳號尚未建立 YouTube 頻道。請先在 YouTube 建立頻道，或重新登入並選擇已有的頻道。", 403,
                            code="youtubeSignupRequired")
@@ -252,6 +256,32 @@ class YouTubeAccount:
                            "count": item.get("contentDetails", {}).get("itemCount", 0)}
                           for item in result.get("items", []) if item.get("snippet", {}).get("channelId") == channel_id],
                 "next_page_token": result.get("nextPageToken", "")}
+
+    async def create_playlist(self, channel_id: str, title: str, privacy: str = "private"):
+        self.require_playlist_access()
+        unconfirmed = "尚未確認新播放清單的結果，請先重新整理播放清單，確認是否已建立。"
+        try:
+            response = await self.authorized("POST", API + "playlists", params={"part": "snippet,status,contentDetails"},
+                json={"snippet": {"title": title}, "status": {"privacyStatus": privacy}})
+        except YouTubeError as error:
+            if error.status == 502:
+                raise YouTubeError(unconfirmed, 502) from None
+            raise
+        if response.status_code not in {200, 201}:
+            google_error(response)
+        try:
+            item = response.json()
+            valid = (isinstance(item, dict) and isinstance(item.get("id"), str) and PLAYLIST_ID.fullmatch(item["id"])
+                     and isinstance(item.get("snippet"), dict) and item["snippet"].get("channelId") == channel_id
+                     and isinstance(item["snippet"].get("title"), str) and item["snippet"]["title"].strip()
+                     and isinstance(item.get("status", {}), dict) and isinstance(item.get("contentDetails", {}), dict))
+        except ValueError:
+            valid = False
+        if not valid:
+            raise YouTubeError(unconfirmed, 502)
+        return {"id": item["id"], "title": item["snippet"]["title"],
+                "privacy": item.get("status", {}).get("privacyStatus", privacy),
+                "count": item.get("contentDetails", {}).get("itemCount", 0)}
 
     async def owned_playlist(self, playlist_id: str, channel_id: str):
         if not PLAYLIST_ID.fullmatch(playlist_id):

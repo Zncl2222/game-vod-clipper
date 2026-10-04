@@ -62,19 +62,19 @@ def missing_ranges(start: float, end: float, every: float, history: list[dict]):
         yield start + cursor * every, start + (count - 1) * every
 
 
-def normalized_request(start: float, end: float, every: float):
-    """Use one 60fps grid; sub-frame samples add no evidence."""
+def normalized_request(start: float, end: float, every: float, *, frame_rate: float = 60):
+    """Use the source frame grid; sub-frame samples add no evidence."""
     if not all(math.isfinite(x) for x in (start, end, every)) or every <= 0 or end < start:
         raise ValueError("Invalid sampling request")
-    if every <= 1 / 60 + .00005:
-        every = 1 / 60
-        grid_start = math.ceil(start * 60 - 1e-4) / 60
-        grid_end = math.floor(end * 60 + 1e-4) / 60
+    if every <= 1 / frame_rate + .00005:
+        every = 1 / frame_rate
+        grid_start = math.ceil(start * frame_rate - 1e-4) / frame_rate
+        grid_end = math.floor(end * frame_rate + 1e-4) / frame_rate
         start, end = (grid_start, grid_end) if grid_start <= grid_end else (start, start)
     return start, end, every
 
 
-def inspection_request(start: float, end: float, every: float):
+def inspection_request(start: float, end: float, every: float, *, frame_rate: float = 60):
     if not all(math.isfinite(x) for x in (start, end, every)) or every <= 0 or end < start:
         raise ValueError("Invalid sampling request")
     # Keep model-requested density changes finite without altering the host's
@@ -84,13 +84,19 @@ def inspection_request(start: float, end: float, every: float):
     # the short windows that actually need frame-level evidence.
     if end - start > MAX_DETAIL_WINDOW:
         every = max(.5, every)
-    return normalized_request(start, end, every)
+    return normalized_request(start, end, every, frame_rate=frame_rate)
 
 
-def enqueue_unseen(queue: list, history: list, request: tuple, purpose: str, scope: str | None = None):
-    a, b, every = normalized_request(*request)
+def enqueue_unseen(queue: list, history: list, request: tuple, purpose: str, scope: str | None = None,
+                   *, frame_rate: float = 60):
+    a, b, every = normalized_request(*request, frame_rate=frame_rate)
+    if purpose == "entry":
+        # Seeing these frames for an ending does not answer the arena-entry
+        # question. A completed entry review still deduplicates on resume.
+        history = [h for h in history if h.get("purpose") == "entry"]
     # Pending denser work also covers requests; don't queue alternate tilings.
-    pending = [{"packet": {"start": q[0], "end": q[1], "every": q[2]}} for q in queue]
+    pending = [{"packet": {"start": q[0], "end": q[1], "every": q[2]}} for q in queue
+               if purpose != "entry" or q[3] == "entry"]
     for start, end in missing_ranges(a, b, every, history + pending):
         queue.append([start, end, every, purpose] + ([scope] if scope is not None else []))
 
@@ -99,7 +105,8 @@ def next_unseen(queue: list, history: list):
     """Recheck at execution time and return only the next uncovered packet."""
     while queue:
         a, b, every, purpose, *scope = queue.pop(0)
-        gaps = list(missing_ranges(a, b, every, history))
+        relevant = [h for h in history if h.get("purpose") == "entry"] if purpose == "entry" else history
+        gaps = list(missing_ranges(a, b, every, relevant))
         if not gaps:
             continue
         first, last = gaps[0]
@@ -112,26 +119,26 @@ def next_unseen(queue: list, history: list):
     return None
 
 
-def required_reviews(last: Observation | None, start: float, end: float, duration: float):
+def required_reviews(last: Observation | None, start: float, end: float, duration: float, *, frame_rate: float = 60):
     if last is None:
         return []
     windows = []
     if (last.start is not None and last.victory is not None
             and start <= last.start < last.victory <= end
             and last.victory + last.postroll <= duration):
-        finish = min(end - 1 / 60, last.victory + last.postroll)
+        finish = min(end - 1 / frame_rate, last.victory + last.postroll)
         # Resolve the endpoints first, then reuse the denser continuity pass for
         # the 2s requirement rather than decoding the whole fight twice.
         for at in (last.start, last.victory):
-            windows.append((max(start, at - 2), min(end - 1 / 60, at + 2), .1, "boundaries"))
+            windows.append((max(start, at - 2), min(end - 1 / frame_rate, at + 2), .1, "boundaries"))
         windows += [(last.start, finish, 0.5, "dense"),
                     (last.start, finish, 2.0, "continuity")]
     for sample in last.suspicious_windows:
         if start <= sample.start <= sample.end < end:
-            windows.append((*inspection_request(sample.start, sample.end, sample.every), "suspicious"))
+            windows.append((*inspection_request(sample.start, sample.end, sample.every, frame_rate=frame_rate), "suspicious"))
     # Stable source-frame boundaries also matter for the 2s/0.5s passes. Tiny
     # model timestamp shifts must not create an endless new leading/trailing gap.
-    return [(*normalized_request(a, b, 1 / 60)[:2], every, purpose)
+    return [(*normalized_request(a, b, 1 / frame_rate, frame_rate=frame_rate)[:2], every, purpose)
             for a, b, every, purpose in windows]
 
 

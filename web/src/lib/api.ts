@@ -62,6 +62,9 @@ export type Job = {
   progress_reset?: boolean;
   candidates?: CandidateSegment[];
   model?: string;
+  round_model?: string;
+  used_models?: string[];
+  verification_reviews?: { role: string; reason: string; model: string; round: number }[];
   id: string;
   project_id: string;
   kind: "prepare" | "export" | "analyze";

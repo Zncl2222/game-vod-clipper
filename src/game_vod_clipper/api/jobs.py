@@ -37,6 +37,7 @@ async def retry(ctx: WorkspaceDep, job_id: str):
         checkpoint = project_work(ctx.root, ctx.get("projects", job["project_id"])) / "codex" / job["id"] / "checkpoint.json"
         return ctx.public_job(await enqueue_analysis(ctx, job["project_id"], AnalysisRequest(
             start=bounds["start"], end=bounds["end"], model=bounds.get("model", MODEL), effort=bounds.get("effort"),
+            verify_with_sol=bounds.get("verify_with_sol", True), effort_policy=bounds.get("effort_policy", "adaptive"),
             candidate_id=bounds.get("candidate_id")), uuid4().hex,
             resume_job=job if checkpoint.is_file() else None))
     if any(

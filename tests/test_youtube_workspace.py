@@ -134,7 +134,7 @@ class RouteTest(unittest.TestCase):
 
     def test_import_deduplicates_while_queued_and_binds_owned_channel(self):
         self.account.files.write("account", account_data())
-        body = {"channel_id": CHANNEL["id"], "auto_analyze": False, "model": "", "download_quality": "1440"}
+        body = {"channel_id": CHANNEL["id"], "auto_analyze": False, "model": "", "download_quality": "1440", "verify_with_sol": False}
         with patch.object(self.app.state.jobs, "submit", return_value={"id": "prepare-job"}) as submit, \
                 patch("game_vod_clipper.api.projects.youtube_command", return_value=["yt-dlp"]):
             first = self.client.post(f"/api/youtube/broadcasts/{VIDEO}/import", json=body)
@@ -149,6 +149,7 @@ class RouteTest(unittest.TestCase):
         self.assertEqual(project["title"], "直播測試")
         self.assertEqual(project["youtube_analysis_state"], "manual")
         self.assertEqual(project["download_quality"], "1440")
+        self.assertFalse(project["youtube_verify_with_sol"])
 
     def test_upload_requires_audience_and_rejects_source_jobs(self):
         self.account.files.write("account", account_data())

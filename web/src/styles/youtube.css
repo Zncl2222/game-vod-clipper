@@ -99,6 +99,9 @@
 .yt-playlist-access p { flex: 1; min-width: 180px; color: var(--muted); font-size: 13px; }
 .yt-playlist-field .yt-hint { display: flex; align-items: center; gap: 6px; }
 .yt-playlist-error { display: block; margin-top: 4px; }
+.yt-playlist-create { display: grid; gap: 8px; min-width: 0; margin: 4px 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.yt-playlist-create legend { padding-inline: 6px; font-size: 14px; font-weight: 600; }
+.yt-playlist-create .yt-actions { justify-content: flex-end; margin-top: 4px; }
 .yt-footer-upload .yt-actions { margin-left: auto; }
 .yt-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 28px; border-top: 1px solid var(--line); flex-shrink: 0; }
 .yt-history { display: grid; gap: 16px; }

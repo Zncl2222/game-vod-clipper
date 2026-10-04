@@ -6,12 +6,26 @@ import re
 
 from fastapi import APIRouter, HTTPException
 
-from ..storage.locations import media_path, project_work
+from ..storage.locations import LocationError, export_path, media_path, project_work
 from .context import WorkspaceDep
 from .server import PREVIEW_RANGE_LIMIT, LocalFileResponse
 from .sources import EXTENSIONS
 
 router = APIRouter()
+
+
+@router.get("/api/jobs/{job_id}/preview")
+async def clip_preview(ctx: WorkspaceDep, job_id: str):
+    job = ctx.get("jobs", job_id)
+    if job["status"] != "succeeded" or job["kind"] != "export":
+        raise HTTPException(404, "尚無可播放的成品。")
+    try:
+        path = export_path(ctx.root, job)
+    except LocationError:
+        raise HTTPException(404, "找不到成品。") from None
+    if not path.is_file() or path.is_symlink():
+        raise HTTPException(404, "找不到成品，請確認檔案仍在原來的位置。")
+    return LocalFileResponse(path, media_type="video/mp4", range_limit=PREVIEW_RANGE_LIMIT)
 
 
 @router.get("/api/projects/{project_id}/media/{filename}")
