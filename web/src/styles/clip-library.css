@@ -51,6 +51,8 @@
 .finished-clip-delete { color: var(--danger); }
 .finished-clip-delete:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-surface); }
 .clip-delete-dialog .project-dialog-actions button { min-height: 44px; }
+.clip-preview-dialog { width: min(960px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.clip-preview-dialog video { display: block; width: 100%; max-height: 65dvh; margin-top: 16px; background: #111; border-radius: 8px; }
 .finished-clip-details { border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.6; }
 .finished-clip-details summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 12px; list-style: none; cursor: pointer; transition: background var(--duration-fast), color var(--duration-fast); }
 .finished-clip-details summary::-webkit-details-marker { display: none; }

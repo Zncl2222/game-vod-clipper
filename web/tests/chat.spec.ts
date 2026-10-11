@@ -47,6 +47,35 @@ async function setup(page: Page, projects: unknown[] = [], options: { chat?: boo
   if (options.chat !== false) await expect(page.getByLabel("選擇 AI 模型")).toHaveText("Model A");
 }
 
+test("fresh visual model defaults to Luna and preserves a saved Sol choice", async ({ page }) => {
+  await setup(page, [project]);
+  await page.route("**/api/codex/models", route => route.fulfill({ json: { models: [
+    { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", is_default: true, input_modalities: ["text", "image"] },
+    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", input_modalities: ["text", "image"] },
+  ] } }));
+  await page.evaluate(() => localStorage.removeItem("bosscut:chat-model"));
+  await page.reload();
+  const model = page.getByRole("combobox", { name: "選擇 AI 模型" });
+  await expect(model).toHaveText("GPT-5.6 Luna");
+  const verification = page.getByRole("checkbox", { name: "關鍵畫面用 Sol 複查（最多 3 次，增加用量）" });
+  await expect(verification).toBeChecked();
+  await verification.uncheck();
+  await page.reload();
+  await expect(verification).not.toBeChecked();
+  const payloads: { verify_with_sol: boolean }[] = [];
+  await page.route("**/api/codex/chat", route => {
+    payloads.push(route.request().postDataJSON());
+    return route.fulfill({ contentType: "application/x-ndjson", body: JSON.stringify({ type: "reply", reply: "已收到", action: null }) + "\n" });
+  });
+  await page.getByLabel("輸入訊息").fill("搜尋成功挑戰");
+  await page.getByLabel("輸入訊息").press("Enter");
+  await expect.poll(() => payloads.length).toBe(1);
+  expect(payloads[0].verify_with_sol).toBe(false);
+  await chooseModel(page, "GPT-6.1 Sol");
+  await page.reload();
+  await expect(model).toHaveText("GPT-6.1 Sol");
+});
+
 test("sidebars resize independently, preserve editor state, and remember bounded widths", async ({ page }) => {
   await setup(page, [project]);
   const left = page.getByRole("separator", { name: "調整素材庫寬度" });

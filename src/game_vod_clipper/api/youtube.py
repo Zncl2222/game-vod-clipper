@@ -34,4 +34,5 @@ async def youtube_analyze(ctx: Workspace, project: dict, model: str, request_id:
     supported = set(selected.get("supported_efforts", [])) | {selected.get("effort")}
     effort = next((value for value in ("xhigh", "high") if value in supported), selected.get("effort"))
     return await enqueue_analysis(ctx, project["id"], AnalysisRequest(
-        start=0, end=project["duration"], model=model, effort=effort), request_id)
+        start=0, end=project["duration"], model=model, effort=effort,
+        verify_with_sol=project.get("youtube_verify_with_sol", True)), request_id)

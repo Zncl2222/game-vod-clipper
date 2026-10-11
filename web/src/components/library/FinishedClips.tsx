@@ -1,6 +1,30 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { Check, ChevronDown, CircleCheck, Download, Film, FolderOpen, LoaderCircle, Pencil, Search, Trash2, Upload } from "lucide-react";
+import { Check, ChevronDown, CircleCheck, Download, Film, FolderOpen, LoaderCircle, Pencil, Play, Search, Trash2, Upload } from "lucide-react";
 import { active, api, ApiError, finishedClips, media, time, type Job, type Project } from "../../lib/api";
+
+function ClipPreviewDialog({ job, name, onClose }: { job: Job; name: string; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null, element = dialog.current;
+    element?.showModal();
+    close.current?.focus();
+    return () => {
+      element?.close();
+      requestAnimationFrame(() => previous?.isConnected && previous.focus({ preventScroll: true }));
+    };
+  }, []);
+  return <dialog ref={dialog} className="project-dialog clip-preview-dialog" aria-labelledby={titleId}
+    onCancel={event => { event.preventDefault(); onClose(); }}>
+    <h2 id={titleId}>{name} · 成品預覽</h2>
+    <video controls playsInline preload="metadata" aria-label={`${name} 匯出的 MP4`}
+      src={`/api/jobs/${job.id}/preview`} onError={() => setError("無法播放成品，請確認檔案仍在原來的位置。")} />
+    {error && <p className="project-dialog-error" role="alert">{error}</p>}
+    <div className="project-dialog-actions"><button ref={close} type="button" className="secondary" onClick={onClose}>關閉成品預覽</button></div>
+  </dialog>;
+}
 
 function DeleteClipDialog({ projectId, job, name, onClose, onDeleted }: {
   projectId: string; job: Job; name: string; onClose: () => void; onDeleted: (id: string) => void;
@@ -51,12 +75,14 @@ function DeleteClipDialog({ projectId, job, name, onClose, onDeleted }: {
   </dialog>;
 }
 
-export default function FinishedClips({ project, jobs, selected, onSelect, onUpload, onDeleted }: {
+export default function FinishedClips({ project, jobs, selected, onSelect, onUpload, onDeleted, onPreview }: {
   project: Project; jobs: Job[]; selected?: string | null; onSelect: (id: string) => void; onUpload: (job: Job) => void;
   onDeleted: (id: string) => void;
+  onPreview: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [removing, setRemoving] = useState<{ job: Job; name: string } | null>(null);
+  const [previewing, setPreviewing] = useState<{ job: Job; name: string } | null>(null);
   const [notice, setNotice] = useState("");
   const exports = finishedClips(project.id, jobs);
   const encoding = jobs.find(job => job.project_id === project.id && job.kind === "export" && active(job));
@@ -98,6 +124,8 @@ export default function FinishedClips({ project, jobs, selected, onSelect, onUpl
             <span className="finished-clip-range"><span>原片範圍</span><span>{time(range.start)} – {time(end)}</span></span>
           </button>
           <div className="finished-clip-actions">
+            <button type="button" className="finished-clip-action" aria-label={`播放成品 #${number}`} aria-haspopup="dialog"
+              onClick={() => { onPreview(); setPreviewing({ job, name }); }}><Play size={16} aria-hidden="true" />播放成品</button>
             <button type="button" className="finished-clip-action" aria-label={`編輯成品 #${number}`} onClick={() => onSelect(job.id)}>
               <Pencil size={16} aria-hidden="true" />編輯片段</button>
             <button type="button" className="finished-clip-action finished-clip-delete" aria-label={`刪除成品 #${number}`} aria-haspopup="dialog"
@@ -117,5 +145,6 @@ export default function FinishedClips({ project, jobs, selected, onSelect, onUpl
     {!!exports.length && !items.length && <p className="clip-drawer-hint" role="status">找不到符合的成品，試試其他編號或時間。</p>}
     {removing && <DeleteClipDialog projectId={project.id} {...removing} onClose={() => setRemoving(null)}
       onDeleted={id => { onDeleted(id); setRemoving(null); setNotice(`已刪除「${removing.name}」`); }} />}
+    {previewing && <ClipPreviewDialog {...previewing} onClose={() => setPreviewing(null)} />}
   </section>;
 }

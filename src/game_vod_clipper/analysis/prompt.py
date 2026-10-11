@@ -82,10 +82,41 @@ annotations can remain uncertain; they do not all need additional sampling.
 views need not resolve every red flash. Request only the most promising ending,
 not every ordinary fight or every possible failure in the VOD.
 Prefer a clear, compact complete encounter when no particular boss is specified.
+Classify encounter eligibility SEPARATELY from outcome for the top-level focus
+and each candidate. confirmed needs labelled evidence of a named boss/duel HUD,
+an explicit boss objective, or a boss-specific reward. Boss HUD can be at the TOP
+or bottom of the screen. An ordinary enemy's small health bar, player skill or
+equipment name, ordinary item drop, currency or combat alone do not establish a
+boss. Use ordinary for those encounters, unknown when the relevant HUD is unreadable.
+Do not borrow a boss identity from references or a different scene/time. Keep the
+identity scoped to this encounter. A regular-enemy kill can have a successful
+outcome while remaining ineligible for a boss clip.
+For the final winning attempt, identity evidence must be observed INSIDE that
+attempt; a HUD from an earlier failed attempt cannot establish a different scene.
+For each promising candidate, ending_window brackets the LAST combat frame and
+the FIRST subsequent defeat/reward/postfight frame, using their labelled times.
+The defeat may lie BETWEEN coarse samples. Include the gap after the last combat,
+not only the combat before it. Use null if the ending is not bracketed. A terminal
+PLAYER collapse/loading is death_retry, never a possible_win based on dialogue.
 An ending check normally spans the last combat and first post-fight observations,
 not a long window of ordinary combat before them.
 refine: resolve the requested encounter's outcome or entry. Check the END before
 requesting the whole fight. A named missing fact justifies a further view.
+Coarse victory timestamps are hypotheses. Localize the FIRST visible defeat or
+defeat-specific reward/completion event, using the preceding still-active combat
+to bracket its onset. An already defeated opponent or persistent postfight state
+at a later timestamp does not move the victory forward. If this packet begins
+after the event, do not call its first frame the victory; request the missing
+last-combat -> first-defeat transition. boundaries/dense can correct an earlier
+victory estimate when they observe the actual onset, even if it lies BEFORE the
+previous preferred victory. Keep 5-10s from that event, not from later dialogue.
+ending_proof records the transition: phase=onset, last_combat is the opponent still
+fighting immediately before defeat, first_defeat is the first decisive defeat/
+completion cue, and victory matches first_defeat.time. They must be labelled
+samples at most 5 seconds apart for a localized ending. If the packet only shows
+an ALREADY defeated opponent, phase=already_over and the missing fields are null;
+request earlier context instead of inventing an onset. A previously localized
+ending may be retained on other packets; cite that earlier proof unchanged.
 entry: work BACKWARD from the verified victory. Find the LAST failure/loading/
 respawn before it, then the next clean entry; earlier failed attempts are excluded.
 Inspect the latest frames first. Name the last visible loading/reset and the first
@@ -96,8 +127,14 @@ failed. outcome describes the verified ending, not that earlier failed attempt.
 A coarse annotation start is approximate, not a previously verified entry. If the
 packet starts during combat, do not set start to that packet's first frame. Report
 entry_status=mid_fight and keep the tentative start; the host supplies earlier
-context in large steps. entry_status=clean requires visible pre-combat entry or a
-completed retry-to-gameplay transition with no later failure before victory.
+context in large steps. entry_status=clean requires visible arena entry or the
+first combat of this continuous attempt, recorded in entry_proof with its labelled
+time and kind. A checkpoint/respawn, menu, loading exit or runback BEFORE the arena
+is not a clean entry. Track checkpoint -> approach -> door/fog -> arena/first combat
+and choose the arena/brief approach INSIDE it, excluding checkpoint and runback.
+An early weaker/humanoid phase, transformation cinematic or brief black frame can
+be part of the SAME boss attempt. Preserve that first phase when later combat
+continues without player death/reset; do not start at the newly appearing boss bar.
 If none is visible, entry_status=unknown. Preserve a verified clean entry on later
 packets unless new evidence invalidates it. This field is separate from victory.
 boundaries: verify the proposed entry/victory. Keep a clean entry stable; do not

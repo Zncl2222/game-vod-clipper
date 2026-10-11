@@ -46,6 +46,32 @@ async function workspace(page: Page) {
   return state;
 }
 
+test("finished preview plays the encoded MP4 and restores keyboard focus", async ({ page }) => {
+  await workspace(page);
+  await page.getByRole("tab", { name: "成品 2" }).click();
+  await page.locator(".video-wrap video").evaluate((element: HTMLVideoElement) => {
+    element.pause = () => { element.dataset.previewPaused = "yes"; };
+  });
+  const trigger = page.getByRole("button", { name: "播放成品 #1", exact: true });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "成品 #1 · 成品預覽" });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(".video-wrap video")).toHaveAttribute("data-preview-paused", "yes");
+  await expect(dialog.locator("video")).toHaveAttribute("src", "/api/jobs/clip-1/preview");
+  await expect(dialog.locator("video")).toHaveAttribute("controls", "");
+  await expect(dialog.getByRole("button", { name: "關閉成品預覽" })).toBeFocused();
+  expect((await new AxeBuilder({ page }).include(".clip-preview-dialog").analyze()).violations).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expectEdge(page, "start", 120);
+  await page.setViewportSize({ width: 375, height: 720 });
+  await trigger.click();
+  const box = (await dialog.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(375);
+});
+
 test("clicking a clip directly opens the same editor and preserves source and clip workspaces", async ({ page }) => {
   await workspace(page);
   const video = page.locator(".video-wrap video");

@@ -33,6 +33,7 @@ class ChatContext(StrictModel):
 
 
 class ChatRequest(StrictModel):
+    verify_with_sol: bool = True
     effort: str | None = Field(default=None, max_length=40)
     message: str = Field(min_length=1, max_length=4000)
     model: str = Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")

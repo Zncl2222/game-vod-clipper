@@ -70,6 +70,16 @@ class RegistryTest(unittest.TestCase):
 
 
 class QueueTest(unittest.TestCase):
+    def test_entry_question_is_independent_of_other_packet_coverage(self):
+        history = [observed(0, 10, .5) | {"purpose": "refine"}]
+        queue = []
+        enqueue_unseen(queue, history, (2, 8, .5), "entry")
+        request, purpose = next_unseen(queue, history)
+        self.assertEqual((request, purpose), ((2, 8, .5), "entry"))
+        completed = history + [observed(*request) | {"purpose": "entry"}]
+        enqueue_unseen(queue, completed, (2, 8, .5), "entry")
+        self.assertIsNone(next_unseen(queue, completed))
+
     def test_coverage_matches_brute_force_grid_for_overlapping_intervals(self):
         rng = random.Random(1847)
         for _ in range(100):

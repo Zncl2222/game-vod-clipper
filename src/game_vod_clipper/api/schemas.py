@@ -117,6 +117,7 @@ class CodexLoginRequest(BaseModel):
 
 
 class AnalysisRequest(BaseModel):
+    verify_with_sol: bool = True
     effort: str | None = Field(default=None, max_length=40)
     effort_policy: Literal["adaptive", "fixed"] = "adaptive"
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")

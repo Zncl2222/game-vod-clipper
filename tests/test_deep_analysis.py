@@ -15,6 +15,12 @@ from game_vod_clipper.storage.store import Store
 def answer(**changes):
     return {"status": "candidate", "start": 4, "victory": 12, "postroll": 5,
             "entry_status": "clean",
+            "entry_proof": ({"time": changes.get("start", 4) or 0, "event": "Visible arena entry", "kind": "arena_entry"}
+                            if changes.get("entry_status", "clean") == "clean" else None),
+            "encounter": {"status": "confirmed", "signal": "boss_hud", "evidence": [{"time": 0, "event": "Named boss HUD"}]},
+            "ending_proof": ({"phase": "onset", "last_combat": {"time": changes.get("victory", 12) - .5, "event": "Combat"},
+                              "first_defeat": {"time": changes.get("victory", 12), "event": "Defeat onset"}}
+                             if changes.get("victory", 12) is not None else None),
             "outcome": {"player": "active", "opponent": "defeated", "signal": "reward"},
             "boss": "Fixture", "summary": "Synthetic observation", "warnings": [],
             "evidence": [], "sample_requests": [], "suspicious_windows": [], **changes}
@@ -27,6 +33,169 @@ def segment(key="fight-1", **changes):
 
 
 class DeepAnalysisTest(unittest.TestCase):
+    def test_localized_win_with_unknown_start_continues_to_actual_entry(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        def observe(*args, **kwargs):
+            if len(self.requests) == 1:
+                return answer(status="uncertain", start=None, victory=None, candidates=[
+                    segment("boss", start=150, end=240, confidence="high", kind="possible_win",
+                            ending_window={"start": 210, "end": 240, "every": 30})]), {}
+            if len(self.requests) == 2:
+                return answer(status="uncertain", start=None, victory=235, entry_status="unknown",
+                              entry_proof=None, review_complete=True, candidates=[
+                    segment("boss", start=150, end=240, victory=235, confidence="high", kind="possible_win")]), {}
+            return answer(start=180, victory=235, review_complete=True), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual((result["start"], result["victory"], result["status"]), (180, 235, "candidate"))
+        self.assertTrue(all(result["checks"].values()))
+        self.assertGreater(len(self.requests), 2)
+
+    def test_malformed_coarse_range_still_checks_the_observed_combat_to_ending_gap(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        def observe(*args, **kwargs):
+            if len(self.requests) == 1:
+                return answer(status="uncertain", start=None, victory=None, entry_status="unknown", outcome=None,
+                    encounter={"status": "confirmed", "signal": "boss_hud",
+                               "evidence": [{"time": 150, "event": "Named boss HUD"}]},
+                    ending_proof={"phase": "unresolved", "last_combat": {"time": 225, "event": "Combat"},
+                                  "first_defeat": None},
+                    candidates=[segment("broken", start=150, end=0, boss="Fixture", kind="possible_win",
+                        confidence="high", evidence=[{"time": 225, "event": "Combat"}],
+                        encounter={"status": "confirmed", "signal": "boss_hud",
+                                   "evidence": [{"time": 150, "event": "Named boss HUD"}]},
+                        ending_window={"start": 225, "end": 290, "every": 5})]), {}
+            return answer(start=180, victory=235, review_complete=True), {}
+        result = self.run_review(observe, calls=None)
+        self.assertLessEqual(self.requests[1][0], 225)
+        self.assertLessEqual(self.requests[1][1], 263)
+        self.assertEqual((result["start"], result["victory"], result["status"]), (180, 235, "candidate"))
+        self.assertTrue(all(result["checks"].values()))
+
+    def test_entry_uses_existing_investigation_when_encounter_id_changes(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        self.run_review(lambda *a, **k: (answer(start=150, victory=210, candidates=[
+            segment("boss", start=150, end=220, victory=210, kind="possible_win", confidence="high")]), {}), calls=1)
+        path = self.root / "runs/web/p/codex/first/checkpoint.json"
+        saved = json.loads(path.read_text())
+        record = saved["registry"]["records"].pop("c0001")
+        saved["registry"]["records"]["c0002"] = {**record, "id": "c0002"}
+        saved["registry"]["aliases"] = {"boss": "c0002"}
+        saved["registry"]["next_id"] = 3
+        saved["focus_id"], saved["queue"], saved["entry_plan"] = "c0002", [], {}
+        saved["history"].append({"packet": {"start": 190, "end": 220, "every": .5,
+            "timestamps": [190 + i * .5 for i in range(61)]}, "purpose": "refine", "scope": "c0001",
+            "observation": answer(start=150, victory=210, entry_status="mid_fight", review_complete=True)})
+        path.write_text(json.dumps(saved))
+        resumed = {**self.job, "id": "second", "analysis": {**self.job["analysis"], "resume_from": "first"}}
+        self.store.put("jobs", resumed)
+        result = self.run_review(lambda *a, **k: (answer(start=150, victory=210, review_complete=True), {}),
+                                 calls=None, job=resumed)
+        self.assertEqual(result["status"], "candidate")
+        self.assertTrue(all(result["checks"].values()))
+
+    def test_coarse_postfight_start_does_not_exclude_the_actual_ending(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        def observe(*args, **kwargs):
+            if len(self.requests) == 1:
+                return answer(status="uncertain", start=None, victory=None, candidates=[
+                    segment("boss", start=240, end=248, confidence="high", kind="possible_win",
+                            ending_window={"start": 230, "end": 240, "every": 30})]), {}
+            return answer(start=180, victory=235, review_complete=True), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual((result["start"], result["victory"], result["status"]), (180, 235, "candidate"))
+        self.assertTrue(all(result["checks"].values()))
+
+    def test_entry_refinement_cannot_backtrack_ending_before_the_attempt(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        def observe(*args, **kwargs):
+            if len(self.requests) == 1:
+                return answer(status="uncertain", start=None, victory=None, candidates=[
+                    segment("boss", start=175, end=205, confidence="high", kind="fight")]), {}
+            return answer(status="uncertain", start=195, victory=None, review_complete=True,
+                candidates=[segment("boss", start=195, end=205, confidence="high", kind="fight")]), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["status"], "uncertain")
+        self.assertTrue(result["review_complete"])
+        self.assertTrue(all(a <= b for a, b, _ in self.requests))
+
+    def test_already_sampled_entry_still_gets_a_purposeful_review(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        found = False
+        def observe(*args, **kwargs):
+            nonlocal found
+            a, b, step = self.requests[-1]
+            if step == 12.5:
+                return answer(status="uncertain", start=None, victory=None, candidates=[
+                    segment("boss", start=175, end=205, confidence="high", kind="fight",
+                            ending_window={"start": 175, "end": 205, "every": .5})]), {}
+            found |= a <= 237 <= b
+            if found:
+                return answer(start=175, victory=237, review_complete=True, candidates=[
+                    segment("boss", start=175, end=242, victory=237, kind="possible_win",
+                            confidence="high", replaces=["boss"],
+                            ending_window={"start": 236.5, "end": 237, "every": .5})]), {}
+            return answer(status="uncertain", start=175, victory=None,
+                          sample_requests=[{"start": 205, "end": 250, "every": .5}]), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["status"], "candidate")
+        self.assertTrue(all(result["checks"].values()))
+        self.assertTrue(any(a < 175 < b and step == .5 for a, b, step in self.requests[1:]))
+
+    def test_unexamined_postroll_cannot_be_verified(self):
+        self.project["duration"], self.job["analysis"]["end"] = 20, 14
+        result = self.run_review(lambda *a, **k: (answer(review_complete=True), {}), calls=None)
+        self.assertEqual(result["status"], "uncertain")
+        self.assertFalse(result["checks"]["ending"])
+
+    def test_local_verification_records_actual_models_and_usage(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        self.job["analysis"]["verification_model"] = "strong"
+        calls = []
+        def observe(*args, **kwargs):
+            calls.append(kwargs["model"])
+            if len(self.requests) == 1:
+                return answer(start=150, victory=210, candidates=[
+                    segment("boss", start=150, end=220, victory=210, kind="possible_win", confidence="high")]), {"input_tokens": 10}
+            return answer(start=180, victory=210, review_complete=True), {"input_tokens": 10}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["status"], "candidate")
+        self.assertEqual(set(result["used_models"]), {"chosen", "strong"})
+        self.assertEqual(result["model_usage"]["strong"]["input_tokens"], 10 * calls.count("strong"))
+        self.assertEqual(result["usage"]["input_tokens"], 10 * len(calls))
+        self.assertLessEqual(calls.count("strong"), 3)
+        self.assertEqual({r["role"] for r in result["verification_reviews"]}, {"ending", "entry"})
+
+    def test_coarse_postfight_timestamp_must_be_localized_before_entry(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 300
+        def observe(*args, **kwargs):
+            if len(self.requests) == 1:
+                return answer(start=150, victory=240, candidates=[
+                    segment("boss", start=150, end=248, victory=240, kind="possible_win", confidence="high")]), {}
+            return answer(start=180, victory=235, review_complete=True), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(self.requests[1][2], .5)
+        self.assertLessEqual(self.requests[1][0], 235)
+        self.assertGreaterEqual(self.requests[1][1], 240)
+        self.assertEqual(result["victory"], 235)
+        self.assertTrue(all(result["checks"].values()))
+
+    def test_late_cinematic_ending_hint_backtracks_to_actual_victory(self):
+        self.project["duration"] = self.job["analysis"]["end"] = 3600
+        def observe(*args, **kwargs):
+            a, b, step = self.requests[-1]
+            if step == 30:
+                return answer(start=None, victory=None, status="uncertain", candidates=[
+                    segment("boss", start=2100, end=2640, confidence="high", kind="possible_win",
+                            ending_window={"start": 2640, "end": 2670, "every": 30})]), {}
+            if a > 2588:
+                return answer(start=None, victory=None, status="uncertain", review_complete=True, outcome=None), {}
+            return answer(start=2400, victory=2588, review_complete=True), {}
+        result = self.run_review(observe, calls=None)
+        self.assertEqual(result["status"], "candidate")
+        self.assertEqual(result["victory"], 2588)
+        self.assertTrue(any(a <= 2588 <= b and step == .5 for a, b, step in self.requests))
+        self.assertTrue(all(result["checks"].values()))
+
     def test_dialogue_and_loading_cannot_certify_a_win(self):
         for signal in ("dialogue", "loading", "none"):
             with self.subTest(signal=signal):
@@ -108,8 +277,9 @@ class DeepAnalysisTest(unittest.TestCase):
             return answer(start=170 if entry_seen else 150, victory=210,
                 entry_status="clean" if entry_seen else "mid_fight", review_complete=True), {}
         result = self.run_review(observe, calls=None)
-        self.assertEqual(self.requests[1][2], 2)
-        self.assertGreater(self.requests[1][1] - self.requests[1][0], 30)
+        entry_index = next(i for i, (a, b, step) in enumerate(self.requests) if step == 2 and b - a > 30)
+        boundary_index = next(i for i, (_, _, step) in enumerate(self.requests) if step == .1)
+        self.assertLess(entry_index, boundary_index)
         self.assertEqual(result["status"], "candidate")
         self.assertEqual(result["start"], 170)
         self.assertTrue(result["checks"]["entry"])
@@ -131,8 +301,8 @@ class DeepAnalysisTest(unittest.TestCase):
                     candidates=[segment("c0001", start=150, end=min(b, 180),
                         kind="death_retry", confidence="high")], review_complete=True), {}
             return answer(start=185, victory=210, entry_status="clean", review_complete=True), {}
-        # The ending was verified in a separate packet. Coarse coverage also
-        # occupies its late range, so the backward entry packet ends earlier.
+        # The ending was verified in a separate packet. Resume an entry question
+        # before that ending, where only the earlier failed attempt is visible.
         self.run_review(lambda *a, **k: (answer(start=150, victory=210,
             candidates=[segment("boss", start=150, end=220, victory=210,
                                 kind="possible_win", confidence="high")]), {}), calls=1)
@@ -142,7 +312,7 @@ class DeepAnalysisTest(unittest.TestCase):
             "timestamps": [190 + i * .5 for i in range(61)]}, "purpose": "refine", "scope": "c0001",
             "observation": answer(start=150, victory=210, entry_status="mid_fight", review_complete=True)})
         saved["queue"] = []
-        saved["entry_plan"] = {}
+        saved["entry_plan"] = {"c0001": {"floor": 120, "cursor": 180, "reviewed": False}}
         saved_path.write_text(json.dumps(saved))
         resumed = {**self.job, "id": "second", "analysis": {**self.job["analysis"], "resume_from": "first"}}
         self.store.put("jobs", resumed)
@@ -346,9 +516,10 @@ class DeepAnalysisTest(unittest.TestCase):
         self.assertFalse(result["can_continue"])
 
     def test_annotation_validation_and_grounding(self):
-        for changes in ({"start": -1}, {"end": 31}, {"victory": 11}, {"start": float("nan")}):
+        for changes in ({"start": -1}, {"end": 31}, {"start": float("nan")}):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_observation(answer(candidates=[segment(**changes)]), 0, 30, 30)
+        self.assertFalse(validate_observation(answer(candidates=[segment(victory=11)]), 0, 30, 30).candidates)
         # Model aliases are untrusted; the host registry resolves collisions.
         self.assertEqual(len(validate_observation(answer(candidates=[segment(), segment()]), 0, 30, 30).candidates), 2)
         with self.assertRaisesRegex(ValueError, "實際抽樣"):
@@ -375,8 +546,45 @@ class DeepAnalysisTest(unittest.TestCase):
         return [], {"start": a, "end": b, "every": step, "timestamps": times}
 
     def run_review(self, observation=None, calls=240, job=None):
+        first_request = len(self.requests)
+        resumed_times = []
+        resume = (job or self.job)["analysis"].get("resume_from")
+        if resume:
+            saved = json.loads((self.root / "runs/web/p/codex" / resume / "checkpoint.json").read_text())
+            resumed_times = [t for h in saved["history"] for t in h["packet"]["timestamps"]]
+        def observed(*args, **kwargs):
+            data, tokens = (observation or (lambda *a, **k: (answer(), {})))(*args, **kwargs)
+            # Synthetic positive fixtures can only claim a clean entry after a
+            # packet actually sampled that entry (or its brief approach).
+            proof = data.get("entry_proof")
+            times = resumed_times + [round(a + i * step, 4) for a, b, step in self.requests[first_request:]
+                                     for i in range(int((b - a) / step + 1e-6) + 1)]
+            if proof and data.get("start") is not None and data.get("entry_status") == "clean":
+                available = [t for t in times if data["start"] <= t <= data["start"] + 8]
+                if available:
+                    proof["time"] = min(available)
+                else:
+                    data["entry_status"], data["entry_proof"] = "unknown", None
+            identity = data.get("encounter")
+            if identity and identity.get("status") == "confirmed" and data.get("start") is not None and data.get("victory") is not None:
+                available = [t for t in times if data["start"] <= t <= data["victory"] + data["postroll"]]
+                if available:
+                    identity["evidence"] = [{"time": min(available), "event": "Named boss HUD in the attempt"}]
+            ending = data.get("ending_proof")
+            if ending and ending["phase"] == "onset":
+                available = [t for t in times if abs(t - ending["first_defeat"]["time"]) <= .05]
+                if available:
+                    first = min(available, key=lambda t: abs(t - ending["first_defeat"]["time"]))
+                    prior = [t for t in times if first - 5 <= t < first - .05]
+                    if prior:
+                        ending["first_defeat"]["time"], ending["last_combat"]["time"] = first, max(prior)
+                    else:
+                        data["ending_proof"] = None
+                else:
+                    data["ending_proof"] = None
+            return data, tokens
         with patch("game_vod_clipper.analysis.pipeline.extract_packet", side_effect=self.extract), \
-             patch("game_vod_clipper.analysis.pipeline.invoke_codex", side_effect=observation or (lambda *a, **k: (answer(), {}))), \
+             patch("game_vod_clipper.analysis.pipeline.invoke_codex", side_effect=observed), \
              patch("game_vod_clipper.analysis.pipeline.MAX_CALLS", calls):
             run_analysis(self.store, job or self.job, self.project)
         return self.store.get("jobs", (job or self.job)["id"])["result"]
@@ -585,7 +793,12 @@ class DeepAnalysisTest(unittest.TestCase):
     def test_unstable_required_boundaries_finish_uncertain_without_false_approval(self):
         def observe(*args, **kwargs):
             return answer(start=4 + len(self.requests) / 10), {}
-        result = self.run_review(observe, calls=None)
+        # Keep each changing proposal in a packet that can actually reobserve
+        # entry. Midfight-only guesses now preserve the independently seen entry.
+        def reviews(*args, **kwargs):
+            return [(0, 10, .5 / (2 ** min(len(self.requests) - 1, 4)), "boundaries")]
+        with patch("game_vod_clipper.analysis.sampling.required_reviews", reviews):
+            result = self.run_review(observe, calls=None)
         self.assertLess(result["rounds"], 10)
         self.assertTrue(result["review_complete"])
         self.assertEqual(result["status"], "uncertain")

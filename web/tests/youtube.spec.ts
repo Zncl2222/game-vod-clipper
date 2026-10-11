@@ -16,6 +16,7 @@ test.beforeAll(async () => { await mkdir("../runs/youtube-ux", { recursive: true
 
 async function setup(page: Page, connected = true, clipTitle?: string) {
   const errors: string[] = [], writes: { path: string; body: any }[] = [];
+  const playlists = [{ id: "PLboss", title: "艾爾登法環・完整勝利", privacy: "private", count: 12 }];
   const account = { configured: connected, connected, channel: connected ? channel : null, pending: false, reconnect_required: false, error: null,
     playlist_write_enabled: connected,
     watch: { enabled: false, auto_analyze: true, model: "vision", last_checked: null, error: null }, uploads: [] as any[], imports: [] as any[] };
@@ -39,9 +40,14 @@ async function setup(page: Page, connected = true, clipTitle?: string) {
     if (path === "/api/youtube/login") { account.pending = true; return route.fulfill({ json: { url: "https://accounts.google.com/o/oauth2/v2/auth?state=test" } }); }
     if (path === "/api/youtube/disconnect") { account.connected = false; account.channel = null; return route.fulfill({ json: { ...account, message: "已中斷連接" } }); }
     if (path === "/api/youtube/broadcasts") return route.fulfill({ json: { items: live, next_page_token: "" } });
-    if (path === "/api/youtube/playlists") return route.fulfill({ json: { items: [
-      { id: "PLboss", title: "艾爾登法環・完整勝利", privacy: "private", count: 12 },
-    ], next_page_token: "" } });
+    if (path === "/api/youtube/playlists") {
+      if (request.method() === "POST") {
+        const body = request.postDataJSON(), item = { id: "PLcreated", title: body.title, privacy: body.privacy, count: 0 };
+        playlists.unshift(item);
+        return route.fulfill({ status: 201, json: item });
+      }
+      return route.fulfill({ json: { items: playlists, next_page_token: "" } });
+    }
     if (path === "/api/youtube/imports") {
       if (rejectBatch) return route.fulfill({ status: 429, json: { detail: "等待匯入的影片已滿，請稍後再試。" } });
       const body = request.postDataJSON();
@@ -71,7 +77,8 @@ async function setup(page: Page, connected = true, clipTitle?: string) {
     if (path === "/api/youtube/uploads/finished-clip") {
       if (rejectUpload) return route.fulfill({ status: 503, json: { detail: "網路暫時中斷，請再試一次。" } });
       const upload = { ...request.postDataJSON(), channel, id: "upload-1", export_id: exported.id, project_id: project.id,
-        playlist_title: "艾爾登法環・完整勝利", playlist_status: request.postDataJSON().playlist_id ? "pending" : null,
+        playlist_title: playlists.find(item => item.id === request.postDataJSON().playlist_id)?.title,
+        playlist_status: request.postDataJSON().playlist_id ? "pending" : null,
         status: "uploading", progress: 35, error: null, video_id: null, created: 1 };
       account.uploads = [upload];
       await new Promise(resolve => setTimeout(resolve, 180));
@@ -87,7 +94,7 @@ async function setup(page: Page, connected = true, clipTitle?: string) {
   });
   await page.goto("/");
   await expect(page.getByText("工作區已連線")).toBeVisible();
-  return { account, writes, errors, failImport: (value: boolean) => { rejectImport = value; },
+  return { account, playlists, writes, errors, failImport: (value: boolean) => { rejectImport = value; },
     failUpload: (value: boolean) => { rejectUpload = value; }, failBatch: (value: boolean) => { rejectBatch = value; } };
 }
 
@@ -163,7 +170,7 @@ test("selecting a stream queues one import with explicit AI choice; failures ret
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const imports = state.writes.filter(item => item.path.endsWith("/import"));
   expect(imports).toHaveLength(2); // one rejected attempt, then one accepted despite rapid clicks
-  expect(imports[1].body).toEqual({ channel_id: channel.id, auto_analyze: true, model: "vision", download_quality: "1440" });
+  expect(imports[1].body).toEqual({ channel_id: channel.id, auto_analyze: true, model: "vision", verify_with_sol: true, download_quality: "1440" });
   expect(state.errors).toEqual([]);
 });
 
@@ -200,7 +207,7 @@ test("batch selection survives search, pagination and rejection; rapid submit qu
   await expect(page.getByRole("checkbox", { name: `選取直播：${live[0].title}`, exact: true })).toBeDisabled();
   const batches = state.writes.filter(item => item.path === "/api/youtube/imports");
   expect(batches).toHaveLength(2);
-  expect(batches[1].body).toEqual({ channel_id: channel.id, auto_analyze: false, model: "vision", download_quality: "720",
+  expect(batches[1].body).toEqual({ channel_id: channel.id, auto_analyze: false, model: "vision", verify_with_sol: true, download_quality: "720",
     videos: [live[0], second, third].map(({ id, title }) => ({ id, title })) });
   await page.keyboard.press("Escape");
   await open(page);
@@ -360,6 +367,152 @@ test("playlist choice survives failed submission and joining can retry without u
   await expect(page.getByText("已加入播放清單：艾爾登法環・完整勝利", { exact: true })).toBeVisible();
   expect(state.writes.filter(item => item.path.endsWith("/finished-clip"))).toHaveLength(uploadsBefore);
   expect(state.writes.filter(item => item.path.endsWith("/playlist/retry"))).toHaveLength(1);
+  expect(state.errors).toEqual([]);
+});
+
+test("create from the playlist menu selects the new playlist and only uploads on confirmation", async ({ page }) => {
+  const state = await setup(page);
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  await page.getByLabel("影片標題", { exact: true }).fill("女武神・勝利片段");
+  await page.getByLabel("說明 （選填）", { exact: true }).fill("完整成功挑戰");
+  await page.getByLabel("這部影片是否為兒童打造？").selectOption("no");
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await picker.selectOption({ label: "＋新增播放清單" });
+  const name = page.getByLabel("播放清單名稱", { exact: false });
+  await expect(name).toBeFocused();
+  await expect(page.getByLabel("播放清單觀看權限")).toHaveValue("private");
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeDisabled();
+  await name.fill("  女武神・新清單  ");
+  await name.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true });
+  await expect(name).toBeVisible();
+  expect(state.writes).toEqual([]);
+  await name.press("Enter");
+  await expect(picker).toHaveValue("PLcreated");
+  await expect(picker).toBeFocused();
+  await expect(page.getByRole("status").filter({ hasText: "已建立並選取" })).toContainText("女武神・新清單");
+  expect(state.writes).toEqual([{ path: "/api/youtube/playlists", body: { channel_id: channel.id, title: "女武神・新清單", privacy: "private" } }]);
+  await page.getByRole("button", { name: "重新整理播放清單", exact: true }).click();
+  await expect(picker).toBeEnabled();
+  await expect(picker).toHaveValue("PLcreated");
+  await page.getByRole("tab", { name: "上傳紀錄", exact: true }).click();
+  await page.getByRole("tab", { name: "上傳這段成品", exact: true }).click();
+  await expect(picker).toHaveValue("PLcreated");
+  await expect(page.getByLabel("影片標題", { exact: true })).toHaveValue("女武神・勝利片段");
+  await expect(page.getByLabel("說明 （選填）", { exact: true })).toHaveValue("完整成功挑戰");
+  await page.getByRole("button", { name: "確認並上傳", exact: true }).click();
+  await expect(page.getByRole("progressbar", { name: "YouTube 上傳進度" })).toBeVisible();
+  expect(state.writes.at(-1)!.body).toMatchObject({ playlist_id: "PLcreated", title: "女武神・勝利片段", privacy: "private" });
+  expect(state.errors).toEqual([]);
+});
+
+test("canceling playlist creation restores the previous selection and Escape keeps the upload dialog open", async ({ page }) => {
+  const state = await setup(page);
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await picker.selectOption("PLboss");
+  await picker.selectOption({ label: "＋新增播放清單" });
+  await page.getByLabel("播放清單名稱", { exact: false }).fill("不建立的清單");
+  await page.getByRole("button", { name: "取消新增", exact: true }).click();
+  await expect(picker).toHaveValue("PLboss");
+  await expect(picker).toBeFocused();
+  await picker.selectOption({ label: "＋新增播放清單" });
+  await page.getByLabel("播放清單名稱", { exact: false }).press("Escape");
+  await expect(page.getByRole("dialog", { name: "我的 YouTube", exact: true })).toBeVisible();
+  await expect(picker).toHaveValue("PLboss");
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeEnabled();
+  expect(state.writes).toEqual([]);
+});
+
+test("playlist creation validates names, preserves failed fields and prevents duplicate requests", async ({ page }) => {
+  const state = await setup(page);
+  let fail = true, calls = 0;
+  let finish!: () => void;
+  const release = new Promise<void>(resolve => { finish = resolve; });
+  await page.route("**/api/youtube/playlists", async route => {
+    calls++;
+    if (fail) return route.fulfill({ status: 503, json: { detail: "清單建立暫時無法使用" } });
+    await release;
+    return route.fulfill({ status: 201, json: { id: "PLretry", title: "重試清單", privacy: "unlisted", count: 0 } });
+  });
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await picker.selectOption("PLboss");
+  await picker.selectOption({ label: "＋新增播放清單" });
+  const name = page.getByLabel("播放清單名稱", { exact: false });
+  await name.fill("   ");
+  await page.getByRole("button", { name: "建立並選取", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("請填寫播放清單名稱");
+  await expect(name).toHaveAttribute("aria-invalid", "true");
+  expect(calls).toBe(0);
+  await name.fill("重試清單");
+  await page.getByLabel("播放清單觀看權限").selectOption("unlisted");
+  await page.getByRole("button", { name: "建立並選取", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("清單建立暫時無法使用");
+  await expect(name).toHaveValue("重試清單");
+  await expect(page.getByLabel("播放清單觀看權限")).toHaveValue("unlisted");
+  await expect(picker).toHaveValue("PLboss");
+  fail = false;
+  await name.press("Enter");
+  await expect(page.getByRole("button", { name: "正在建立清單…", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "取消新增", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeDisabled();
+  await expect(name).toBeDisabled();
+  expect(calls).toBe(2);
+  finish();
+  await expect(picker).toHaveValue("PLretry");
+  expect(calls).toBe(2);
+  expect(state.writes).toEqual([]);
+  expect(state.errors).toEqual([]);
+});
+
+test("an empty playlist menu can create a public playlist on mobile with accessible fields", async ({ page }) => {
+  const state = await setup(page);
+  state.playlists.length = 0;
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await expect(page.getByText("這個頻道還沒有播放清單。", { exact: false })).toBeVisible();
+  await picker.selectOption({ label: "＋新增播放清單" });
+  await page.getByLabel("播放清單名稱", { exact: false }).fill("公開 Boss 勝利合集");
+  await page.getByLabel("播放清單觀看權限").selectOption("public");
+  await page.getByRole("group", { name: "新增播放清單", exact: true }).scrollIntoViewIfNeeded();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".yt-dialog").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: "../runs/youtube-ux/playlist-create-mobile.png" });
+  await page.getByRole("button", { name: "建立並選取", exact: true }).click();
+  await expect(picker).toHaveValue("PLcreated");
+  await expect(picker.locator("option:checked")).toContainText("公開");
+  await expect(page.getByLabel("誰可以觀看？", { exact: true })).toHaveValue("private");
+  expect(state.writes[0].body.privacy).toBe("public");
+});
+
+test("a late playlist creation response cannot change a newly opened upload form", async ({ page }) => {
+  const state = await setup(page);
+  let finish!: () => void;
+  const release = new Promise<void>(resolve => { finish = resolve; });
+  await page.route("**/api/youtube/playlists", async route => {
+    await release;
+    await route.fulfill({ status: 201, json: { id: "PLlate", title: "較晚建立的清單", privacy: "private", count: 0 } });
+  });
+  await page.getByRole("tab", { name: "成品 1" }).click();
+  await page.getByRole("button", { name: "上傳成品 #1 到 YouTube" }).click();
+  const picker = page.getByLabel("加入播放清單", { exact: false });
+  await picker.selectOption("PLboss");
+  await picker.selectOption({ label: "＋新增播放清單" });
+  await page.getByLabel("播放清單名稱", { exact: false }).fill("較晚建立的清單");
+  await page.getByRole("button", { name: "建立並選取", exact: true }).click();
+  await expect(page.getByRole("button", { name: "正在建立清單…", exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "上傳紀錄", exact: true }).click();
+  await page.getByRole("tab", { name: "上傳這段成品", exact: true }).click();
+  const response = page.waitForResponse(response => response.url().endsWith("/api/youtube/playlists"));
+  finish(); await response;
+  await expect(picker).toBeEnabled();
+  await expect(picker).toHaveValue("PLboss");
+  await expect(page.getByRole("button", { name: "確認並上傳", exact: true })).toBeEnabled();
   expect(state.errors).toEqual([]);
 });
 

@@ -320,6 +320,7 @@ export default function App() {
       </div>
       <ChatPanel
         clips={project?.ready ? <FinishedClips key={project.id} project={project} jobs={projectJobs}
+          onPreview={() => editorChat.current?.pauseVideo()}
           onUpload={job => { setUploadTarget({ job, project }); setYoutubeOpen(true); }}
           onDeleted={id => deleteClip(project.id, id)}
           selected={editorContext?.project_id === project.id ? editorContext.clip_id : null}
@@ -565,6 +566,7 @@ function Editor({
       selection_generation: selectionGeneration.current, analysis_generation: project.analysis_generation ?? 0 });
   }, [draft, editingExportId, project.id, project.title, project.analysis_generation, duration, onContext]);
   useImperativeHandle(chatRef, () => ({
+    pauseVideo: () => video.current?.pause(),
     loadClip: id => {
       switchWorkspace(id);
       // Stacked layouts put the clip actions below the timeline; keep the player header in view there.

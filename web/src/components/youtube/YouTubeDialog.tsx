@@ -5,11 +5,12 @@ import YouTubeImportQueue, { importIsPending, importIsWorking, type ImportRecord
 import YouTubePlaylistPicker from "./YouTubePlaylistPicker";
 import DownloadQuality, { qualityLabel, type DownloadQualityValue } from "../media/DownloadQuality";
 import { setPreferences, usePreferences } from "../../lib/preferences";
+import { preferredModel, readVerificationPreference } from "../../lib/models";
 import "../../styles/youtube.css";
 import YouTubeHistory, { type ImportHistory } from "./YouTubeHistory";
 
 type Channel = { id: string; title: string };
-type Watch = { enabled: boolean; auto_analyze: boolean; model: string; download_quality?: DownloadQualityValue; last_checked: number | null; error: string | null };
+type Watch = { enabled: boolean; auto_analyze: boolean; model: string; verify_with_sol?: boolean; download_quality?: DownloadQualityValue; last_checked: number | null; error: string | null };
 type UploadRecord = { id: string; export_id: string; project_id: string; channel: Channel; title: string; description: string;
   privacy: string; status: string; progress: number; error: string | null; video_id: string | null; created: number;
   playlist_id?: string | null; playlist_title?: string | null; playlist_status?: string | null; playlist_error?: string | null };
@@ -55,13 +56,14 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
   const [selected, setSelected] = useState<Map<string, Broadcast>>(new Map());
   const selectAll = useRef<HTMLInputElement>(null);
   const [models, setModels] = useState<Model[]>([]);
+  const [verifyWithSol, setVerifyWithSol] = useState(readVerificationPreference);
   // Import choices live in preferences so they stay put until the user changes them.
   const preferences = usePreferences();
   const quality = preferences.downloadQuality, autoAnalyze = preferences.importAutoAnalyze;
   const savedModel = preferences.importModel || readChatModel();
   // Fall back to the default model for this visit only; the saved choice returns once it is available again.
   const model = !models.length || models.some(item => item.id === savedModel) ? savedModel
-    : (models.find(item => item.is_default) ?? models[0]).id;
+    : preferredModel(models)?.id ?? "";
   const [title, setTitle] = useState(target?.job.draft?.title?.trim() || (target ? `${target.project.title.slice(0, 85)} · 精華片段` : ""));
   const [description, setDescription] = useState(target?.job.draft ? `原片片段：${time(target.job.draft.start)}–${time(target.job.draft.victory + target.job.draft.postroll)}` : "");
   const [privacy, setPrivacy] = useState("private");
@@ -69,6 +71,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
   const [notify, setNotify] = useState(false);
   const [playlistId, setPlaylistId] = useState("");
   const [playlistTitle, setPlaylistTitle] = useState("");
+  const [playlistCreating, setPlaylistCreating] = useState(false);
   const [uploadId, setUploadId] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState("");
   const connected = !!account?.connected && !account.reconnect_required;
@@ -175,7 +178,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
     if (item.project_id) { onImport(item.project_id); return; }
     await perform(item.id, async () => {
       const result = await api<{ project_id: string }>(`/youtube/broadcasts/${item.id}/import`, "POST", {
-        channel_id: channelId, auto_analyze: autoAnalyze, model, download_quality: quality,
+        channel_id: channelId, auto_analyze: autoAnalyze, model, verify_with_sol: verifyWithSol, download_quality: quality,
       });
       if (alive.current) onImport(result.project_id);
     });
@@ -185,7 +188,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
     if (!choices.length) return;
     await perform("batch", async () => {
       const result = await api<{ added: number; existing: number; items: ImportRecord[] }>("/youtube/imports", "POST", {
-        channel_id: channelId, auto_analyze: autoAnalyze, model, download_quality: quality,
+        channel_id: channelId, auto_analyze: autoAnalyze, model, verify_with_sol: verifyWithSol, download_quality: quality,
         videos: choices.map(item => ({ id: item.id, title: item.title })),
       });
       if (!alive.current) return;
@@ -202,13 +205,14 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
   }
   async function watch(enabled: boolean) {
     await perform("watch", async () => {
-      await api("/youtube/watch", "PUT", { channel_id: channelId, enabled, auto_analyze: autoAnalyze, model, download_quality: quality });
+      await api("/youtube/watch", "PUT", { channel_id: channelId, enabled, auto_analyze: autoAnalyze, model, verify_with_sol: verifyWithSol, download_quality: quality });
       await refresh();
       if (alive.current) setNotice(enabled ? "已開啟：接下來結束的直播會自動匯入，剪輯仍由你確認。" : "已關閉自動匯入，已建立的任務會繼續。 ");
     });
   }
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (playlistCreating) return;
     const invalid = !title.trim() ? "請填寫影片標題。" : /[<>]/.test(title + description) ? "標題與說明不可包含 < 或 >。" :
       new TextEncoder().encode(description).length > 5000 ? "說明過長，請縮短至 5000 位元組內。" : !audience ? "請選擇這部影片是否為兒童打造。" : "";
     setFieldError(invalid);
@@ -352,6 +356,10 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
               <div className="yt-analysis-option"><label><input type="checkbox" checked={autoAnalyze} disabled={!!busy} onChange={event => setPreferences({ importAutoAnalyze: event.target.checked })} />匯入後自動找片段</label>
                 {autoAnalyze && <><label className="sr-only" htmlFor="yt-model">直播分析模型</label><select id="yt-model" value={model} disabled={!!busy || !models.length} onChange={event => setPreferences({ importModel: event.target.value })}><option value="">選擇 AI 模型</option>{models.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></>}
                 {autoAnalyze && !chosenModel && <p>請先在 AI 帳號設定完成連接，或取消勾選以先匯入影片。</p>}
+                {autoAnalyze && model === "gpt-5.6-luna" && models.some(item => item.id === "gpt-6.1-sol") && <label><input type="checkbox" checked={verifyWithSol} disabled={!!busy} onChange={event => {
+                  setVerifyWithSol(event.target.checked);
+                  try { localStorage.setItem("bosscut:verify-with-sol", String(event.target.checked)); } catch { /* Keep this visit's choice. */ }
+                }} />關鍵畫面用 Sol 複查（最多 3 次，增加用量）</label>}
                 {autoAnalyze && referenceTitle !== undefined && <p>搜尋時參考遊戲範例：{referenceTitle ?? "未使用"}。可在頂端「遊戲範例」變更。</p>}</div>
               <div className="yt-select-toolbar"><label><input ref={selectAll} type="checkbox" checked={allSelected} disabled={!!busy || !availableVisible.length}
                 onChange={toggleAll} />全選目前清單</label><span>已選 {selected.size} 部 · 每次最多 100 部</span>
@@ -370,7 +378,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
               </div>
               {nextPage && <button type="button" className="secondary yt-more" disabled={listLoading || !!busy} onClick={() => void loadList(nextPage)}>載入更多直播</button>}
               <details className="yt-watch"><summary>自動匯入新直播 <span>{account.watch.enabled ? "已開啟" : "未開啟"}</span></summary><p>每 10 分鐘檢查一次，只匯入開啟後結束的直播。請讓 BossCut 保持運作；剪輯仍由你確認。</p>
-                {account.watch.enabled && <p>目前設定：{qualityLabel(account.watch.download_quality)} · {account.watch.auto_analyze ? `匯入後自動分析 · ${account.watch.model}` : "只匯入影片"}</p>}
+                {account.watch.enabled && <p>目前設定：{qualityLabel(account.watch.download_quality)} · {account.watch.auto_analyze ? `匯入後自動分析 · ${account.watch.model}${account.watch.model === "gpt-5.6-luna" && account.watch.verify_with_sol !== false ? " · Sol 局部複查最多 3 次" : ""}` : "只匯入影片"}</p>}
                 <button type="button" className="secondary" disabled={!!busy || !account.watch.enabled && autoAnalyze && !chosenModel} onClick={() => void watch(!account.watch.enabled)}>{account.watch.enabled ? "關閉自動匯入" : "使用上方設定開啟"}</button>
                 {account.watch.enabled && <button type="button" className="text-button" disabled={!!busy} onClick={() => void perform("sync", async () => { await api("/youtube/sync", "POST"); await refresh(); await loadList(); })}>立即檢查</button>}
                 {account.watch.last_checked && <p>上次檢查：{new Date(account.watch.last_checked * 1000).toLocaleString("zh-TW")}</p>}{account.watch.error && <p className="inline-error">{account.watch.error}</p>}</details>
@@ -383,7 +391,8 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
                 <div><label htmlFor="yt-audience">這部影片是否為兒童打造？</label><select id="yt-audience" value={audience} required disabled={!!busy} aria-describedby="yt-field-error" onChange={event => { setAudience(event.target.value); setFieldError(""); }}><option value="">請選擇</option><option value="no">否，並非為兒童打造</option><option value="yes">是，專為兒童打造</option></select></div></div>
               <YouTubePlaylistPicker channelId={channelId!} canWrite={!!account.playlist_write_enabled}
                 disabled={!!busy || account.pending} value={playlistId} selectedTitle={playlistTitle}
-                onChange={(id, name) => { setPlaylistId(id); setPlaylistTitle(name); }} onAuthorize={() => login(true)} />
+                onChange={(id, name) => { setPlaylistId(id); setPlaylistTitle(name); }} onAuthorize={() => login(true)}
+                onCreatingChange={setPlaylistCreating} />
               <details><summary>更多上傳選項</summary><label className="yt-check"><input type="checkbox" checked={notify} disabled={!!busy} onChange={event => setNotify(event.target.checked)} />通知訂閱者</label></details>
               <p className="yt-hint">尚未通過 YouTube API 審核的專案，上傳會被限制為私人影片。</p>
               {fieldError && <p id="yt-field-error" role="alert" className="inline-error">{fieldError}</p>}
@@ -395,7 +404,7 @@ export default function YouTubeDialog({ onClose, onImport, target, referenceTitl
     </div>
     {connected && tab === "upload" && target && !existing ? <footer className="yt-footer yt-footer-upload"><span>上傳至 <strong>{account!.channel!.title}</strong> · {privacyLabels[privacy]}</span><div className="yt-actions">
       <button type="button" className="secondary" onClick={onClose}>取消</button>
-      <button type="submit" form="yt-upload-form" className="primary" disabled={!!busy || account!.pending}>{busy === "upload" ? <LoaderCircle size={17} className="spin" aria-hidden="true" /> : <Upload size={17} aria-hidden="true" />}{busy === "upload" ? "正在建立上傳…" : "確認並上傳"}</button>
+      <button type="submit" form="yt-upload-form" className="primary" disabled={!!busy || account!.pending || playlistCreating}>{busy === "upload" ? <LoaderCircle size={17} className="spin" aria-hidden="true" /> : <Upload size={17} aria-hidden="true" />}{busy === "upload" ? "正在建立上傳…" : "確認並上傳"}</button>
     </div></footer> : connected && tab === "live" ? <footer className="yt-footer yt-footer-batch"><span>已選 <strong>{selected.size}</strong> 部 · 依序匯入</span><div className="yt-actions">
       <button type="button" className="secondary" onClick={onClose}><ArrowLeft size={16} aria-hidden="true" />回到工作區</button>
       <button type="button" className="primary" disabled={!!busy || !selected.size || autoAnalyze && !chosenModel} onClick={() => void importSelected()}>

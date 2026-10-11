@@ -28,6 +28,7 @@ class ImportBroadcast(BaseModel):
     channel_id: str = Field(min_length=1, max_length=100)
     auto_analyze: bool = True
     model: str = Field(default="", max_length=120)
+    verify_with_sol: bool = True
     download_quality: DownloadQuality = "best"
 
 
@@ -65,6 +66,20 @@ class UploadClip(BaseModel):
         return value
 
 
+class CreatePlaylist(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    channel_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=150)
+    privacy: Literal["private", "unlisted", "public"] = "private"
+
+    @field_validator("title")
+    @classmethod
+    def valid_title(cls, value):
+        if any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError("播放清單名稱不可包含控制字元。")
+        return value
+
+
 class RestartUpload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirmed_no_video: Literal[True]
@@ -95,7 +110,7 @@ class YouTubeWorkspace:
         self.stopped = asyncio.Event()
 
     def preferences(self):
-        defaults = {"enabled": False, "auto_analyze": True, "model": "", "download_quality": "best", "since": 0,
+        defaults = {"enabled": False, "auto_analyze": True, "model": "", "verify_with_sol": True, "download_quality": "best", "since": 0,
                     "last_checked": None, "error": None}
         return defaults | self.account.files.read("watch", {})
 
@@ -171,7 +186,8 @@ class YouTubeWorkspace:
         project_id = result["project"]["id"]
         self.store.patch("projects", project_id, title=item["snippet"].get("title", "YouTube 直播"),
             youtube_video_id=video_id, youtube_channel_id=options.channel_id,
-            youtube_analysis_state="waiting" if options.auto_analyze else "manual", youtube_model=options.model)
+            youtube_analysis_state="waiting" if options.auto_analyze else "manual", youtube_model=options.model,
+            youtube_verify_with_sol=options.verify_with_sol)
         history = self.account.files.read("imports", {})
         history[f"{options.channel_id}:{video_id}"] = project_id
         self.account.files.write("imports", history)
@@ -218,7 +234,7 @@ class YouTubeWorkspace:
                     if sum(j["status"] in ACTIVE and j["kind"] == "analyze" for j in self.store.all("jobs")) >= 8:
                         # Revisit this page instead of skipping unqueued videos.
                         raise YouTubeError("工作佇列已滿，下一次檢查會接著匯入。", 429)
-                    imported = await self.import_video(item["id"], ImportBroadcast(**{k: settings[k] for k in ("channel_id", "auto_analyze", "model", "download_quality")}),
+                    imported = await self.import_video(item["id"], ImportBroadcast(**{k: settings[k] for k in ("channel_id", "auto_analyze", "model", "verify_with_sol", "download_quality")}),
                                                        watch_settings=settings)
                     if imported is None:
                         break
@@ -424,6 +440,14 @@ class YouTubeWorkspace:
                 if self.account.pending:
                     raise YouTubeError("請先完成或取消 YouTube 授權。", 409)
                 return await self.account.playlists(channel_id, page_token)
+
+        @app.post("/api/youtube/playlists", status_code=201)
+        async def create_playlist(body: CreatePlaylist):
+            async with self.lock:
+                self.ensure_channel(body.channel_id)
+                if self.account.pending:
+                    raise YouTubeError("請先完成或取消 YouTube 授權。", 409)
+                return await self.account.create_playlist(body.channel_id, body.title, body.privacy)
 
         @app.post("/api/youtube/uploads/{upload_id}/playlist/retry")
         async def retry_playlist(upload_id: str):

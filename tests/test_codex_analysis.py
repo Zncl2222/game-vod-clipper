@@ -401,7 +401,8 @@ class CodexAnalysisTest(unittest.TestCase):
             )
             submit.assert_called_once_with(
                 "synthetic", "analyze", analysis={"start": 0.0, "end": 16.0,
-                    "model": MODEL, "effort": "medium", "effort_policy": "fixed", "request_id": ANY}
+                    "model": MODEL, "effort": "medium", "verify_with_sol": True,
+                    "effort_policy": "fixed", "request_id": ANY}
             )
 
     def test_api_keeps_effort_ceiling_and_exposes_fixed_override(self):

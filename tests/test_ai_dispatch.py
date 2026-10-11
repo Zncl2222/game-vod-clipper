@@ -82,6 +82,37 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(retry.status_code, 202)
         self.assertEqual(retry.json()["analysis"]["effort"], "high")
 
+    def test_luna_verification_respects_opt_out_availability_and_retry(self):
+        luna = {"id": "gpt-5.6-luna", "effort": "medium", "supported_efforts": ["medium", "high"],
+                "input_modalities": ["text", "image"]}
+        sol = {**luna, "id": "gpt-6.1-sol"}
+        for primary, opt_in, available, expected in (
+                (luna, True, True, True), (luna, False, True, False),
+                (luna, True, False, False), (sol, True, True, False)):
+            with self.subTest(primary=primary["id"], opt_in=opt_in, available=available):
+                self.codex.models.return_value = [luna, sol] if available else [luna]
+                response = self.client.post("/api/projects/p/analyze", json={
+                    "start": 0, "end": 120, "model": primary["id"], "verify_with_sol": opt_in})
+                self.assertEqual(response.status_code, 202, response.text)
+                first = response.json()
+                self.assertEqual(first["analysis"].get("verification_model"), sol["id"] if expected else None)
+                self.store.patch("jobs", first["id"], status="failed")
+                retry = self.client.post(f'/api/jobs/{first["id"]}/retry')
+                self.assertEqual(retry.status_code, 202, retry.text)
+                self.assertEqual(retry.json()["analysis"]["verify_with_sol"], opt_in)
+                self.assertEqual(retry.json()["analysis"].get("verification_model"), sol["id"] if expected else None)
+                self.store.patch("jobs", retry.json()["id"], status="cancelled")
+
+    def test_youtube_auto_analysis_preserves_verification_opt_out(self):
+        self.codex.models.return_value = [
+            {"id": model, "effort": "medium", "input_modalities": ["text", "image"]}
+            for model in ("gpt-5.6-luna", "gpt-6.1-sol")]
+        project = self.store.patch("projects", "p", youtube_verify_with_sol=False)
+        automatic = self.client.portal.call(self.app.state.youtube.analyze,
+            project, "gpt-5.6-luna", "youtube-import:p")
+        self.assertFalse(automatic["analysis"]["verify_with_sol"])
+        self.assertNotIn("verification_model", automatic["analysis"])
+
     def test_youtube_auto_analysis_uses_visual_review_effort_without_changing_chat(self):
         selected = self.codex.models.return_value[0]
         selected.update(effort="medium", supported_efforts=["low", "medium", "high", "xhigh"])
