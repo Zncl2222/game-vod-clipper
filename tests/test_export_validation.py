@@ -1,14 +1,56 @@
 """Encoded-file failures must not become downloadable completed exports."""
+import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from game_vod_clipper.media.progress import MediaProgress
 from game_vod_clipper.media.validation import validate_export
 from game_vod_clipper.storage.store import Store
 from game_vod_clipper.web_worker import command, run
+
+
+class DecodeOutputTests(unittest.TestCase):
+    def validate(self, *, error=False, on_progress=None):
+        metadata = {"format": {"duration": "10"}, "streams": [
+            {"codec_type": "video", "start_time": "0", "duration": "10"},
+            {"codec_type": "audio", "start_time": "0", "duration": "10"},
+        ]}
+
+        def fixture_command(args, **kwargs):
+            if args[0] == "ffprobe":
+                return json.dumps(metadata)
+            # Exercise real pipe handling with an error-producing process that exits 0.
+            script = "import sys\n"
+            if error:
+                script += "print('[h264 @ fixture] Error splitting the input into NAL units.', file=sys.stderr)\n"
+            if "-progress" in args:
+                script += "print('out_time_us=10000000')\nprint('progress=end')\n"
+            return command([sys.executable, "-c", script], **kwargs)
+
+        with patch("game_vod_clipper.media.validation.resolve_tool_command", side_effect=lambda name: [name]):
+            return validate_export(Path("fixture.mp4"), 10, has_audio=True, command=fixture_command,
+                                   on_progress=on_progress)
+
+    def test_decode_error_rejects_zero_exit_code_without_progress(self):
+        with self.assertRaisesRegex(RuntimeError, "Error splitting"):
+            self.validate(error=True)
+
+    def test_decode_error_rejects_zero_exit_code_with_progress(self):
+        progress = MediaProgress(lambda *args: None).ffmpeg("驗證", "verify", 10)
+        with self.assertRaisesRegex(RuntimeError, "Error splitting"):
+            self.validate(error=True, on_progress=progress)
+
+    def test_progress_records_allow_valid_export_and_update_progress(self):
+        updates = []
+        progress = MediaProgress(lambda *args: updates.append(args)).ffmpeg("驗證", "verify", 10)
+        result = self.validate(on_progress=progress)
+        self.assertTrue(result["full_decode_checked"])
+        self.assertEqual(updates[-1][1], 100)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "requires media tools")
